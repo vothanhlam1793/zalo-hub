@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chat Server</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <div>
+            <div class="eyebrow">Phase 1</div>
+            <h1>Chat Server</h1>
+            <p class="hero-copy">UI toi thieu de quan ly user noi bo, kenh va hoi thoai local truoc khi noi Zalo that.</p>
+          </div>
+          <div class="sidebar-actions">
+            <button id="create-channel-button" class="ghost-button">+ Channel</button>
+            <button id="create-conversation-button" class="ghost-button">+ Conversation</button>
+          </div>
+        </div>
+        <div class="section-caption">Workspace Users</div>
+        <div id="user-list" class="stack-list"></div>
+        <div class="section-caption">Channels</div>
+        <div id="channel-list" class="stack-list"></div>
+      </aside>
+
+      <main class="main-layout">
+        <section class="panel panel-conversations">
+          <div class="panel-header">
+            <div>
+              <div class="eyebrow">Conversations</div>
+              <h2>Hoi thoai</h2>
+            </div>
+          </div>
+          <div class="section-caption">Contacts</div>
+          <div id="contact-list" class="contact-list"></div>
+          <div class="section-caption">Conversation List</div>
+          <div id="conversation-list" class="conversation-list"></div>
+        </section>
+
+        <section class="panel panel-chat">
+          <div id="chat-header" class="panel-header panel-header-tight">
+            <div>
+              <div class="eyebrow">Chat Window</div>
+              <h2>Chon mot hoi thoai</h2>
+            </div>
+          </div>
+          <div id="message-list" class="message-list"></div>
+          <form id="message-form" class="message-form">
+            <textarea id="message-input" rows="3" placeholder="Nhap tin nhan local..."></textarea>
+            <button type="submit" class="primary-button">Gui</button>
+          </form>
+        </section>
+
+        <section class="panel panel-channel-detail">
+          <div class="panel-header">
+            <div>
+              <div class="eyebrow">Channel Control</div>
+              <h2>Quan ly channel</h2>
+            </div>
+          </div>
+          <div id="channel-detail" class="channel-detail"></div>
+          <div class="action-grid">
+            <button id="channel-login-button" class="ghost-button">Dang nhap Zalo</button>
+            <button id="channel-sync-button" class="ghost-button">Sync Contacts</button>
+          </div>
+          <div id="qr-block" class="qr-block hidden">
+            <div class="eyebrow">QR Mock</div>
+            <img id="qr-image" alt="QR mock" />
+            <p id="qr-status" class="card-subtitle">QR se hien thi o day.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+  </html>

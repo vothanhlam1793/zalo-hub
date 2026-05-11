@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyChat</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <div>
+            <div class="eyebrow">Desktop Inbox</div>
+            <h1>MyChat</h1>
+            <p class="hero-copy">Quan ly nhieu tai khoan Zalo ca nhan trong mot workspace gon gang.</p>
+          </div>
+          <div class="sidebar-actions">
+            <button id="add-account-button" class="ghost-button">+ Tai khoan</button>
+            <button id="qr-login-button" class="ghost-button">QR Login</button>
+          </div>
+        </div>
+        <div id="account-summary" class="summary-card"></div>
+        <div id="account-list" class="account-list"></div>
+      </aside>
+
+      <main class="main-layout">
+        <section class="panel panel-conversations">
+          <div class="panel-header">
+            <div>
+              <div class="eyebrow">Conversations</div>
+              <h2>Hoi thoai</h2>
+            </div>
+            <div class="sidebar-actions">
+              <button id="sync-friends-button" class="ghost-button">Sync Ban be</button>
+              <button id="new-conversation-button" class="ghost-button">+ Cuoc chat</button>
+            </div>
+          </div>
+          <div class="section-caption">Ban be Zalo</div>
+          <div id="friend-list" class="friend-list"></div>
+          <div class="section-caption">Cuoc tro chuyen</div>
+          <div id="conversation-list" class="conversation-list"></div>
+        </section>
+
+        <section class="panel panel-chat">
+          <div id="chat-header" class="panel-header panel-header-tight">
+            <div>
+              <div class="eyebrow">Chat Window</div>
+              <h2>Chon mot hoi thoai</h2>
+            </div>
+          </div>
+          <div id="message-list" class="message-list"></div>
+          <form id="message-form" class="message-form">
+            <textarea id="message-input" rows="3" placeholder="Nhap tin nhan..."></textarea>
+            <button type="submit" class="primary-button">Gui</button>
+          </form>
+        </section>
+
+        <section class="panel panel-agent">
+          <div class="panel-header">
+            <div>
+              <div class="eyebrow">Agent Layer</div>
+              <h2>Ho tro AI sau nay</h2>
+            </div>
+          </div>
+          <div id="toast" class="toast hidden"></div>
+          <label class="toggle-row">
+            <span>Bat Agent cho account hien tai</span>
+            <input id="agent-enabled" type="checkbox" />
+          </label>
+          <label class="stack-field">
+            <span>System prompt</span>
+            <textarea id="agent-prompt" rows="10"></textarea>
+          </label>
+          <button id="save-agent-button" class="primary-button">Luu Agent Config</button>
+          <div class="agent-note">
+            Cho giai doan sau: auto reply, triage, draft message, tool calling, CRM notes.
+          </div>
+          <div id="qr-block" class="qr-block hidden">
+            <div class="eyebrow">QR Login</div>
+            <img id="qr-image" alt="Zalo QR" />
+            <p id="qr-status" class="muted">Scan ma nay bang Zalo tren dien thoai cua ban.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+  </html>

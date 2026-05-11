@@ -1,0 +1,25 @@
+{
+  "name": "mychat-zalo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "dev:chat": "tsx watch src/chat-server/index.ts",
+    "dev:zalo": "tsx watch src/zalo-service/index.ts",
+    "build": "tsc",
+    "start": "node dist/server/index.js",
+    "start:chat": "node dist/chat-server/index.js",
+    "start:zalo": "node dist/zalo-service/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "zalo-api-final": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^24.6.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

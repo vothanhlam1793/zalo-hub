@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.run/
+
+# Runtime state
+data/*.json
+
+# OS files
+.DS_Store
