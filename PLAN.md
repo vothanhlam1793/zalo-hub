@@ -1,147 +1,109 @@
 # Plan
 
-## Muc Tieu Tong The
+## Muc Tieu Hien Tai
 
-Xay he thong theo thu tu uu tien:
+Sau `gold-3`, huong phat trien duoc chot lai thanh:
 
-1. `chat-server` chay doc lap truoc
-2. chat domain va inbox flow chay duoc end-to-end truoc
-3. sau do moi noi `zalo-service`
-4. cuoi cung moi danh gia muc do tich hop `Chatwoot`
+1. giu `gold-1` va `gold-2` lam nen tang da prove
+2. giu `gold-3` lam moc chat 1-1 da prove tren web
+3. chi mo rong them khi co KPI ro rang cho `gold-3B` hoac `gold-4`
 
-Ly do:
+## Ket Qua `gold-1`
 
-- chat-server la loi nghiep vu quan trong nhat
-- can chot domain bang code that truoc khi bi framework hay source ngoai dan dat
-- can co mot he thong chat chay duoc truoc khi xu ly bai toan session Zalo
+Da dat duoc:
 
-## Giai Doan 1: Chat Server First
+1. QR login thanh cong
+2. recover session tu cookie jar khi `loginQR` cua package fail o buoc hau kiem
+3. reconnect session bang credential luu local
+4. `getAllFriends()` tra ve du lieu that
+5. gui duoc tin nhan text 1-1
+6. co `doctor` de verify session
+7. co menu CLI va log theo tung lan chay
 
-Muc tieu:
+## Ket Qua `gold-2`
 
-- dung `chat-server` doc lap trong repo hien tai
-- co file store rieng cho chat domain
-- co API cho:
-  - workspace
-  - workspace users
-  - channels logic
-  - contacts
-  - conversations
-  - messages
-- co local messaging flow de chat duoc truoc
-- chua phu thuoc Zalo that
+Da dat duoc:
 
-Pham vi V1:
+1. web UI co ban cho login QR
+2. web UI tai duoc friend list
+3. web UI gui duoc tin nhan text 1-1
+4. web UI hien thi trang thai dang nhap ro hon
+5. web UI hien thi thong tin tai khoan dang nhap o muc API cho phep
+6. web UI co logout flow
+7. server `gold-2` co the truy cap tu may khac trong LAN
 
-- backend API truoc
-- file store thay vi Postgres de di nhanh
-- fake/local conversation de test domain
+## Ket Qua `gold-3`
 
-Ket qua mong doi:
+Da dat duoc:
 
-- co the tao channel logic
-- co the tao conversation local
-- co the gui message local
-- co du lieu chat-server tach rieng khoi app Zalo MVP hien tai
+1. web UI co khung chat 1-1 co ban
+2. chon friend de mo conversation rieng
+3. gui tin nhan text trong khung chat
+4. backend bat duoc incoming message that tu Zalo
+5. frontend nhan tin moi qua websocket tich hop trong cung backend `gold-2`
+6. timeline hien thi duoc tin text hai chieu
+7. timeline hien thi duoc tin nhan anh nhan toi
+8. giu duoc logout flow va reconnect flow da co
 
-## Giai Doan 2: Fake Provider / Mock Event Flow
+## Scope Nen Tang Da Co
 
-Muc tieu:
+`gold-1` hien co:
 
-- gia lap inbound events
-- gia lap outbound commands
-- kiem thu event contracts
-- kiem thu assignment va conversation lifecycle
+- `src/gold-1/index.ts`: CLI menu
+- `src/gold-1/runtime.ts`: runtime login, reconnect, friends, send
+- `src/gold-1/store.ts`: luu credential va friend cache
+- `src/gold-1/logger.ts`: log theo tung run
+- `gold.sh`: script chay nhanh
 
-Pham vi:
+`gold-2` hien co:
 
-- khong can Zalo that
-- chi can event flow giong voi `EVENT_CONTRACTS_V1.md`
+- `src/gold-2/server.ts`: backend-lite cho web
+- `src/gold-2/client/index.html`: giao dien co ban
+- `src/gold-2/client/app.js`: login, friends, send, status, logout
+- `src/gold-2/client/styles.css`: giao dien web toi gian
 
-Ket qua mong doi:
+`gold-3` hien co them:
 
-- chat-server duoc test trong dieu kien co event vao/ra
-- chot duoc integration boundaries
+- runtime conversation cache trong `src/gold-1/runtime.ts`
+- listener bat incoming message that tu Zalo
+- websocket tich hop trong `src/gold-2/server.ts`
+- chat UI 1-1 trong `src/gold-2/client/*`
 
-## Giai Doan 3: Zalo Service
+## Huong `gold-3`
 
-Muc tieu:
+`gold-3` da duoc prove. Huong hien tai la giu no on dinh truoc khi mo rong them.
 
-- tach `zalo-service` thanh khoi rieng
-- quan ly channel runtime
-- QR login
-- session reconnect
-- sync contacts
-- send/receive messages
+Nguyen tac sau `gold-3`:
 
-Ket qua mong doi:
+1. bat dau tu logic da prove trong `gold-1`
+2. bat dau tu web UX va API da prove trong `gold-2`
+3. uu tien nang cap kha nang van hanh va do on dinh cua `gold-3`
+4. chi tach thanh service lon hon khi co nhu cau that su, khong tach som
 
-- `chat-server` khong can biet chi tiet session Zalo
-- event/command flow chay thong qua contract da chot
+## Nhung Viec Da Hoan Tat
 
-## Giai Doan 4: Shared Persistence
+- login va reconnect voi credential local
+- friend sync
+- send text 1-1
+- QR render trong terminal
+- log debug theo run
+- `doctor` pass
+- web login flow
+- web friend list flow
+- web send message flow
+- web logout flow
+- web chat 1-1 flow
+- incoming message listener flow
+- websocket realtime flow tu backend sang frontend
+- incoming image render flow
 
-Muc tieu:
+## Nhung Viec Khong Con La Uu Tien Truc Tiep Luc Nay
 
-- thay file store bang Postgres theo `POSTGRES_SCHEMA_V1.md`
-- tach ro `chat_core`, `zalo_runtime`, `integration_events`
-- bo sung retry, dead letter, reconciliation
+- tai lieu kien truc cu o root
+- `chat-server` / `zalo-service` lam tam diem phat trien ngay lap tuc
+- event contracts / Postgres / Chatwoot integration trong pha hien tai
+- tach websocket thanh service rieng truoc khi co nhu cau that
 
-Ket qua mong doi:
+## Ghi Chu
 
-- luong du lieu ben vung hon
-- san sang cho scale va van hanh that
-
-## Giai Doan 5: Chatwoot Fit Integration
-
-Muc tieu:
-
-- sau khi chat-server domain da chay on dinh, moi danh gia lai `Chatwoot`
-- quyet dinh reuse o muc nao:
-  - chi reuse domain ideas
-  - reuse UI mot phan
-  - hay tich hop sau hon vao chat-server
-
-Nguyen tac:
-
-- khong dua Chatwoot vao qua som
-- chi dua vao sau khi da co baseline chat-server cua minh
-
-## Cong Viec Truc Tiep Ngay Bay Gio
-
-### Buoc 1
-
-Tao `chat-server` skeleton trong `src/chat-server`.
-
-### Buoc 2
-
-Tao file store rieng cho chat domain.
-
-### Buoc 3
-
-Expose chat APIs co ban:
-
-- `GET /api/health`
-- `GET /api/workspaces`
-- `GET /api/users`
-- `GET /api/channels`
-- `POST /api/channels`
-- `GET /api/conversations`
-- `POST /api/conversations`
-- `GET /api/conversations/:id/messages`
-- `POST /api/messages`
-
-### Buoc 4
-
-Seed du lieu demo nho de co the chat local ngay.
-
-## Dinh Nghia Hoan Thanh Giai Doan 1
-
-Giai doan 1 duoc xem la xong khi:
-
-1. co `chat-server` doc lap voi app cu
-2. chay len duoc bang script rieng
-3. tao duoc channel logic
-4. tao duoc conversation local
-5. gui duoc message local
-6. du lieu duoc luu tach rieng khoi `state.json` hien tai
+Tai lieu cu duoc dua vao `archived/` de tra cuu khi can.
