@@ -362,6 +362,11 @@ h1 {
   justify-content: flex-end;
 }
 
+.composer-attachment-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .send-form label {
   display: grid;
   gap: 8px;

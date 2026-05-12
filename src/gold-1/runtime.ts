@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import * as ZaloApi from 'zalo-api-final';
 import jsQRModule from 'jsqr';
@@ -8,7 +8,7 @@ import { PNG } from 'pngjs';
 import QRCode from 'qrcode';
 import { GoldLogger } from './logger.js';
 import { GoldStore } from './store.js';
-import type { GoldConversationMessage, GoldStoredCredential } from './types.js';
+import type { GoldAttachment, GoldConversationMessage, GoldConversationSummary, GoldMessageKind, GoldStoredCredential } from './types.js';
 
 const jsQR = jsQRModule as unknown as (
   data: Uint8ClampedArray,
@@ -94,15 +94,71 @@ function normalizeMessageText(data: Record<string, unknown>) {
   return '';
 }
 
-function normalizeMessageKind(data: Record<string, unknown>) {
+function normalizeMessageKind(data: Record<string, unknown>): GoldMessageKind {
   const msgType = String(data.msgType ?? '');
-  if (msgType === 'chat.photo') {
-    return 'image' as const;
-  }
-
-  return 'text' as const;
+  if (msgType === 'chat.photo') return 'image';
+  if (
+    msgType === 'chat.video.msg' ||
+    msgType === 'chat.video' ||
+    msgType === 'video'
+  ) return 'video';
+  if (
+    msgType === 'chat.file' ||
+    msgType === 'chat.doc' ||
+    msgType === 'chat.voice' ||
+    msgType === 'chat.gif'
+  ) return 'file';
+  return 'text';
 }
 
+function normalizeAttachments(data: Record<string, unknown>): GoldAttachment[] {
+  const msgType = String(data.msgType ?? '');
+  const content = data.content;
+  const contentObj = content && typeof content === 'object' ? content as Record<string, unknown> : null;
+
+  if (msgType === 'chat.photo') {
+    const url = typeof contentObj?.href === 'string' ? contentObj.href.trim() : undefined;
+    if (!url) return [];
+    return [{
+      id: String(data.msgId ?? data.cliMsgId ?? Math.random()),
+      type: 'image',
+      url,
+      thumbnailUrl: url,
+    }];
+  }
+
+  if (msgType === 'chat.video.msg' || msgType === 'chat.video' || msgType === 'video') {
+    const url = typeof contentObj?.href === 'string' ? contentObj.href.trim() : undefined;
+    const thumb = typeof contentObj?.thumb === 'string' ? contentObj.thumb.trim() : undefined;
+    if (!url) return [];
+    return [{
+      id: String(data.msgId ?? data.cliMsgId ?? Math.random()),
+      type: 'video',
+      url,
+      thumbnailUrl: thumb ?? url,
+      fileName: typeof contentObj?.title === 'string' ? contentObj.title : undefined,
+    }];
+  }
+
+  if (msgType === 'chat.file' || msgType === 'chat.doc' || msgType === 'chat.voice' || msgType === 'chat.gif') {
+    const url = typeof contentObj?.href === 'string' ? contentObj.href.trim() : undefined;
+    const fileName = typeof contentObj?.title === 'string' ? contentObj.title.trim()
+      : typeof contentObj?.fileName === 'string' ? contentObj.fileName.trim() : undefined;
+    const thumb = typeof contentObj?.thumb === 'string' ? contentObj.thumb.trim() : undefined;
+    if (!url && !fileName) return [];
+    return [{
+      id: String(data.msgId ?? data.cliMsgId ?? Math.random()),
+      type: 'file',
+      url,
+      thumbnailUrl: thumb,
+      fileName,
+    }];
+  }
+
+  return [];
+}
+
+// legacy compat - chỉ dùng để backward compat với gold-3
 function normalizeImageUrl(data: Record<string, unknown>) {
   const content = data.content;
   if (content && typeof content === 'object') {
@@ -294,7 +350,31 @@ export class GoldRuntime {
   constructor(
     private readonly store: GoldStore,
     private readonly logger: GoldLogger,
-  ) {}
+  ) {
+    this.hydrateConversationsFromStore();
+  }
+
+  private hydrateConversationsFromStore() {
+    this.conversations.clear();
+    this.seenMessageKeys.clear();
+
+    for (const summary of this.store.listConversationSummaries()) {
+      const messages = this.store.listConversationMessages(summary.friendId);
+      this.conversations.set(summary.friendId, messages);
+      for (const message of messages) {
+        this.seenMessageKeys.add(
+          this.buildMessageKey(
+            message.friendId,
+            message.text,
+            message.timestamp,
+            message.direction,
+            message.kind,
+            message.imageUrl,
+          ),
+        );
+      }
+    }
+  }
 
   async loginWithStoredCredential() {
     const credential = this.store.getCredential();
@@ -326,6 +406,14 @@ export class GoldRuntime {
     await this.verifySession();
     this.ensureMessageListener();
     this.currentAccount = await this.fetchAccountInfo().catch(() => this.currentAccount);
+    if (this.currentAccount?.userId) {
+      this.store.setActiveAccount({
+        accountId: this.currentAccount.userId,
+        displayName: this.currentAccount.displayName,
+        phoneNumber: this.currentAccount.phoneNumber,
+      });
+      this.hydrateConversationsFromStore();
+    }
     this.logger.info('login_with_credential_succeeded');
     return this.session;
   }
@@ -383,6 +471,7 @@ export class GoldRuntime {
     existing.push(message);
     existing.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.conversations.set(message.friendId, existing);
+    this.store.replaceConversationMessages(message.friendId, existing);
     for (const listener of this.conversationListeners) {
       listener(message);
     }
@@ -455,7 +544,8 @@ export class GoldRuntime {
     const data = message.data ?? {};
     const text = normalizeMessageText(data);
     const kind = normalizeMessageKind(data);
-    const imageUrl = normalizeImageUrl(data);
+    const attachments = normalizeAttachments(data);
+    const imageUrl = normalizeImageUrl(data); // legacy compat
 
     this.logger.info('conversation_listener_message_received', {
       threadId: friendId,
@@ -468,13 +558,12 @@ export class GoldRuntime {
     this.listenerState.lastEventAt = new Date().toISOString();
     this.listenerState.lastMessageAt = this.listenerState.lastEventAt;
 
-    if (!friendId || (!text && !imageUrl)) {
+    if (!friendId || (!text && attachments.length === 0)) {
       this.logger.error('conversation_listener_message_ignored', {
-        reason: !friendId ? 'missing_thread_id' : 'missing_text',
+        reason: !friendId ? 'missing_thread_id' : 'missing_content',
         threadId: friendId,
         isSelf: Boolean(message.isSelf),
         kind,
-        imageUrl,
         summary: summarizeListenerData(data),
       });
       return;
@@ -483,9 +572,10 @@ export class GoldRuntime {
     const normalizedMessage: GoldConversationMessage = {
       id: String(data.msgId ?? data.cliMsgId ?? randomUUID()),
       friendId,
-      text: text || '[Hinh anh]',
+      text: text || (kind !== 'text' ? `[${kind}]` : ''),
       kind,
-      imageUrl,
+      attachments,
+      imageUrl, // legacy compat
       direction: message.isSelf ? 'outgoing' : 'incoming',
       isSelf: Boolean(message.isSelf),
       timestamp: normalizeMessageTimestamp(data),
@@ -640,12 +730,41 @@ export class GoldRuntime {
   }
 
   getConversationMessages(friendId: string, since?: string) {
-    const messages = this.conversations.get(friendId) ?? [];
+    const messages = this.conversations.get(friendId) ?? this.store.listConversationMessages(friendId);
     if (!since) {
       return [...messages];
     }
 
     return messages.filter((message) => message.timestamp > since);
+  }
+
+  getConversationSummaries() {
+    if (this.conversations.size === 0) {
+      return this.store.listConversationSummaries();
+    }
+
+    const friendNameByUserId = new Map(this.getFriendCache().map((friend) => [friend.userId, friend.displayName]));
+    const summaries: GoldConversationSummary[] = [];
+
+    for (const [friendId, messages] of this.conversations.entries()) {
+      const lastMessage = messages[messages.length - 1];
+      if (!lastMessage) {
+        continue;
+      }
+
+      summaries.push({
+        friendId,
+        displayName: friendNameByUserId.get(friendId),
+        lastMessageText: lastMessage.text,
+        lastMessageKind: lastMessage.kind ?? 'text',
+        lastMessageTimestamp: lastMessage.timestamp,
+        lastDirection: lastMessage.direction,
+        messageCount: messages.length,
+      });
+    }
+
+    summaries.sort((left, right) => right.lastMessageTimestamp.localeCompare(left.lastMessageTimestamp));
+    return summaries;
   }
 
   onConversationMessage(listener: ConversationListener) {
@@ -703,7 +822,7 @@ export class GoldRuntime {
       connected: false,
       startAttempts: 0,
     };
-    this.store.clearAll();
+    this.store.clearSession();
     this.logger.info('logout_completed');
     return { ok: true };
   }
@@ -750,6 +869,18 @@ export class GoldRuntime {
     }
 
     this.currentAccount = account;
+    if (account.userId) {
+      this.store.setActiveAccount({
+        accountId: account.userId,
+        displayName: account.displayName,
+        phoneNumber: account.phoneNumber,
+      });
+      this.hydrateConversationsFromStore();
+    }
+    this.store.updateActiveAccountProfile({
+      displayName: account.displayName,
+      phoneNumber: account.phoneNumber,
+    });
     this.logger.info('account_info_loaded', account);
     return account;
   }
@@ -802,6 +933,7 @@ export class GoldRuntime {
           friendId,
           text,
           kind: 'text',
+          attachments: [],
           direction: 'outgoing',
           isSelf: true,
           timestamp: new Date().toISOString(),
@@ -822,6 +954,7 @@ export class GoldRuntime {
           friendId,
           text,
           kind: 'text',
+          attachments: [],
           direction: 'outgoing',
           isSelf: true,
           timestamp: new Date().toISOString(),
@@ -839,6 +972,98 @@ export class GoldRuntime {
     throw new Error(
       `Khong tim thay send API phu hop tren session. Available methods: ${apiKeys.join(', ')}`,
     );
+  }
+
+  async sendAttachment(friendId: string, options: {
+    fileBuffer: Buffer;
+    fileName: string;
+    mimeType: string;
+    caption?: string;
+  }) {
+    if (!friendId) throw new Error('friendId la bat buoc');
+    if (!options.fileBuffer?.length) throw new Error('fileBuffer la bat buoc');
+    if (!options.fileName.trim()) throw new Error('fileName la bat buoc');
+
+    if (!this.session) {
+      await this.loginWithStoredCredential();
+    }
+
+    const api = this.session?.api;
+    if (typeof api?.sendMessage !== 'function') {
+      throw new Error('Session khong ho tro sendMessage');
+    }
+
+    const caption = options.caption?.trim() ?? '';
+    const mimeType = options.mimeType.trim();
+    const kind: GoldMessageKind = mimeType.startsWith('image/') ? 'image' : 'file';
+
+    const tempDir = path.join('/tmp/opencode', 'gold-4-uploads');
+    mkdirSync(tempDir, { recursive: true });
+    const safeFileName = options.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const tempFilePath = path.join(tempDir, `${Date.now()}-${randomUUID()}-${safeFileName}`);
+
+    this.logger.info('send_attachment_started', {
+      friendId,
+      kind,
+      fileName: options.fileName,
+      mimeType,
+      size: options.fileBuffer.length,
+    });
+
+    writeFileSync(tempFilePath, options.fileBuffer);
+
+    try {
+      const result = await api.sendMessage(
+        { msg: caption, attachments: [tempFilePath] },
+        friendId,
+      );
+
+      this.logger.info('send_attachment_api_result', { friendId, result });
+
+      // attachment[] có thể chứa photoId (image) hoặc fileId/msgId (file)
+      const att = result?.attachment?.[0];
+      const msgResult = result?.message;
+      const messageId = String(att?.photoId ?? att?.fileId ?? att?.msgId ?? msgResult?.msgId ?? randomUUID());
+
+      const attachmentUrl = att?.normalUrl ?? att?.hdUrl ?? att?.thumbUrl ?? att?.fileUrl ?? undefined;
+      const thumbnailUrl = att?.thumbUrl ?? att?.normalUrl ?? undefined;
+
+      const goldAttachment: GoldAttachment = {
+        id: messageId,
+        type: kind,
+        url: attachmentUrl,
+        thumbnailUrl,
+        fileName: options.fileName,
+        mimeType,
+        size: options.fileBuffer.length,
+      };
+
+      this.appendConversationMessage({
+        id: messageId,
+        friendId,
+        text: caption || `[${kind}]`,
+        kind,
+        attachments: [goldAttachment],
+        imageUrl: kind === 'image' ? (attachmentUrl ?? undefined) : undefined,
+        direction: 'outgoing',
+        isSelf: true,
+        timestamp: new Date().toISOString(),
+      });
+
+      this.logger.info('send_attachment_succeeded', { friendId, kind, messageId });
+      return { method: 'sendMessage', kind, result };
+    } finally {
+      try { unlinkSync(tempFilePath); } catch { /* ignore */ }
+    }
+  }
+
+  // Compat wrappers
+  async sendImage(friendId: string, options: { imageBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
+    return this.sendAttachment(friendId, { fileBuffer: options.imageBuffer, ...options });
+  }
+
+  async sendFile(friendId: string, options: { fileBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
+    return this.sendAttachment(friendId, options);
   }
 
   async renderQrToTerminal(qrCode: string) {

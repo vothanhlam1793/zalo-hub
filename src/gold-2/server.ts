@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
+import multer from 'multer';
 import { GoldLogger } from '../gold-1/logger.js';
 import { GoldRuntime } from '../gold-1/runtime.js';
 import { GoldStore } from '../gold-1/store.js';
@@ -11,6 +12,7 @@ import type { GoldConversationMessage } from '../gold-1/types.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDir = path.resolve(__dirname, 'client');
+const gold4ClientDir = path.resolve(__dirname, '../../dist/gold-4-web');
 
 const logger = new GoldLogger();
 const runtime = new GoldRuntime(new GoldStore(), logger);
@@ -22,6 +24,17 @@ const wsServer = new WebSocketServer({ server, path: '/ws' });
 let loginPromise: Promise<void> | undefined;
 
 const wsSubscriptions = new Map<WebSocket, string>();
+
+function broadcast(payload: Record<string, unknown>) {
+  const body = JSON.stringify(payload);
+  for (const client of wsServer.clients) {
+    if (client.readyState !== client.OPEN) {
+      continue;
+    }
+
+    client.send(body);
+  }
+}
 
 function broadcastConversationMessage(message: GoldConversationMessage) {
   const payload = JSON.stringify({ type: 'conversation_message', message });
@@ -40,10 +53,14 @@ function broadcastConversationMessage(message: GoldConversationMessage) {
 
 runtime.onConversationMessage((message) => {
   broadcastConversationMessage(message);
+  broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
+  broadcast({ type: 'session_state', status: getStatus() });
 });
 
 wsServer.on('connection', (socket: WebSocket) => {
   socket.send(JSON.stringify({ type: 'connected' }));
+  socket.send(JSON.stringify({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() }));
+  socket.send(JSON.stringify({ type: 'session_state', status: getStatus() }));
 
   socket.on('message', (raw: string | Buffer) => {
     try {
@@ -68,8 +85,18 @@ wsServer.on('connection', (socket: WebSocket) => {
   });
 });
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '12mb' }));
+app.use((_, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+app.use(express.static(gold4ClientDir));
 app.use(express.static(clientDir));
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+});
 
 function getStatus(loginInProgress = Boolean(loginPromise)) {
   const account = runtime.getCurrentAccount();
@@ -83,6 +110,15 @@ function getStatus(loginInProgress = Boolean(loginPromise)) {
     loginInProgress,
     loggedIn: Boolean(runtime.hasCredential() || runtime.isSessionActive() || account?.userId || account?.displayName),
   };
+}
+
+function requireActiveSession(res: express.Response) {
+  if (runtime.isSessionActive()) {
+    return true;
+  }
+
+  res.status(401).json({ error: 'Phien dang nhap khong con active. Hay dang nhap lai.' });
+  return false;
 }
 
 app.get('/api/health', (_req, res) => {
@@ -150,6 +186,10 @@ app.post('/api/logout', (_req, res) => {
 app.get('/api/friends', (req, res) => {
   void (async () => {
     try {
+      if (!requireActiveSession(res)) {
+        return;
+      }
+
       const refresh = req.query.refresh === '1';
       const friends = refresh || runtime.getFriendCache().length === 0
         ? await runtime.listFriends()
@@ -170,6 +210,10 @@ app.get('/api/conversations/:friendId/messages', (req, res) => {
   const friendId = String(req.params.friendId ?? '').trim();
   const since = typeof req.query.since === 'string' ? req.query.since : undefined;
 
+  if (!requireActiveSession(res)) {
+    return;
+  }
+
   if (!friendId) {
     res.status(400).json({ error: 'friendId la bat buoc' });
     return;
@@ -183,18 +227,71 @@ app.get('/api/conversations/:friendId/messages', (req, res) => {
   }
 });
 
+app.get('/api/conversations', (_req, res) => {
+  if (!requireActiveSession(res)) {
+    return;
+  }
+
+  try {
+    const conversations = runtime.getConversationSummaries();
+    res.json({ conversations, count: conversations.length });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversations that bai' });
+  }
+});
+
 app.post('/api/send', (req, res) => {
   void (async () => {
+    if (!requireActiveSession(res)) {
+      return;
+    }
+
     const friendId = String(req.body?.friendId ?? '').trim();
     const text = String(req.body?.text ?? '').trim();
+    const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
+    const imageFileName = typeof req.body?.imageFileName === 'string' ? req.body.imageFileName.trim() : '';
+    const imageMimeType = typeof req.body?.imageMimeType === 'string' ? req.body.imageMimeType.trim() : '';
 
-    if (!friendId || !text) {
-      res.status(400).json({ error: 'friendId va text la bat buoc' });
+    logger.info('gold2_send_requested', {
+      friendId,
+      textLength: text.length,
+      hasImage: Boolean(imageBase64),
+      imageFileName,
+      imageMimeType,
+      imageBase64Length: imageBase64.length,
+    });
+
+    if (!friendId) {
+      res.status(400).json({ error: 'friendId la bat buoc' });
       return;
     }
 
     try {
-      const result = await runtime.sendText(friendId, text);
+      let result;
+      if (imageBase64) {
+        if (!imageFileName || !imageMimeType) {
+          res.status(400).json({ error: 'imageFileName va imageMimeType la bat buoc khi gui anh' });
+          return;
+        }
+
+        const imageBuffer = Buffer.from(imageBase64, 'base64');
+        result = await runtime.sendImage(friendId, {
+          imageBuffer,
+          fileName: imageFileName,
+          mimeType: imageMimeType,
+          caption: text || undefined,
+        });
+      } else {
+        if (!text) {
+          res.status(400).json({ error: 'Can co text hoac image de gui' });
+          return;
+        }
+
+        result = await runtime.sendText(friendId, text);
+      }
+
+      broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
+      broadcast({ type: 'session_state', status: getStatus() });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Gui tin that bai' });
@@ -202,8 +299,56 @@ app.post('/api/send', (req, res) => {
   })();
 });
 
+app.post('/api/send-attachment', upload.single('file'), (req, res) => {
+  void (async () => {
+    if (!requireActiveSession(res)) return;
+
+    const friendId = String(req.body?.friendId ?? '').trim();
+    const caption = String(req.body?.caption ?? '').trim();
+
+    if (!friendId) {
+      res.status(400).json({ error: 'friendId la bat buoc' });
+      return;
+    }
+
+    if (!req.file) {
+      res.status(400).json({ error: 'File la bat buoc' });
+      return;
+    }
+
+    logger.info('gold2_send_attachment_requested', {
+      friendId,
+      fileName: req.file.originalname,
+      mimeType: req.file.mimetype,
+      size: req.file.size,
+    });
+
+    try {
+      const result = await runtime.sendAttachment(friendId, {
+        fileBuffer: req.file.buffer,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        caption: caption || undefined,
+      });
+
+      broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
+      broadcast({ type: 'session_state', status: getStatus() });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
+    }
+  })();
+});
+
 app.get('*', (_req, res) => {
-  res.sendFile(path.join(clientDir, 'index.html'));
+  const target = path.join(gold4ClientDir, 'index.html');
+  res.sendFile(target, (error) => {
+    if (!error) {
+      return;
+    }
+
+    res.sendFile(path.join(clientDir, 'index.html'));
+  });
 });
 
 server.listen(port, () => {

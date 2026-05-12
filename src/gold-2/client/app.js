@@ -4,11 +4,17 @@ const qrBox = document.querySelector('#qrBox');
 const accountInfo = document.querySelector('#accountInfo');
 const friendsMeta = document.querySelector('#friendsMeta');
 const friendsList = document.querySelector('#friendsList');
+const chatSidebarMeta = document.querySelector('#chatSidebarMeta');
+const chatFriendsList = document.querySelector('#chatFriendsList');
+const conversationMeta = document.querySelector('#conversationMeta');
+const conversationList = document.querySelector('#conversationList');
 const activeFriendName = document.querySelector('#activeFriendName');
 const activeFriendMeta = document.querySelector('#activeFriendMeta');
 const messagesList = document.querySelector('#messagesList');
 const friendIdInput = document.querySelector('#friendIdInput');
 const messageInput = document.querySelector('#messageInput');
+const imageInput = document.querySelector('#imageInput');
+const attachmentHint = document.querySelector('#attachmentHint');
 const sendResult = document.querySelector('#sendResult');
 const logoutBtn = document.querySelector('#logoutBtn');
 const sendForm = document.querySelector('#sendForm');
@@ -17,6 +23,7 @@ const state = {
   friends: [],
   activeFriendId: '',
   activeFriendName: '',
+  conversations: [],
   messagesByFriendId: new Map(),
   lastMessageTimestampByFriendId: new Map(),
   socket: undefined,
@@ -35,6 +42,36 @@ async function request(path, options = {}) {
   }
 
   return body;
+}
+
+function renderAttachmentHint() {
+  const file = imageInput.files?.[0];
+  if (!file) {
+    attachmentHint.textContent = 'Chua chon anh.';
+    return;
+  }
+
+  const sizeKb = Math.max(1, Math.round(file.size / 1024));
+  attachmentHint.textContent = `Da chon anh: ${file.name} (${sizeKb} KB)`;
+}
+
+async function fileToPayload(file) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Khong doc duoc file anh'));
+    reader.readAsDataURL(file);
+  });
+
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error('Anh khong o dang base64 hop le');
+  }
+
+  return {
+    imageBase64: match[2],
+    imageMimeType: match[1],
+  };
 }
 
 function clearSocketReconnectTimer() {
@@ -81,6 +118,17 @@ function connectRealtime() {
         if (payload.message.friendId === state.activeFriendId) {
           renderMessages(payload.message.friendId);
         }
+        return;
+      }
+
+      if (payload.type === 'conversation_summaries' && Array.isArray(payload.conversations)) {
+        state.conversations = payload.conversations;
+        renderConversations(payload.conversations);
+        return;
+      }
+
+      if (payload.type === 'session_state' && payload.status) {
+        renderStatus(payload.status);
       }
     } catch {
       // Ignore malformed realtime payloads.
@@ -142,32 +190,77 @@ function renderQr(qrCode) {
 function renderFriends(friends) {
   state.friends = friends;
   friendsMeta.textContent = `Tong so ban be: ${friends.length}`;
+  chatSidebarMeta.textContent = `Tong so ban be: ${friends.length}`;
   friendsList.innerHTML = '';
+  chatFriendsList.innerHTML = '';
 
   if (friends.length === 0) {
     friendsList.innerHTML = '<div class="hint">Chua co du lieu ban be.</div>';
+    chatFriendsList.innerHTML = '<div class="hint">Chua co du lieu ban be.</div>';
     return;
   }
 
   for (const friend of friends) {
+    const createFriendItem = () => {
+      const item = document.createElement('article');
+      item.className = 'friend-item';
+      if (friend.userId === state.activeFriendId) {
+        item.classList.add('is-active');
+      }
+      item.innerHTML = `
+        <div>
+          <div class="friend-name">${friend.displayName}</div>
+          <div class="friend-id">${friend.userId}</div>
+        </div>
+        <button type="button">Chon</button>
+      `;
+
+      item.querySelector('button').addEventListener('click', () => {
+        selectFriend(friend);
+      });
+
+      return item;
+    };
+
+    friendsList.appendChild(createFriendItem());
+    chatFriendsList.appendChild(createFriendItem());
+  }
+}
+
+function renderConversations(conversations) {
+  conversationMeta.textContent = `Tong so conversation local: ${conversations.length}`;
+  conversationList.innerHTML = '';
+
+  if (conversations.length === 0) {
+    conversationList.innerHTML = '<div class="hint">Chua co conversation local.</div>';
+    return;
+  }
+
+  for (const conversation of conversations) {
     const item = document.createElement('article');
     item.className = 'friend-item';
-    if (friend.userId === state.activeFriendId) {
+    if (conversation.friendId === state.activeFriendId) {
       item.classList.add('is-active');
     }
+
+    const lastPrefix = conversation.lastMessageKind === 'image' ? '[Hinh anh] ' : '';
     item.innerHTML = `
       <div>
-        <div class="friend-name">${friend.displayName}</div>
-        <div class="friend-id">${friend.userId}</div>
+        <div class="friend-name">${conversation.displayName || conversation.friendId}</div>
+        <div class="friend-id">${lastPrefix}${conversation.lastMessageText}</div>
       </div>
-      <button type="button">Chon</button>
+      <button type="button">Mo</button>
     `;
 
-    item.querySelector('button').addEventListener('click', () => {
-      selectFriend(friend);
+    item.querySelector('button').addEventListener('click', async () => {
+      const friend = state.friends.find((entry) => entry.userId === conversation.friendId) || {
+        userId: conversation.friendId,
+        displayName: conversation.displayName || conversation.friendId,
+      };
+      await selectFriend(friend);
     });
 
-    friendsList.appendChild(item);
+    conversationList.appendChild(item);
   }
 }
 
@@ -269,6 +362,7 @@ async function selectFriend(friend) {
   state.activeFriendName = friend.displayName;
   friendIdInput.value = friend.userId;
   renderFriends(state.friends);
+  renderConversations(state.conversations);
   renderActiveFriend();
   await loadMessages(friend.userId);
   renderMessages(friend.userId);
@@ -322,6 +416,12 @@ async function refreshFriends(refresh = false) {
   await refreshStatus();
 }
 
+async function refreshConversations() {
+  const body = await request('/api/conversations');
+  state.conversations = body.conversations || [];
+  renderConversations(state.conversations);
+}
+
 document.querySelector('#refreshStatusBtn').addEventListener('click', async () => {
   await refreshStatus();
 });
@@ -333,6 +433,7 @@ logoutBtn.addEventListener('click', async () => {
     renderQr('');
     renderFriends([]);
     state.friends = [];
+    state.conversations = [];
     state.activeFriendId = '';
     state.activeFriendName = '';
     state.messagesByFriendId.clear();
@@ -341,10 +442,13 @@ logoutBtn.addEventListener('click', async () => {
       state.socket.send(JSON.stringify({ type: 'unsubscribe' }));
     }
     renderActiveFriend();
+    renderConversations([]);
     renderMessages();
     friendIdInput.value = '';
     messageInput.value = '';
-    sendResult.textContent = 'Da dang xuat va xoa credential local.';
+    imageInput.value = '';
+    renderAttachmentHint();
+    sendResult.textContent = 'Da dang xuat. Session local da tat, nhung history theo account van duoc giu.';
     await refreshStatus();
   } catch (error) {
     sendResult.textContent = error instanceof Error ? error.message : 'Dang xuat that bai';
@@ -363,6 +467,7 @@ document.querySelector('#startLoginBtn').addEventListener('click', async () => {
 document.querySelector('#refreshFriendsBtn').addEventListener('click', async () => {
   try {
     await refreshFriends(true);
+    await refreshConversations().catch(() => {});
     sendResult.textContent = 'Da tai lai danh sach ban be.';
   } catch (error) {
     sendResult.textContent = error instanceof Error ? error.message : 'Tai friends that bai';
@@ -377,8 +482,19 @@ sendForm.addEventListener('submit', async (event) => {
     }
 
     const text = messageInput.value.trim();
-    if (!text) {
-      throw new Error('Noi dung tin nhan la bat buoc');
+    const imageFile = imageInput.files?.[0];
+    if (!text && !imageFile) {
+      throw new Error('Can co noi dung text hoac chon mot anh');
+    }
+
+    let imageBase64 = '';
+    let imageFileName = '';
+    let imageMimeType = '';
+    if (imageFile) {
+      const payload = await fileToPayload(imageFile);
+      imageBase64 = payload.imageBase64;
+      imageFileName = imageFile.name;
+      imageMimeType = payload.imageMimeType || imageFile.type || 'image/png';
     }
 
     await request('/api/send', {
@@ -386,14 +502,26 @@ sendForm.addEventListener('submit', async (event) => {
       body: JSON.stringify({
         friendId: state.activeFriendId,
         text,
+        imageBase64,
+        imageFileName,
+        imageMimeType,
       }),
     });
     messageInput.value = '';
+    imageInput.value = '';
+    renderAttachmentHint();
     await loadMessages(state.activeFriendId, { incremental: false });
-    sendResult.textContent = `Da gui tin cho ${state.activeFriendName || state.activeFriendId}`;
+    await refreshConversations().catch(() => {});
+    sendResult.textContent = imageFile
+      ? `Da gui anh cho ${state.activeFriendName || state.activeFriendId}`
+      : `Da gui tin cho ${state.activeFriendName || state.activeFriendId}`;
   } catch (error) {
     sendResult.textContent = error instanceof Error ? error.message : 'Gui tin that bai';
   }
+});
+
+imageInput.addEventListener('change', () => {
+  renderAttachmentHint();
 });
 
 messageInput.addEventListener('keydown', (event) => {
@@ -413,7 +541,12 @@ await refreshStatus();
 await refreshQr();
 await refreshFriends(false).catch(() => {
   friendsMeta.textContent = 'Chua the tai friends. Dang nhap truoc.';
+  chatSidebarMeta.textContent = 'Chua the tai friends. Dang nhap truoc.';
+});
+await refreshConversations().catch(() => {
+  conversationMeta.textContent = 'Chua co conversation local.';
 });
 renderActiveFriend();
 renderMessages();
+renderAttachmentHint();
 connectRealtime();
