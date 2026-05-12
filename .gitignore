@@ -4,6 +4,7 @@ dist/
 
 # Runtime state
 data/*.json
+logs/
 
 # OS files
 .DS_Store
