@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,13 @@ import type { StoredCredential, ZaloChannelRecord, ZaloChannelStatus, ZaloFriend
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const statePath = path.resolve(__dirname, '../../data/zalo-service-state.json');
+const stateDir = path.dirname(statePath);
+
+function ensureStateDir() {
+  if (!existsSync(stateDir)) {
+    mkdirSync(stateDir, { recursive: true });
+  }
+}
 
 const initialState: ZaloServiceState = {
   channels: [],
@@ -14,10 +21,12 @@ const initialState: ZaloServiceState = {
 };
 
 function persistState(state: ZaloServiceState) {
+  ensureStateDir();
   writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8');
 }
 
 function loadState() {
+  ensureStateDir();
   if (!existsSync(statePath)) {
     persistState(initialState);
     return initialState;

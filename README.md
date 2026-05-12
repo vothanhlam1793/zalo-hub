@@ -19,16 +19,34 @@ Start ca 2 service:
 ./start.sh
 ```
 
+Tren Windows PowerShell:
+
+```powershell
+npm run start:win
+```
+
 Dung service:
 
 ```bash
 ./stop.sh
 ```
 
+Tren Windows PowerShell:
+
+```powershell
+npm run stop:win
+```
+
 Restart service:
 
 ```bash
 ./restart.sh
+```
+
+Tren Windows PowerShell:
+
+```powershell
+npm run restart:win
 ```
 
 URL mac dinh:

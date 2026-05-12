@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,13 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const statePath = path.resolve(__dirname, '../../data/chat-state.json');
+const stateDir = path.dirname(statePath);
+
+function ensureStateDir() {
+  if (!existsSync(stateDir)) {
+    mkdirSync(stateDir, { recursive: true });
+  }
+}
 
 function now() {
   return new Date().toISOString();
@@ -90,11 +97,13 @@ function buildInitialState(): ChatAppState {
 }
 
 function persistState(state: ChatAppState) {
+  ensureStateDir();
   writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8');
 }
 
 function loadState(): ChatAppState {
   const fallback = buildInitialState();
+  ensureStateDir();
 
   if (!existsSync(statePath)) {
     persistState(fallback);
