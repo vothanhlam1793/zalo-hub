@@ -216,6 +216,36 @@ Nhung gi da duoc prove trong ban cap nhat nay:
    - `/api/*` -> backend `gold-4`
    - `/ws` -> websocket realtime
 
+## Deploy Ghi Nho
+
+Thong tin deploy/public da duoc prove trong session nay:
+
+1. app host local dang expose backend tai `10.7.0.21:3399`
+2. frontend `gold-4` duoc build thanh static files tai `dist/gold-4-web`
+3. backend Express dang serve `dist/gold-4-web` truoc, roi moi fallback ve client cu
+4. public domain dang dung:
+   - `https://zalo.camerangochoang.com`
+5. proxy nginx dang nam tren:
+   - `root@svr12.creta.vn`
+6. file config nginx da sua:
+   - `/etc/nginx/sites-enabled/zalo.camerangochoang.com.conf`
+
+Rule route public da chot:
+
+1. `/` -> `10.7.0.21:3399`
+2. `/api/*` -> `10.7.0.21:3399`
+3. `/ws` -> `10.7.0.21:3399`
+
+Runbook deploy lai lan sau:
+
+1. `npm run gold4:build`
+2. `npm run build`
+3. restart backend local
+4. neu can, `ssh root@svr12.creta.vn` de `nginx -t && systemctl reload nginx`
+5. verify:
+   - `curl -sk https://zalo.camerangochoang.com/`
+   - `curl -sk https://zalo.camerangochoang.com/api/health`
+
 ## Ket Luan Phase
 
 Trang thai chot cho session nay:
