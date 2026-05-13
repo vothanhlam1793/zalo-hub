@@ -364,6 +364,19 @@ export class GoldStore {
     return this.activeAccountId;
   }
 
+  private resolveAccountId(accountId?: string) {
+    const normalized = accountId?.trim();
+    return normalized || this.activeAccountId;
+  }
+
+  private requireAccountId(accountId?: string) {
+    const resolved = this.resolveAccountId(accountId);
+    if (!resolved) {
+      throw new Error('accountId la bat buoc');
+    }
+    return resolved;
+  }
+
   activateAccount(accountId: string) {
     const normalizedAccountId = accountId.trim();
     if (!normalizedAccountId) {
@@ -380,13 +393,18 @@ export class GoldStore {
   }
 
   updateActiveAccountProfile(profile: { displayName?: string; phoneNumber?: string }) {
-    if (!this.activeAccountId) {
+    return this.updateAccountProfile(this.activeAccountId, profile);
+  }
+
+  updateAccountProfile(accountId: string | undefined, profile: { displayName?: string; phoneNumber?: string }) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return;
     }
 
-    const existing = this.getAccount(this.activeAccountId);
+    const existing = this.getAccount(resolvedAccountId);
     this.ensureAccountRecord({
-      accountId: this.activeAccountId,
+      accountId: resolvedAccountId,
       displayName: profile.displayName ?? existing?.displayName,
       phoneNumber: profile.phoneNumber ?? existing?.phoneNumber,
     });
@@ -416,7 +434,12 @@ export class GoldStore {
   }
 
   listContacts() {
-    if (!this.activeAccountId) {
+    return this.listContactsByAccount(this.activeAccountId);
+  }
+
+  listContactsByAccount(accountId?: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return [];
     }
 
@@ -425,7 +448,7 @@ export class GoldStore {
       FROM friends
       WHERE account_id = ?
       ORDER BY display_name COLLATE NOCASE ASC, friend_id ASC
-    `).all(this.activeAccountId) as RawFriendRow[];
+    `).all(resolvedAccountId) as RawFriendRow[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -452,7 +475,12 @@ export class GoldStore {
   }
 
   listGroups(): GoldGroupRecord[] {
-    if (!this.activeAccountId) {
+    return this.listGroupsByAccount(this.activeAccountId);
+  }
+
+  listGroupsByAccount(accountId?: string): GoldGroupRecord[] {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return [];
     }
 
@@ -461,7 +489,7 @@ export class GoldStore {
       FROM groups
       WHERE account_id = ?
       ORDER BY display_name COLLATE NOCASE ASC, group_id ASC
-    `).all(this.activeAccountId) as RawGroupRow[];
+    `).all(resolvedAccountId) as RawGroupRow[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -475,7 +503,12 @@ export class GoldStore {
   }
 
   listConversationMessages(conversationId: string, options: { before?: string; limit?: number } = {}): GoldConversationMessage[] {
-    if (!this.activeAccountId) {
+    return this.listConversationMessagesByAccount(this.activeAccountId, conversationId, options);
+  }
+
+  listConversationMessagesByAccount(accountId: string | undefined, conversationId: string, options: { before?: string; limit?: number } = {}): GoldConversationMessage[] {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return [];
     }
 
@@ -516,8 +549,8 @@ export class GoldStore {
       `;
 
     const rows = (before
-      ? this.db.prepare(query).all(this.activeAccountId, conversationId, directLegacyKey, before, limit)
-      : this.db.prepare(query).all(this.activeAccountId, conversationId, directLegacyKey, limit)) as RawMessageRow[];
+      ? this.db.prepare(query).all(resolvedAccountId, conversationId, directLegacyKey, before, limit)
+      : this.db.prepare(query).all(resolvedAccountId, conversationId, directLegacyKey, limit)) as RawMessageRow[];
 
     const messageIds = rows.map((r) => r.id);
 
@@ -577,7 +610,12 @@ export class GoldStore {
   }
 
   hasMessageByProviderId(conversationId: string, providerMessageId: string) {
-    if (!this.activeAccountId || !providerMessageId.trim()) {
+    return this.hasMessageByProviderIdForAccount(this.activeAccountId, conversationId, providerMessageId);
+  }
+
+  hasMessageByProviderIdForAccount(accountId: string | undefined, conversationId: string, providerMessageId: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId || !providerMessageId.trim()) {
       return false;
     }
 
@@ -590,13 +628,18 @@ export class GoldStore {
         AND thread_id = ?
         AND conversation_type = ?
       LIMIT 1
-    `).get(this.activeAccountId, providerMessageId.trim(), threadId, type) as { id: string } | undefined;
+    `).get(resolvedAccountId, providerMessageId.trim(), threadId, type) as { id: string } | undefined;
 
     return Boolean(row?.id);
   }
 
   listConversationSummaries(): GoldConversationSummary[] {
-    if (!this.activeAccountId) {
+    return this.listConversationSummariesByAccount(this.activeAccountId);
+  }
+
+  listConversationSummariesByAccount(accountId?: string): GoldConversationSummary[] {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return [];
     }
 
@@ -606,7 +649,7 @@ export class GoldStore {
       FROM conversations
       WHERE account_id = ?
       ORDER BY last_message_timestamp DESC, updated_at DESC
-    `).all(this.activeAccountId) as RawConversationRow[];
+    `).all(resolvedAccountId) as RawConversationRow[];
 
     return rows.map((row) => ({
       id: `${row.type}:${row.thread_id ?? row.friend_id}`,
@@ -614,10 +657,14 @@ export class GoldStore {
       type: row.type ?? 'direct',
       title: row.title
         ?? row.display_name_snapshot
-        ?? ((row.type ?? 'direct') === 'group' ? this.getGroupDisplayName(row.thread_id ?? row.friend_id) : this.getFriendDisplayName(row.friend_id))
+        ?? ((row.type ?? 'direct') === 'group'
+          ? this.getGroupDisplayName(row.thread_id ?? row.friend_id, resolvedAccountId)
+          : this.getFriendDisplayName(row.friend_id, resolvedAccountId))
         ?? row.thread_id
         ?? row.friend_id,
-      avatar: row.avatar ?? ((row.type ?? 'direct') === 'group' ? this.getGroupAvatar(row.thread_id ?? row.friend_id) : this.getFriendAvatar(row.friend_id)),
+      avatar: row.avatar ?? ((row.type ?? 'direct') === 'group'
+        ? this.getGroupAvatar(row.thread_id ?? row.friend_id, resolvedAccountId)
+        : this.getFriendAvatar(row.friend_id, resolvedAccountId)),
       lastMessageText: row.last_message_text,
       lastMessageKind: toMessageKind(row.last_message_kind),
       lastMessageTimestamp: row.last_message_timestamp,
@@ -627,13 +674,14 @@ export class GoldStore {
   }
 
   replaceConversationMessages(conversationId: string, messages: GoldConversationMessage[]) {
-    if (!this.activeAccountId) {
-      return [];
-    }
+    return this.replaceConversationMessagesByAccount(this.activeAccountId, conversationId, messages);
+  }
+
+  replaceConversationMessagesByAccount(accountId: string | undefined, conversationId: string, messages: GoldConversationMessage[]) {
+    const resolvedAccountId = this.requireAccountId(accountId);
 
     const sortedMessages = [...messages].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.runInTransaction(() => {
-      const accountId = this.activeAccountId as string;
       const { threadId, type } = this.parseConversationId(conversationId);
       this.db.prepare(`
         DELETE FROM messages
@@ -642,7 +690,7 @@ export class GoldStore {
             conversation_id = ?
             OR (conversation_id IS NULL AND friend_id = ?)
           )
-      `).run(accountId, conversationId, type === 'direct' ? threadId : null);
+      `).run(resolvedAccountId, conversationId, type === 'direct' ? threadId : null);
 
       const insertMessage = this.db.prepare(`
         INSERT INTO messages (
@@ -690,7 +738,7 @@ export class GoldStore {
 
       for (const message of sortedMessages) {
         const messageThreadId = message.threadId || threadId;
-        const storedMessageId = buildStoredMessageId(accountId, message.id);
+        const storedMessageId = buildStoredMessageId(resolvedAccountId, message.id);
         // legacy compat: giữ image_url cho các message image cũ
         const legacyImageUrl = message.imageUrl
           ?? (message.kind === 'image' && message.attachments?.[0]?.url ? message.attachments[0].url : null);
@@ -698,7 +746,7 @@ export class GoldStore {
         insertMessage.run(
           storedMessageId,
           message.conversationId,
-          accountId,
+          resolvedAccountId,
           messageThreadId,
           message.conversationType,
           message.conversationType === 'direct' ? messageThreadId : '',
@@ -717,7 +765,7 @@ export class GoldStore {
 
         for (const att of message.attachments ?? []) {
           if (att.id.startsWith('legacy-')) continue; // skip legacy synthetic attachments
-          const storedAttachmentId = buildStoredAttachmentId(accountId, att.id);
+          const storedAttachmentId = buildStoredAttachmentId(resolvedAccountId, att.id);
           insertAttachment.run(
             storedAttachmentId,
             storedMessageId,
@@ -739,10 +787,10 @@ export class GoldStore {
         }
       }
 
-      this.upsertConversation(accountId, conversationId, sortedMessages);
+      this.upsertConversation(resolvedAccountId, conversationId, sortedMessages);
     });
 
-    return this.listConversationMessages(conversationId);
+    return this.listConversationMessagesByAccount(resolvedAccountId, conversationId);
   }
 
   appendConversationMessage(message: GoldConversationMessage) {
@@ -752,14 +800,15 @@ export class GoldStore {
   }
 
   replaceContacts(friends: Omit<GoldContactRecord, 'id'>[]) {
-    if (!this.activeAccountId) {
-      return [];
-    }
+    return this.replaceContactsByAccount(this.activeAccountId, friends);
+  }
+
+  replaceContactsByAccount(accountId: string | undefined, friends: Omit<GoldContactRecord, 'id'>[]) {
+    const resolvedAccountId = this.requireAccountId(accountId);
 
     const timestamp = nowIso();
     this.runInTransaction(() => {
-      const accountId = this.activeAccountId as string;
-      this.db.prepare('DELETE FROM friends WHERE account_id = ?').run(accountId);
+      this.db.prepare('DELETE FROM friends WHERE account_id = ?').run(resolvedAccountId);
       const insertFriend = this.db.prepare(`
         INSERT INTO friends (
           id,
@@ -781,7 +830,7 @@ export class GoldStore {
       for (const friend of friends) {
         insertFriend.run(
           randomUUID(),
-          accountId,
+          resolvedAccountId,
           friend.userId,
           resolveContactDisplayName({
             userId: friend.userId,
@@ -803,22 +852,23 @@ export class GoldStore {
       }
     });
 
-    return this.listContacts();
+    return this.listContactsByAccount(resolvedAccountId);
   }
 
   upsertContact(contact: Omit<GoldContactRecord, 'id'>) {
-    if (!this.activeAccountId) {
-      return undefined;
-    }
+    return this.upsertContactByAccount(this.activeAccountId, contact);
+  }
 
-    const accountId = this.activeAccountId;
+  upsertContactByAccount(accountId: string | undefined, contact: Omit<GoldContactRecord, 'id'>) {
+    const resolvedAccountId = this.requireAccountId(accountId);
+
     const timestamp = nowIso();
     const existing = this.db.prepare(`
       SELECT id
       FROM friends
       WHERE account_id = ? AND friend_id = ?
       LIMIT 1
-    `).get(accountId, contact.userId) as { id: string } | undefined;
+    `).get(resolvedAccountId, contact.userId) as { id: string } | undefined;
 
     this.db.prepare(`
       INSERT INTO friends (
@@ -848,7 +898,7 @@ export class GoldStore {
         updated_at = excluded.updated_at
     `).run(
       existing?.id ?? randomUUID(),
-      accountId,
+      resolvedAccountId,
       contact.userId,
       resolveContactDisplayName({
         userId: contact.userId,
@@ -868,7 +918,7 @@ export class GoldStore {
       timestamp,
     );
 
-    return this.listContacts().find((entry) => entry.userId === contact.userId);
+    return this.listContactsByAccount(resolvedAccountId).find((entry) => entry.userId === contact.userId);
   }
 
   replaceFriends(friends: Omit<GoldContactRecord, 'id'>[]) {
@@ -876,14 +926,15 @@ export class GoldStore {
   }
 
   replaceGroups(groups: Omit<GoldGroupRecord, 'id'>[]) {
-    if (!this.activeAccountId) {
-      return [];
-    }
+    return this.replaceGroupsByAccount(this.activeAccountId, groups);
+  }
+
+  replaceGroupsByAccount(accountId: string | undefined, groups: Omit<GoldGroupRecord, 'id'>[]) {
+    const resolvedAccountId = this.requireAccountId(accountId);
 
     const timestamp = nowIso();
     this.runInTransaction(() => {
-      const accountId = this.activeAccountId as string;
-      this.db.prepare('DELETE FROM groups WHERE account_id = ?').run(accountId);
+      this.db.prepare('DELETE FROM groups WHERE account_id = ?').run(resolvedAccountId);
       const insertGroup = this.db.prepare(`
         INSERT INTO groups (
           id,
@@ -902,7 +953,7 @@ export class GoldStore {
       for (const group of groups) {
         insertGroup.run(
           randomUUID(),
-          accountId,
+          resolvedAccountId,
           group.groupId,
           group.displayName,
           group.avatar ?? null,
@@ -915,22 +966,23 @@ export class GoldStore {
       }
     });
 
-    return this.listGroups();
+    return this.listGroupsByAccount(resolvedAccountId);
   }
 
   upsertGroup(group: Omit<GoldGroupRecord, 'id'>) {
-    if (!this.activeAccountId) {
-      return undefined;
-    }
+    return this.upsertGroupByAccount(this.activeAccountId, group);
+  }
 
-    const accountId = this.activeAccountId;
+  upsertGroupByAccount(accountId: string | undefined, group: Omit<GoldGroupRecord, 'id'>) {
+    const resolvedAccountId = this.requireAccountId(accountId);
+
     const timestamp = nowIso();
     const existing = this.db.prepare(`
       SELECT id
       FROM groups
       WHERE account_id = ? AND group_id = ?
       LIMIT 1
-    `).get(accountId, group.groupId) as { id: string } | undefined;
+    `).get(resolvedAccountId, group.groupId) as { id: string } | undefined;
 
     this.db.prepare(`
       INSERT INTO groups (
@@ -954,7 +1006,7 @@ export class GoldStore {
         updated_at = excluded.updated_at
     `).run(
       existing?.id ?? randomUUID(),
-      accountId,
+      resolvedAccountId,
       group.groupId,
       group.displayName,
       group.avatar ?? null,
@@ -965,22 +1017,26 @@ export class GoldStore {
       timestamp,
     );
 
-    return this.listGroups().find((entry) => entry.groupId === group.groupId);
+    return this.listGroupsByAccount(resolvedAccountId).find((entry) => entry.groupId === group.groupId);
   }
 
   canonicalizeConversationData() {
-    if (!this.activeAccountId) {
+    return this.canonicalizeConversationDataForAccount(this.activeAccountId);
+  }
+
+  canonicalizeConversationDataForAccount(accountId?: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return { repairedGroupIds: [] as string[], rebuiltConversationCount: 0 };
     }
 
-    const accountId = this.activeAccountId;
     const rows = this.db.prepare(`
       SELECT id, thread_id, raw_message_json
       FROM messages
       WHERE account_id = ?
         AND raw_message_json IS NOT NULL
         AND raw_message_json <> ''
-    `).all(accountId) as Array<{
+    `).all(resolvedAccountId) as Array<{
       id: string;
       thread_id: string | null;
       raw_message_json: string | null;
@@ -1009,7 +1065,7 @@ export class GoldStore {
           const conversationType = isGroup ? 'group' : 'direct';
           const conversationId = `${conversationType}:${row.thread_id}`;
           const friendId = isGroup ? `group:${row.thread_id}` : row.thread_id;
-          updateMessageType.run(conversationId, conversationType, row.thread_id, friendId, row.id, accountId);
+          updateMessageType.run(conversationId, conversationType, row.thread_id, friendId, row.id, resolvedAccountId);
           if (isGroup) {
             repairedGroupIds.add(row.thread_id);
           }
@@ -1018,14 +1074,14 @@ export class GoldStore {
         }
       }
 
-      this.db.prepare('DELETE FROM conversations WHERE account_id = ?').run(accountId);
+      this.db.prepare('DELETE FROM conversations WHERE account_id = ?').run(resolvedAccountId);
 
       const summaries = this.db.prepare(`
         SELECT conversation_id, thread_id, conversation_type, MAX(timestamp) AS last_timestamp, COUNT(*) AS message_count
         FROM messages
         WHERE account_id = ? AND conversation_id IS NOT NULL AND thread_id IS NOT NULL
         GROUP BY conversation_id, thread_id, conversation_type
-      `).all(accountId) as Array<{
+      `).all(resolvedAccountId) as Array<{
         conversation_id: string;
         thread_id: string;
         conversation_type: 'direct' | 'group';
@@ -1062,7 +1118,7 @@ export class GoldStore {
       `);
 
       for (const summary of summaries) {
-        const latest = latestMessageQuery.get(accountId, summary.conversation_id) as {
+        const latest = latestMessageQuery.get(resolvedAccountId, summary.conversation_id) as {
           text: string;
           kind: string;
           direction: 'incoming' | 'outgoing';
@@ -1074,17 +1130,17 @@ export class GoldStore {
 
         const isGroup = summary.conversation_type === 'group';
         const title = isGroup
-          ? this.getGroupDisplayName(summary.thread_id) ?? summary.thread_id
-          : this.getFriendDisplayName(summary.thread_id) ?? summary.thread_id;
+          ? this.getGroupDisplayName(summary.thread_id, resolvedAccountId) ?? summary.thread_id
+          : this.getFriendDisplayName(summary.thread_id, resolvedAccountId) ?? summary.thread_id;
         const avatar = isGroup
-          ? this.getGroupAvatar(summary.thread_id) ?? null
-          : this.getFriendAvatar(summary.thread_id) ?? null;
+          ? this.getGroupAvatar(summary.thread_id, resolvedAccountId) ?? null
+          : this.getFriendAvatar(summary.thread_id, resolvedAccountId) ?? null;
         const friendId = isGroup ? `group:${summary.thread_id}` : summary.thread_id;
         const createdAt = nowIso();
 
         insertConversation.run(
           summary.conversation_id,
-          accountId,
+          resolvedAccountId,
           summary.thread_id,
           summary.conversation_type,
           title,
@@ -1104,23 +1160,28 @@ export class GoldStore {
 
     return {
       repairedGroupIds: [...repairedGroupIds],
-      rebuiltConversationCount: this.listConversationSummaries().length,
+      rebuiltConversationCount: this.listConversationSummariesByAccount(resolvedAccountId).length,
     };
   }
 
   enrichConversationMessageSenders(conversationId: string) {
-    if (!this.activeAccountId) {
+    return this.enrichConversationMessageSendersByAccount(this.activeAccountId, conversationId);
+  }
+
+  enrichConversationMessageSendersByAccount(accountId: string | undefined, conversationId: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return [] as GoldConversationMessage[];
     }
 
-    const messages = this.listConversationMessages(conversationId);
+    const messages = this.listConversationMessagesByAccount(resolvedAccountId, conversationId);
     const { type, threadId } = this.parseConversationId(conversationId);
     if (type !== 'group') {
       return messages;
     }
 
-    const group = this.listGroups().find((entry) => entry.groupId === threadId);
-    const contacts = this.listContacts();
+    const group = this.listGroupsByAccount(resolvedAccountId).find((entry) => entry.groupId === threadId);
+    const contacts = this.listContactsByAccount(resolvedAccountId);
     const nextMessages = messages.map((message) => {
       if (!message.senderId) {
         return message;
@@ -1144,17 +1205,22 @@ export class GoldStore {
         : message;
     });
 
-    this.replaceConversationMessages(conversationId, nextMessages);
+    this.replaceConversationMessagesByAccount(resolvedAccountId, conversationId, nextMessages);
     return nextMessages;
   }
 
   clearSession() {
+    return this.clearSessionForAccount(this.activeAccountId);
+  }
+
+  clearSessionForAccount(accountId?: string) {
     this.clearPendingCredential();
-    if (!this.activeAccountId) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return;
     }
 
-    this.db.prepare('UPDATE account_sessions SET is_active = 0, updated_at = ? WHERE account_id = ?').run(nowIso(), this.activeAccountId);
+    this.db.prepare('UPDATE account_sessions SET is_active = 0, updated_at = ? WHERE account_id = ?').run(nowIso(), resolvedAccountId);
   }
 
   clearAll() {
@@ -1378,8 +1444,9 @@ export class GoldStore {
     return row?.account_id;
   }
 
-  private getFriendDisplayName(friendId: string) {
-    if (!this.activeAccountId) {
+  private getFriendDisplayName(friendId: string, accountId?: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
       return undefined;
     }
 
@@ -1388,40 +1455,43 @@ export class GoldStore {
       FROM friends
       WHERE account_id = ? AND friend_id = ?
       LIMIT 1
-    `).get(this.activeAccountId, friendId) as { display_name: string } | undefined;
+    `).get(resolvedAccountId, friendId) as { display_name: string } | undefined;
     return row?.display_name;
   }
 
-  private getFriendAvatar(friendId: string) {
-    if (!this.activeAccountId) return undefined;
+  private getFriendAvatar(friendId: string, accountId?: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
     const row = this.db.prepare(`
       SELECT avatar
       FROM friends
       WHERE account_id = ? AND friend_id = ?
       LIMIT 1
-    `).get(this.activeAccountId, friendId) as { avatar: string | null } | undefined;
+    `).get(resolvedAccountId, friendId) as { avatar: string | null } | undefined;
     return row?.avatar ?? undefined;
   }
 
-  private getGroupDisplayName(groupId: string) {
-    if (!this.activeAccountId) return undefined;
+  private getGroupDisplayName(groupId: string, accountId?: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
     const row = this.db.prepare(`
       SELECT display_name
       FROM groups
       WHERE account_id = ? AND group_id = ?
       LIMIT 1
-    `).get(this.activeAccountId, groupId) as { display_name: string } | undefined;
+    `).get(resolvedAccountId, groupId) as { display_name: string } | undefined;
     return row?.display_name;
   }
 
-  private getGroupAvatar(groupId: string) {
-    if (!this.activeAccountId) return undefined;
+  private getGroupAvatar(groupId: string, accountId?: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
     const row = this.db.prepare(`
       SELECT avatar
       FROM groups
       WHERE account_id = ? AND group_id = ?
       LIMIT 1
-    `).get(this.activeAccountId, groupId) as { avatar: string | null } | undefined;
+    `).get(resolvedAccountId, groupId) as { avatar: string | null } | undefined;
     return row?.avatar ?? undefined;
   }
 
@@ -1438,11 +1508,11 @@ export class GoldStore {
     const type = lastMessage.conversationType;
     const friendId = type === 'direct' ? threadId : `group:${threadId}`;
     const title = type === 'group'
-      ? this.getGroupDisplayName(threadId) ?? threadId
-      : this.getFriendDisplayName(threadId) ?? threadId;
+      ? this.getGroupDisplayName(threadId, accountId) ?? threadId
+      : this.getFriendDisplayName(threadId, accountId) ?? threadId;
     const avatar = type === 'group'
-      ? this.getGroupAvatar(threadId) ?? null
-      : this.getFriendAvatar(threadId) ?? null;
+      ? this.getGroupAvatar(threadId, accountId) ?? null
+      : this.getFriendAvatar(threadId, accountId) ?? null;
 
     const existing = this.db.prepare(`
       SELECT id, created_at

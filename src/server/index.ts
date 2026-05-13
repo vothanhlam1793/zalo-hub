@@ -172,22 +172,31 @@ async function getRuntimeForAccount(accountId: string) {
   return accountManager.ensureRuntime(normalized);
 }
 
-async function getPrimaryRuntimeOrThrow() {
-  const primaryRuntime = await accountManager.ensurePrimaryRuntime();
-  if (!primaryRuntime) {
-    throw new Error('Chua co primary account de thao tac');
-  }
-  return primaryRuntime;
+function markLegacyRoute(res: express.Response, replacement: string) {
+  res.setHeader('X-Gold-Legacy-Route', 'true');
+  res.setHeader('X-Gold-Replacement-Route', replacement);
 }
 
-function requireActiveSession(res: express.Response) {
-  const primaryRuntime = accountManager.getPrimaryRuntime();
-  if (primaryRuntime?.isSessionActive()) {
-    return true;
+async function getLegacyPrimaryContextOrRespond(res: express.Response, replacement: string) {
+  markLegacyRoute(res, replacement);
+  const accountId = accountManager.getPrimaryAccountId();
+  if (!accountId) {
+    res.status(401).json({ error: 'Chua co active account. Hay chon account hoac dang nhap lai.' });
+    return undefined;
   }
 
-  res.status(401).json({ error: 'Phien dang nhap khong con active. Hay dang nhap lai.' });
-  return false;
+  try {
+    const runtime = await getRuntimeForAccount(accountId);
+    if (!runtime.isSessionActive()) {
+      res.status(401).json({ error: 'Phien dang nhap khong con active. Hay dang nhap lai.' });
+      return undefined;
+    }
+
+    return { accountId, runtime };
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Khong tai duoc active account runtime' });
+    return undefined;
+  }
 }
 
 app.get('/api/health', (_req, res) => {
@@ -544,34 +553,46 @@ app.post('/api/login/start', (_req, res) => {
 app.get('/api/login/qr', (_req, res) => {
   const qrCode = loginRuntime.getCurrentQrCode();
   if (!qrCode) {
-    res.status(404).json({ error: 'QR chua san sang' });
+    res.json({ qrCode: null, ready: false });
     return;
   }
 
-  res.json({ qrCode });
+  res.json({ qrCode, ready: true });
 });
 
 app.post('/api/logout', (_req, res) => {
-  const result = loginRuntime.logout();
-  logger.info('gold2_logout_completed');
-  res.json(result);
+  void (async () => {
+    const accountId = accountManager.getPrimaryAccountId();
+    const primaryRuntime = accountId ? accountManager.getRuntime(accountId) : undefined;
+
+    if (primaryRuntime) {
+      const result = primaryRuntime.logout();
+      logger.info('gold2_logout_completed', { accountId, via: 'primary_runtime' });
+      broadcast({ type: 'session_state', accountId, status: getEmptyStatus(Boolean(loginPromise)) });
+      res.json(result);
+      return;
+    }
+
+    const result = loginRuntime.logout();
+    logger.info('gold2_logout_completed', { via: 'login_runtime_fallback' });
+    res.json(result);
+  })();
 });
 
 app.get('/api/friends', (req, res) => {
   void (async () => {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/contacts');
+    if (!context) {
+      return;
+    }
+
     try {
-      if (!requireActiveSession(res)) {
-        return;
-      }
-
-       const primaryRuntime = await getPrimaryRuntimeOrThrow();
-
       const refresh = req.query.refresh === '1';
-      const friends = refresh || primaryRuntime.getContactCache().length === 0
-        ? await primaryRuntime.listFriends()
-        : primaryRuntime.getContactCache();
-      if (!primaryRuntime.getCurrentAccount()) {
-        await primaryRuntime.fetchAccountInfo().catch((error) => {
+      const friends = refresh || context.runtime.getContactCache().length === 0
+        ? await context.runtime.listFriends()
+        : context.runtime.getContactCache();
+      if (!context.runtime.getCurrentAccount()) {
+        await context.runtime.fetchAccountInfo().catch((error) => {
           logger.error('gold2_friends_account_fetch_failed', error);
         });
       }
@@ -584,17 +605,16 @@ app.get('/api/friends', (req, res) => {
 
 app.get('/api/contacts', (req, res) => {
   void (async () => {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/contacts');
+    if (!context) {
+      return;
+    }
+
     try {
-      if (!requireActiveSession(res)) {
-        return;
-      }
-
-      const primaryRuntime = await getPrimaryRuntimeOrThrow();
-
       const refresh = req.query.refresh === '1';
-      const contacts = refresh || primaryRuntime.getContactCache().length === 0
-        ? await primaryRuntime.listFriends()
-        : primaryRuntime.getContactCache();
+      const contacts = refresh || context.runtime.getContactCache().length === 0
+        ? await context.runtime.listFriends()
+        : context.runtime.getContactCache();
       res.json({ contacts, count: contacts.length });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Tai contacts that bai' });
@@ -604,17 +624,16 @@ app.get('/api/contacts', (req, res) => {
 
 app.get('/api/groups', (req, res) => {
   void (async () => {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/groups');
+    if (!context) {
+      return;
+    }
+
     try {
-      if (!requireActiveSession(res)) {
-        return;
-      }
-
-      const primaryRuntime = await getPrimaryRuntimeOrThrow();
-
       const refresh = req.query.refresh === '1';
-      const groups = refresh || primaryRuntime.getGroupCache().length === 0
-        ? await primaryRuntime.listGroups()
-        : primaryRuntime.getGroupCache();
+      const groups = refresh || context.runtime.getGroupCache().length === 0
+        ? await context.runtime.listGroups()
+        : context.runtime.getGroupCache();
       res.json({ groups, count: groups.length });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Tai groups that bai' });
@@ -623,39 +642,37 @@ app.get('/api/groups', (req, res) => {
 });
 
 app.get('/api/conversations/:conversationId/messages', (req, res) => {
-  const conversationId = String(req.params.conversationId ?? '').trim();
-  const since = typeof req.query.since === 'string' ? req.query.since : undefined;
-  const before = typeof req.query.before === 'string' ? req.query.before : undefined;
-  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
-
-  if (!requireActiveSession(res)) {
-    return;
-  }
-
-  if (!conversationId) {
-    res.status(400).json({ error: 'conversationId la bat buoc' });
-    return;
-  }
-
-  try {
-    const primaryRuntime = accountManager.getPrimaryRuntime();
-    if (!primaryRuntime) {
-      res.status(401).json({ error: 'Phien dang nhap khong con active. Hay dang nhap lai.' });
+  void (async () => {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/conversations/:conversationId/messages');
+    if (!context) {
       return;
     }
-    const messages = primaryRuntime.getConversationMessages(conversationId, { since, before, limit });
-    const oldestTimestamp = messages[0]?.timestamp;
-    const oldestProviderMessageId = messages[0]?.providerMessageId;
-    const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
-    res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversation that bai' });
-  }
+
+    const conversationId = String(req.params.conversationId ?? '').trim();
+    const since = typeof req.query.since === 'string' ? req.query.since : undefined;
+    const before = typeof req.query.before === 'string' ? req.query.before : undefined;
+    const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+
+    try {
+      const messages = context.runtime.getConversationMessages(conversationId, { since, before, limit });
+      const oldestTimestamp = messages[0]?.timestamp;
+      const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
+      res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversation that bai' });
+    }
+  })();
 });
 
 app.post('/api/conversations/:conversationId/sync-metadata', (req, res) => {
   void (async () => {
-    if (!requireActiveSession(res)) {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/conversations/:conversationId/sync-metadata');
+    if (!context) {
       return;
     }
 
@@ -666,11 +683,9 @@ app.post('/api/conversations/:conversationId/sync-metadata', (req, res) => {
     }
 
     try {
-      const primaryRuntime = await getPrimaryRuntimeOrThrow();
-      const primaryAccountId = accountManager.getPrimaryAccountId();
-      const result = await primaryRuntime.syncConversationMetadata(conversationId);
-      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
-      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
+      const result = await context.runtime.syncConversationMetadata(conversationId);
+      broadcast({ type: 'conversation_summaries', accountId: context.accountId, conversations: context.runtime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: context.accountId, status: getStatusForRuntime(context.runtime) });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Sync metadata that bai' });
@@ -680,7 +695,8 @@ app.post('/api/conversations/:conversationId/sync-metadata', (req, res) => {
 
 app.post('/api/conversations/sync-history', (req, res) => {
   void (async () => {
-    if (!requireActiveSession(res)) {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/conversations/sync-history');
+    if (!context) {
       return;
     }
 
@@ -694,11 +710,9 @@ app.post('/api/conversations/sync-history', (req, res) => {
     }
 
     try {
-      const primaryRuntime = await getPrimaryRuntimeOrThrow();
-      const primaryAccountId = accountManager.getPrimaryAccountId();
-      const result = await primaryRuntime.syncConversationHistory(conversationId, { beforeMessageId, timeoutMs });
-      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
-      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
+      const result = await context.runtime.syncConversationHistory(conversationId, { beforeMessageId, timeoutMs });
+      broadcast({ type: 'conversation_summaries', accountId: context.accountId, conversations: context.runtime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: context.accountId, status: getStatusForRuntime(context.runtime) });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Sync history that bai' });
@@ -707,26 +721,25 @@ app.post('/api/conversations/sync-history', (req, res) => {
 });
 
 app.get('/api/conversations', (_req, res) => {
-  if (!requireActiveSession(res)) {
-    return;
-  }
-
-  try {
-    const primaryRuntime = accountManager.getPrimaryRuntime();
-    if (!primaryRuntime) {
-      res.status(401).json({ error: 'Phien dang nhap khong con active. Hay dang nhap lai.' });
+  void (async () => {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/conversations');
+    if (!context) {
       return;
     }
-    const conversations = primaryRuntime.getConversationSummaries();
-    res.json({ conversations, count: conversations.length });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversations that bai' });
-  }
+
+    try {
+      const conversations = context.runtime.getConversationSummaries();
+      res.json({ conversations, count: conversations.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversations that bai' });
+    }
+  })();
 });
 
 app.post('/api/send', (req, res) => {
   void (async () => {
-    if (!requireActiveSession(res)) {
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/send');
+    if (!context) {
       return;
     }
 
@@ -751,8 +764,6 @@ app.post('/api/send', (req, res) => {
     }
 
     try {
-      const primaryRuntime = await getPrimaryRuntimeOrThrow();
-      const primaryAccountId = accountManager.getPrimaryAccountId();
       let result;
       if (imageBase64) {
         if (!imageFileName || !imageMimeType) {
@@ -761,7 +772,7 @@ app.post('/api/send', (req, res) => {
         }
 
         const imageBuffer = Buffer.from(imageBase64, 'base64');
-        result = await primaryRuntime.sendImage(conversationId, {
+        result = await context.runtime.sendImage(conversationId, {
           imageBuffer,
           fileName: imageFileName,
           mimeType: imageMimeType,
@@ -773,11 +784,11 @@ app.post('/api/send', (req, res) => {
           return;
         }
 
-        result = await primaryRuntime.sendText(conversationId, text);
+        result = await context.runtime.sendText(conversationId, text);
       }
 
-      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
-      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
+      broadcast({ type: 'conversation_summaries', accountId: context.accountId, conversations: context.runtime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: context.accountId, status: getStatusForRuntime(context.runtime) });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Gui tin that bai' });
@@ -787,7 +798,8 @@ app.post('/api/send', (req, res) => {
 
 app.post('/api/send-attachment', upload.single('file'), (req, res) => {
   void (async () => {
-    if (!requireActiveSession(res)) return;
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/send-attachment');
+    if (!context) return;
 
     const conversationId = String(req.body?.conversationId ?? '').trim();
     const caption = String(req.body?.caption ?? '').trim();
@@ -810,17 +822,15 @@ app.post('/api/send-attachment', upload.single('file'), (req, res) => {
     });
 
     try {
-      const primaryRuntime = await getPrimaryRuntimeOrThrow();
-      const primaryAccountId = accountManager.getPrimaryAccountId();
-      const result = await primaryRuntime.sendAttachment(conversationId, {
+      const result = await context.runtime.sendAttachment(conversationId, {
         fileBuffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
         caption: caption || undefined,
       });
 
-      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
-      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
+      broadcast({ type: 'conversation_summaries', accountId: context.accountId, conversations: context.runtime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: context.accountId, status: getStatusForRuntime(context.runtime) });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
@@ -830,13 +840,12 @@ app.post('/api/send-attachment', upload.single('file'), (req, res) => {
 
 app.post('/api/media/backfill', (_req, res) => {
   void (async () => {
-    if (!requireActiveSession(res)) return;
+    const context = await getLegacyPrimaryContextOrRespond(res, '/api/accounts/:accountId/conversations');
+    if (!context) return;
 
     try {
-      const primaryRuntime = await getPrimaryRuntimeOrThrow();
-      const primaryAccountId = accountManager.getPrimaryAccountId();
-      const result = await primaryRuntime.backfillMediaForStoredMessages();
-      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
+      const result = await context.runtime.backfillMediaForStoredMessages();
+      broadcast({ type: 'conversation_summaries', accountId: context.accountId, conversations: context.runtime.getConversationSummaries() });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Backfill media that bai' });

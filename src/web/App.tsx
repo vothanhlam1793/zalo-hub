@@ -357,16 +357,16 @@ export default function App() {
   async function refreshQr() {
     try {
       const r = await api.loginQr();
-      setQrCode(r.qrCode);
+      setQrCode(r.qrCode ?? '');
     } catch {
       setQrCode('');
     }
   }
 
-  async function startLogin() {
+  async function startLogin(targetAccountId?: string) {
     clearComposer();
     setLoadError('');
-    setStatusMsg('Đang mở flow thêm tài khoản...');
+    setStatusMsg(targetAccountId ? 'Đang mở QR đăng nhập lại...' : 'Đang mở QR thêm tài khoản...');
     const knownAccountIds = new Set(knownAccounts.map((account) => account.accountId));
     await api.loginStart();
     await refreshQr();
@@ -375,30 +375,40 @@ export default function App() {
     loginPollRef.current = setInterval(async () => {
       try {
         const s = await api.status();
-          setStatus(s);
-          api.accounts().then((result) => {
-            setKnownAccounts(result.accounts);
-            const newlyReadyAccount = result.accounts.find((account) => account.sessionActive && !knownAccountIds.has(account.accountId));
-            if (newlyReadyAccount) {
-              setSelectedAccountId(newlyReadyAccount.accountId);
-            } else if (result.activeAccountId) {
-              setSelectedAccountId(result.activeAccountId);
-            }
-          }).catch(() => {});
-          await refreshQr();
-          if (s.loggedIn) {
-          clearInterval(loginPollRef.current!);
-          setLoginPolling(false);
-          const accountId = s.account?.userId ?? '';
-          if (accountId) {
-            setSelectedAccountId(accountId);
-            loadData(accountId, s);
+        setStatus(s);
+        api.accounts().then((result) => {
+          setKnownAccounts(result.accounts);
+          const newlyReadyAccount = result.accounts.find((account) => account.sessionActive && !knownAccountIds.has(account.accountId));
+          const targetBecameReady = targetAccountId
+            ? result.accounts.find((account) => account.accountId === targetAccountId && account.sessionActive)
+            : undefined;
+          if (newlyReadyAccount || targetBecameReady) {
+            clearInterval(loginPollRef.current!);
+            loginPollRef.current = null;
+            setLoginPolling(false);
+            const readyId = newlyReadyAccount?.accountId ?? targetBecameReady!.accountId;
+            setSelectedAccountId(readyId);
+            api.activateAccount(readyId).catch(() => {});
+            setStatusMsg(newlyReadyAccount ? 'Đã thêm tài khoản mới.' : 'Đã đăng nhập lại tài khoản.');
+            loadData(readyId, s);
+            return;
           }
-        }
+        }).catch(() => {});
+        await refreshQr();
       } catch {
         // ignore
       }
     }, 1500);
+  }
+
+  function cancelLogin() {
+    if (loginPollRef.current) {
+      clearInterval(loginPollRef.current);
+      loginPollRef.current = null;
+    }
+    setLoginPolling(false);
+    setQrCode('');
+    setStatusMsg('');
   }
 
   async function loadData(accountId: string, s?: SessionStatus, options: { refresh?: boolean } = {}) {
@@ -718,6 +728,22 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {loginPolling && (
+        <div className="qr-overlay">
+          <div className="qr-overlay-card">
+            <span className="status-badge">Đang chờ quét QR...</span>
+            {statusMsg && <p style={{ color: '#ff6666', margin: '8px 0', fontSize: 13 }}>{statusMsg}</p>}
+            {qrCode ? (
+              <div className="qr-wrapper">
+                <img src={`data:image/png;base64,${qrCode}`} alt="QR đăng nhập Zalo" />
+              </div>
+            ) : (
+              <div className="qr-placeholder">QR chưa sẵn sàng...</div>
+            )}
+            <button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={cancelLogin}>Hủy</button>
+          </div>
+        </div>
+      )}
       <div className="mini-sidebar">
         <button className="mini-sidebar-add" type="button" title="Thêm tài khoản Zalo" onClick={() => void startLogin()}>
           +
@@ -725,7 +751,7 @@ export default function App() {
 
         <div className="mini-sidebar-list">
           {sidebarAccounts.map((account) => {
-            const isCurrent = account.accountId === currentAccountId;
+            const isCurrent = account.sessionActive === true;
             const isSelected = account.accountId === (selectedAccountId || currentAccountId);
             const label = account.displayName ?? account.accountId;
             const subtitle = account.phoneNumber;
@@ -738,8 +764,9 @@ export default function App() {
                 className={`mini-account ${isSelected ? 'active' : ''} ${isCurrent ? 'is-current' : ''}`}
                 onClick={() => {
                   if (!canActivate) {
-                    setLoadError(`Tài khoản ${label} chưa có session hoạt động. Hãy đăng nhập lại bằng QR.`);
-                    setStatusMsg('');
+                    setStatusMsg(`Đang mở QR đăng nhập lại cho ${label}...`);
+                    setLoadError('');
+                    void startLogin(account.accountId);
                     return;
                   }
                   void handleSelectAccount(account.accountId);
@@ -758,14 +785,17 @@ export default function App() {
           <div>
             <h2>Zalo Hub</h2>
             <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
-              {status?.account?.displayName ?? 'Đã đăng nhập'}
+              {sidebarAccounts.find((a) => a.accountId === getWorkspaceAccountId())?.displayName ?? status?.account?.displayName ?? 'Đã đăng nhập'}
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
             <span className={`status-badge ${status?.listener?.connected ? 'connected' : 'error'}`}>
               {status?.listener?.connected ? 'Live' : 'Offline'}
             </span>
-            <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => loadData(undefined, { refresh: true })}>
+            <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => {
+              const id = getWorkspaceAccountId();
+              if (id) loadData(id, undefined, { refresh: true });
+            }}>
               Làm mới
             </button>
             <button className="btn btn-danger" style={{ padding: '4px 10px', fontSize: 12 }} onClick={handleLogout}>

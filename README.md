@@ -2,7 +2,7 @@
 
 App chat Zalo chạy trên nền backend Node.js + React frontend.
 
-Codebase hiện đã hoàn thành giai đoạn app thực dụng cho `1 user` tới `gold-7`, và từ `gold-8` sẽ chuyển hướng sang nền tảng nhiều tài khoản Zalo active đồng thời, có `system user` và phân quyền theo từng tài khoản Zalo.
+Codebase đã hoàn thành gold-8: nền tảng nhiều tài khoản Zalo active đồng thời, account-scoped API/WebSocket, frontend multi-account với account switcher và QR overlay.
 
 Xem `GOLD.md` để hiểu quy trình phát triển và ý nghĩa các mốc gold.
 
@@ -10,44 +10,38 @@ Xem `GOLD.md` để hiểu quy trình phát triển và ý nghĩa các mốc gol
 
 ```
 src/
-  core/     Zalo runtime: login, reconnect, store, send/receive, logger
-  server/   Backend Express + WebSocket + REST API
-  web/      Frontend React
+  core/       Zalo runtime: login, reconnect, store, send/receive, logger
+  server/     Backend Express + WebSocket + REST API + AccountRuntimeManager
+  web/        Frontend React
 ```
 
-## Tính năng hiện tại (tính đến gold-7)
+## Tính năng hiện tại (tính đến gold-8)
 
-1. Đăng nhập bằng QR
-2. Reconnect bằng credential local sau restart
-3. Tải danh sách bạn bè
-4. Conversation list local theo account
-5. Message history local bằng SQLite
-6. Realtime text qua websocket
-7. Render incoming image/file/video
-8. Outgoing attachment qua backend multipart
-9. Frontend React
-10. Public domain qua proxy
-11. UI 3 tab: cuộc trò chuyện / bạn bè / nhóm
-12. Group chat realtime
-13. Lazy load history
-14. Local media mirror tại app server `data/media/`
-15. Repair/backfill attachment cho dữ liệu cũ còn cứu được
-16. History sync từ runtime Zalo vào local DB
-17. Dedupe message theo `provider_message_id`
-18. Canonical conversation identity `direct:<id>` / `group:<id>`
-19. Sync metadata khi mở conversation và persist vào local DB
-20. Enrich sender name cho group message và lưu lại vào DB local
-
-## Hướng kiến trúc từ gold-8
-
-Từ `gold-8`, dự án đổi hướng sang mô hình:
-
-1. Nhiều `Zalo account` active đồng thời
-2. Có `system user` đăng nhập vào app
-3. Mỗi `system user` được cấp quyền vào một hay nhiều `Zalo account`
-4. API và WebSocket sẽ dần chuyển sang `account-scoped`
-
-Xem `gold-8.md` và `GOLD.md` để theo dõi lộ trình mới.
+1. Nhiều tài khoản Zalo active đồng thời (listener, session, runtime)
+2. AccountRuntimeManager quản lý runtime per account, warm-start lúc boot
+3. Đăng nhập bằng QR
+4. Thêm/re-login tài khoản bằng QR overlay
+5. Reconnect bằng credential local sau restart
+6. Account switcher sidebar, chuyển workspace theo account
+7. Tải danh sách bạn bè theo account
+8. Conversation list local theo account
+9. Message history local bằng SQLite (account-scoped)
+10. Realtime text qua websocket (account-scoped)
+11. Render incoming image/file/video
+12. Outgoing attachment qua backend multipart
+13. Frontend React
+14. Public domain qua proxy
+15. UI 3 tab: cuộc trò chuyện / bạn bè / nhóm
+16. Group chat realtime
+17. Lazy load history
+18. Local media mirror tại app server `data/media/`
+19. Repair/backfill attachment cho dữ liệu cũ còn cứu được
+20. History sync từ runtime Zalo vào local DB
+21. Dedupe message theo `provider_message_id`
+22. Canonical conversation identity `direct:<id>` / `group:<id>`
+23. Sync metadata khi mở conversation và persist vào local DB
+24. Enrich sender name cho group message và lưu lại vào DB local
+25. Data identity account-safe: message/attachment ID namespace theo account
 
 ## Chạy backend (server)
 

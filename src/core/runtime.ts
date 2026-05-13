@@ -502,6 +502,7 @@ export class GoldRuntime {
   private session: ActiveSession | undefined;
   private currentQrCode: string | undefined;
   private currentAccount: GoldAccountInfo | undefined;
+  private readonly boundAccountId?: string;
   private readonly conversations = new Map<string, GoldConversationMessage[]>();
   private readonly seenMessageKeys = new Set<string>();
   private listenerStarted = false;
@@ -520,7 +521,12 @@ export class GoldRuntime {
   constructor(
     private readonly store: GoldStore,
     private readonly logger: GoldLogger,
+    options: { boundAccountId?: string } = {},
   ) {
+    this.boundAccountId = options.boundAccountId?.trim() || undefined;
+    if (this.boundAccountId) {
+      this.store.activateAccount(this.boundAccountId);
+    }
     this.hydrateConversationsFromStore();
   }
 
@@ -528,8 +534,8 @@ export class GoldRuntime {
     this.conversations.clear();
     this.seenMessageKeys.clear();
 
-    for (const summary of this.store.listConversationSummaries()) {
-      const messages = this.store.listConversationMessages(summary.id);
+    for (const summary of this.store.listConversationSummariesByAccount(this.boundAccountId)) {
+      const messages = this.store.listConversationMessagesByAccount(this.boundAccountId, summary.id);
       this.conversations.set(summary.id, messages);
       for (const message of messages) {
         this.seenMessageKeys.add(this.buildSeenKey(message));
@@ -538,7 +544,9 @@ export class GoldRuntime {
   }
 
   async loginWithStoredCredential() {
-    const credential = this.store.getCredential();
+    const credential = this.boundAccountId
+      ? this.store.getCredentialForAccount(this.boundAccountId)
+      : this.store.getCredential();
     if (!credential) {
       this.logger.error('missing_stored_credential');
       throw new Error('Stored credential not found. Hay chay lenh login truoc.');
@@ -548,45 +556,11 @@ export class GoldRuntime {
   }
 
   async startBoundAccount() {
+    if (!this.boundAccountId) {
+      throw new Error('Runtime nay chua duoc bind voi accountId cu the');
+    }
+
     return this.loginWithStoredCredential();
-  }
-
-  async activateAccount(accountId: string) {
-    const normalizedAccountId = accountId.trim();
-    if (!normalizedAccountId) {
-      throw new Error('accountId la bat buoc');
-    }
-
-    const credential = this.store.getCredentialForAccount(normalizedAccountId);
-    if (!credential) {
-      throw new Error('Account nay chua co credential de reconnect');
-    }
-
-    if (this.session) {
-      try {
-        await this.closeMessageListener();
-      } catch {
-        // ignore listener close failure during switch
-      }
-    }
-
-    this.store.activateAccount(normalizedAccountId);
-    this.currentAccount = undefined;
-    this.currentQrCode = undefined;
-    this.conversations.clear();
-    this.seenMessageKeys.clear();
-    this.session = undefined;
-    this.listenerStarted = false;
-    this.listenerAttached = false;
-    this.listenerState = {
-      attached: false,
-      started: false,
-      connected: false,
-      startAttempts: 0,
-    };
-
-    await this.loginWithCredential(credential);
-    return this.getCurrentAccount();
   }
 
   private async loginWithCredential(credential: GoldStoredCredential) {
@@ -609,13 +583,16 @@ export class GoldRuntime {
     await this.verifySession();
     this.ensureMessageListener();
     this.currentAccount = await this.fetchAccountInfo().catch(() => this.currentAccount);
+    if (this.boundAccountId && this.currentAccount?.userId && this.currentAccount.userId !== this.boundAccountId) {
+      throw new Error(`Credential dang tro toi account ${this.currentAccount.userId}, khong khop runtime da bind ${this.boundAccountId}`);
+    }
     if (this.currentAccount?.userId) {
       this.store.setActiveAccount({
         accountId: this.currentAccount.userId,
         displayName: this.currentAccount.displayName,
         phoneNumber: this.currentAccount.phoneNumber,
       });
-      this.store.canonicalizeConversationData();
+      this.store.canonicalizeConversationDataForAccount(this.boundAccountId);
       this.hydrateConversationsFromStore();
       void this.backfillMediaForStoredMessages();
     }
@@ -655,7 +632,7 @@ export class GoldRuntime {
         return true;
       }
 
-      if (this.store.hasMessageByProviderId(message.conversationId, message.providerMessageId.trim())) {
+      if (this.store.hasMessageByProviderIdForAccount(this.boundAccountId, message.conversationId, message.providerMessageId.trim())) {
         return true;
       }
     }
@@ -792,7 +769,7 @@ export class GoldRuntime {
     existing.push(message);
     existing.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.conversations.set(message.conversationId, existing);
-    this.store.replaceConversationMessages(message.conversationId, existing);
+    this.store.replaceConversationMessagesByAccount(this.boundAccountId, message.conversationId, existing);
     for (const listener of this.conversationListeners) {
       listener(message);
     }
@@ -857,7 +834,7 @@ export class GoldRuntime {
 
   private async normalizeListenerMessage(message: ListenerMessage, forcedType?: GoldConversationType): Promise<GoldConversationMessage | undefined> {
     const threadId = String(message.threadId ?? '').trim();
-    const knownGroupIds = new Set(this.store.listGroups().map((group) => group.groupId));
+    const knownGroupIds = new Set(this.store.listGroupsByAccount(this.boundAccountId).map((group) => group.groupId));
     const conversationType = forcedType
       ?? (message.type === ThreadType.Group ? 'group' : undefined)
       ?? getConversationTypeFromThreadId(threadId, knownGroupIds);
@@ -1136,7 +1113,7 @@ export class GoldRuntime {
   }
 
   hasCredential() {
-    return Boolean(this.store.getCredential());
+    return Boolean(this.boundAccountId ? this.store.getCredentialForAccount(this.boundAccountId) : this.store.getCredential());
   }
 
   isSessionActive() {
@@ -1148,22 +1125,26 @@ export class GoldRuntime {
   }
 
   getFriendCache() {
-    return this.store.listContacts();
+    return this.store.listContactsByAccount(this.boundAccountId);
   }
 
   getContactCache() {
-    return this.store.listContacts();
+    return this.store.listContactsByAccount(this.boundAccountId);
+  }
+
+  getBoundAccountId() {
+    return this.boundAccountId;
   }
 
   getGroupCache() {
-    return this.store.listGroups();
+    return this.store.listGroupsByAccount(this.boundAccountId);
   }
 
   getConversationMessages(conversationId: string, options: { since?: string; before?: string; limit?: number } = {}) {
     const { since, before, limit } = options;
     const messages = before || limit
-      ? this.store.listConversationMessages(conversationId, { before, limit })
-      : (this.conversations.get(conversationId) ?? this.store.listConversationMessages(conversationId));
+      ? this.store.listConversationMessagesByAccount(this.boundAccountId, conversationId, { before, limit })
+      : (this.conversations.get(conversationId) ?? this.store.listConversationMessagesByAccount(this.boundAccountId, conversationId));
 
     if (!since) {
       return [...messages];
@@ -1184,9 +1165,9 @@ export class GoldRuntime {
       await this.refreshContactMetadata(target.threadId);
     }
 
-    this.store.canonicalizeConversationData();
+    this.store.canonicalizeConversationDataForAccount(this.boundAccountId);
     const canonicalConversationId = getConversationId(target.threadId, target.type);
-    const messages = this.store.enrichConversationMessageSenders(canonicalConversationId);
+    const messages = this.store.enrichConversationMessageSendersByAccount(this.boundAccountId, canonicalConversationId);
     this.hydrateConversationsFromStore();
 
     return {
@@ -1199,10 +1180,10 @@ export class GoldRuntime {
 
   getConversationSummaries() {
     if (this.conversations.size === 0) {
-      return this.store.listConversationSummaries();
+      return this.store.listConversationSummariesByAccount(this.boundAccountId);
     }
 
-    return this.store.listConversationSummaries();
+    return this.store.listConversationSummariesByAccount(this.boundAccountId);
   }
 
   onConversationMessage(listener: ConversationListener) {
@@ -1219,8 +1200,8 @@ export class GoldRuntime {
   async backfillMediaForStoredMessages() {
     let updatedMessages = 0;
     let repairedMessages = 0;
-    for (const summary of this.store.listConversationSummaries()) {
-      const messages = this.store.listConversationMessages(summary.id);
+    for (const summary of this.store.listConversationSummariesByAccount(this.boundAccountId)) {
+      const messages = this.store.listConversationMessagesByAccount(this.boundAccountId, summary.id);
       let changed = false;
       const nextMessages: GoldConversationMessage[] = [];
       for (const message of messages) {
@@ -1250,7 +1231,7 @@ export class GoldRuntime {
       }
 
       if (changed) {
-        this.store.replaceConversationMessages(summary.id, nextMessages);
+        this.store.replaceConversationMessagesByAccount(this.boundAccountId, summary.id, nextMessages);
         this.conversations.set(summary.id, nextMessages);
       }
     }
@@ -1319,7 +1300,7 @@ export class GoldRuntime {
     }
 
     const target = this.resolveConversationTarget(conversationId);
-    const oldestLocal = this.store.listConversationMessages(conversationId, { limit: 1 })[0];
+    const oldestLocal = this.store.listConversationMessagesByAccount(this.boundAccountId, conversationId, { limit: 1 })[0];
     const beforeMessageId = options.beforeMessageId?.trim() || oldestLocal?.providerMessageId;
     const timeoutMs = Math.max(3_000, Math.min(options.timeoutMs ?? 12_000, 45_000));
 
@@ -1389,7 +1370,7 @@ export class GoldRuntime {
       connected: false,
       startAttempts: 0,
     };
-    this.store.clearSession();
+    this.store.clearSessionForAccount(this.boundAccountId);
     this.logger.info('logout_completed');
     return { ok: true };
   }
@@ -1444,7 +1425,7 @@ export class GoldRuntime {
       });
       this.hydrateConversationsFromStore();
     }
-    this.store.updateActiveAccountProfile({
+    this.store.updateAccountProfile(this.boundAccountId ?? account.userId, {
       displayName: account.displayName,
       phoneNumber: account.phoneNumber,
     });
@@ -1478,7 +1459,7 @@ export class GoldRuntime {
     }));
 
     this.logger.info('friends_normalized', { count: friends.length });
-    return this.store.replaceContacts(friends);
+    return this.store.replaceContactsByAccount(this.boundAccountId, friends);
   }
 
   async listGroups() {
@@ -1529,7 +1510,7 @@ export class GoldRuntime {
       }
     }
 
-    const conversationGroupIds = this.store.listConversationSummaries()
+    const conversationGroupIds = this.store.listConversationSummariesByAccount(this.boundAccountId)
       .filter((summary) => summary.type === 'group')
       .map((summary) => summary.threadId)
       .filter((threadId): threadId is string => Boolean(threadId));
@@ -1581,10 +1562,10 @@ export class GoldRuntime {
     });
 
     this.logger.info('groups_normalized', { count: normalizedGroups.length });
-    this.store.replaceGroups(normalizedGroups);
-    this.store.canonicalizeConversationData();
+    this.store.replaceGroupsByAccount(this.boundAccountId, normalizedGroups);
+    this.store.canonicalizeConversationDataForAccount(this.boundAccountId);
     this.hydrateConversationsFromStore();
-    return this.store.listGroups();
+    return this.store.listGroupsByAccount(this.boundAccountId);
   }
 
   private async refreshContactMetadata(userId: string) {
@@ -1605,7 +1586,7 @@ export class GoldRuntime {
         return;
       }
 
-      this.store.upsertContact({
+      this.store.upsertContactByAccount(this.boundAccountId, {
         userId,
         displayName: String(user.aliasName ?? user.alias ?? user.displayName ?? user.zaloName ?? user.name ?? userId),
         zaloName: typeof user.zaloName === 'string'
@@ -1699,7 +1680,7 @@ export class GoldRuntime {
         };
       });
 
-      this.store.upsertGroup({
+      this.store.upsertGroupByAccount(this.boundAccountId, {
         groupId,
         displayName: String(group.displayName ?? group.name ?? group.subject ?? group.groupName ?? groupId),
         avatar: typeof group.avatar === 'string'
@@ -1721,7 +1702,7 @@ export class GoldRuntime {
       });
 
       for (const user of users) {
-        this.store.upsertContact({
+        this.store.upsertContactByAccount(this.boundAccountId, {
           userId: String(user.userId),
           displayName: String(user.aliasName ?? user.alias ?? user.displayName ?? user.zaloName ?? user.name ?? user.userId),
           zaloName: typeof user.zaloName === 'string'
@@ -1755,7 +1736,7 @@ export class GoldRuntime {
   }
 
   private async ensureGroupMetadata(groupId: string) {
-    if (!groupId || this.store.listGroups().some((group) => group.groupId === groupId)) {
+    if (!groupId || this.store.listGroupsByAccount(this.boundAccountId).some((group) => group.groupId === groupId)) {
       return;
     }
 
@@ -1775,7 +1756,7 @@ export class GoldRuntime {
         return;
       }
 
-      const existingGroups = this.store.listGroups();
+      const existingGroups = this.store.listGroupsByAccount(this.boundAccountId);
       const groupsById = new Map(existingGroups.map((group) => [group.groupId, group]));
       for (const group of groups) {
         const normalizedGroupId = String(group.groupId ?? group.grid ?? group.id ?? group.group_id);
@@ -1802,8 +1783,8 @@ export class GoldRuntime {
         });
       }
 
-      this.store.replaceGroups([...groupsById.values()].map(({ id: _id, ...group }) => group));
-      this.store.canonicalizeConversationData();
+      this.store.replaceGroupsByAccount(this.boundAccountId, [...groupsById.values()].map(({ id: _id, ...group }) => group));
+      this.store.canonicalizeConversationDataForAccount(this.boundAccountId);
       this.hydrateConversationsFromStore();
       this.logger.info('group_metadata_enriched', { groupId, fetchedCount: groups.length });
     } catch (error) {
@@ -2084,10 +2065,10 @@ export class GoldRuntime {
 
   private resolveGroupSenderName(groupId: string, senderId?: string) {
     if (!senderId) return undefined;
-    const group = this.store.listGroups().find((entry) => entry.groupId === groupId);
+    const group = this.store.listGroupsByAccount(this.boundAccountId).find((entry) => entry.groupId === groupId);
     const member = group?.members?.find((entry) => entry.userId === senderId);
     if (member?.displayName) return member.displayName;
-    const contact = this.store.listContacts().find((entry) => entry.userId === senderId);
+    const contact = this.store.listContactsByAccount(this.boundAccountId).find((entry) => entry.userId === senderId);
     return contact?.displayName;
   }
 

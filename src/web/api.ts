@@ -22,7 +22,7 @@ export const api = {
   health: () => req<SessionStatus>('/api/health'),
 
   loginStart: () => req<{ started: boolean }>('/api/login/start', { method: 'POST', body: '{}' }),
-  loginQr: () => req<{ qrCode: string }>('/api/login/qr'),
+  loginQr: () => req<{ qrCode: string | null; ready: boolean }>('/api/login/qr'),
   logout: () => req('/api/logout', { method: 'POST', body: '{}' }),
   accounts: () => req<{ accounts: AccountSummary[]; activeAccountId?: string }>('/api/accounts'),
   activateAccount: (accountId: string) => req<{ ok: boolean; accountId: string; status: SessionStatus }>('/api/accounts/activate', {

@@ -36,6 +36,10 @@ archived/
   GOLD-1-RESULT.md        Kết quả gold-1: CLI runtime Zalo
   GOLD-2-RESULT.md        Kết quả gold-2: Web UI cơ bản
   GOLD-3-RESULT.md        Kết quả gold-3: Chat 1-1 realtime
+  GOLD-5-RESULT.md        Kết quả gold-5: Refactor src + tài liệu
+  GOLD-6-RESULT.md        Kết quả gold-6: Contacts + Groups + Conversations
+  GOLD-7-RESULT.md        Kết quả gold-7: History sync + canonical + metadata
+  GOLD-8-RESULT.md        Kết quả gold-8: Foundation multi-account
   gold-1.md               Spec gốc gold-1
   PLAN1.md                Tài liệu kế hoạch kiến trúc ban đầu
 
@@ -72,10 +76,10 @@ archived/
 | gold-5 | Refactor cấu trúc src + tài liệu convention gold | Done | `archived/GOLD-5-RESULT.md` |
 | gold-6 | Contacts + Groups + Conversations: 3 tab UI, group chat realtime, refactor conversation model, lazy history, local media mirror, legacy attachment repair | Done | `archived/GOLD-6-RESULT.md` |
 | gold-7 | Recent/history sync từ Zalo, chống duplicate theo provider message id, canonical direct/group conversation, sync metadata khi mở chat, enrich sender name group và persist local DB | Done | `archived/GOLD-7-RESULT.md` |
-| gold-8 | Foundation cho multi-account + full profile storage + account-scoped architecture: mở rộng DB profile/account/group/contact, raw profile JSON, chuẩn hóa hướng runtime per account, account-scoped API/WebSocket, chốt domain system users và permissions | Planned | `gold-8.md` |
-| gold-9 | Multi-account runtimes active đồng thời: account manager, nhiều listener/session song song, account-scoped REST/WebSocket, account switcher cơ bản | Planned | — |
-| gold-10 | User hệ thống + authentication + authorization theo từng Zalo account | Planned | — |
-| gold-11 | Shared inbox workflow: assignment, notes, labels, trạng thái conversation, audit log | Planned | — |
+| gold-8 | Foundation cho multi-account: runtime per account, AccountRuntimeManager, store explicit accountId, account-scoped API/WebSocket, frontend account switcher + QR overlay, warm-start nhiều account, data identity account-safe | Done | `archived/GOLD-8-RESULT.md` |
+| gold-9 | System users + authentication + authorization theo từng Zalo account: schema system_users, sessions, memberships, middleware auth, UI login user hệ thống, phân quyền | Planned | — |
+| gold-10 | Shared inbox workflow: assignment, notes, labels, trạng thái conversation, audit log | Planned | — |
+| gold-11 | Advanced: presence, notification, analytics, multi-language, mobile PWA | Planned | — |
 
 ---
 

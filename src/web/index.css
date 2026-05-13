@@ -588,3 +588,32 @@ body {
   padding: 0;
   line-height: 1;
 }
+
+/* QR overlay */
+.qr-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.qr-overlay-card {
+  background: #1a2035;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 20px;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  min-width: 300px;
+}
+
+.qr-overlay-card .qr-placeholder,
+.qr-overlay-card .qr-wrapper img {
+  width: 200px;
+  height: 200px;
+}

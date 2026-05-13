@@ -71,8 +71,7 @@ export class AccountRuntimeManager {
 
     const startPromise = (async () => {
       const store = new GoldStore();
-      store.activateAccount(normalizedAccountId);
-      const runtime = new GoldRuntime(store, this.logger);
+      const runtime = new GoldRuntime(store, this.logger, { boundAccountId: normalizedAccountId });
       runtime.onConversationMessage((message) => {
         for (const listener of this.messageListeners) {
           listener({ accountId: normalizedAccountId, message });

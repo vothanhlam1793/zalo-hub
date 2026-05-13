@@ -111,70 +111,50 @@ Ghi chú trạng thái:
 - remote history hiện tại vẫn dựa trên runtime/session của Zalo package, không phải API cloud chính thức độc lập
 - trong phạm vi app `1 user`, local DB hiện đã được reconcile/canonical tốt hơn và đủ dùng thực tế
 
-## Gold-8 — Planned
+## Gold-8 — Done ✅
 
-Mục tiêu: Foundation cho multi-account runtime + system users + permissions
+Mục tiêu đã chốt: Foundation cho multi-account runtime.
 
-Gold-8 không còn chỉ là `account profile + avatar` như plan cũ.
-Gold-8 được mở rộng thành mốc đặt nền bắt buộc để các gold sau không phải đập lại data model và runtime.
+Những gì đã done:
 
-Scope chốt cho gold-8:
+1. `1 runtime = 1 account` — `GoldRuntime` có `boundAccountId`, xóa `activateAccount`, guard credential mismatch
+2. `AccountRuntimeManager` — quản lý nhiều runtime, tạo runtime per account, warm-start tất cả account lúc boot
+3. Store explicit `accountId` — thêm lớp API `*ByAccount` cho toàn bộ read/write lõi, runtime path chính không còn phụ thuộc `activeAccountId`
+4. Data identity account-safe — `messages.id` và `attachments.id` namespace theo `accountId`
+5. Account-scoped API routes — route mới `GET/POST /api/accounts/:accountId/...` là flow chính, route cũ là compatibility wrapper
+6. WebSocket account-scoped — subscribe theo `{ accountId, conversationId }`, frontend filter event theo workspace account
+7. Frontend multi-account UI — account sidebar switcher, QR overlay thêm/re-login account, cache partition `accountId::conversationId`, header hiển thị account đang chọn, nút Làm mới đã sửa
+8. Server hybrid cleanup — route legacy về wrapper, QR endpoint trả 200 thay vì 404, logout theo active account
 
-1. Mở rộng schema DB cho full profile của:
-   - Zalo account self profile
-   - contact profile
-   - group profile
-2. Persist được profile chuẩn hóa và `profile_json` raw theo `account_id`
-3. Audit và refactor `store` theo hướng mọi read/write quan trọng nhận `accountId` tường minh, giảm phụ thuộc vào `activeAccountId`
-4. Chuyển tư duy từ `1 runtime singleton` sang `runtime per Zalo account`
-5. Chốt domain mới cho:
-   - `system users`
-   - `zalo accounts`
-   - `memberships/permissions`
-6. Chốt API direction mới theo `account-scoped routes`
-7. Chốt websocket direction mới theo `accountId + conversationId`
-8. Chuẩn bị account registry đủ dữ liệu để nhiều account có thể reconnect và active song song
-9. Vẫn hoàn thành phần UI/profile/avatar vì đây là bước tự nhiên khi full profile đã có trong DB
+Nghiệm thu thực chiến:
+- ✅ 3 tài khoản Zalo active đồng thời
+- ✅ Switch account, realtime, send message, restart warm-start đều pass
+- ✅ Public domain ổn định: `https://zalo.camerangochoang.com`
 
-Acceptance định hướng cho gold-8:
-
-1. Tài liệu kiến trúc và spec cho lộ trình mới đã chốt rõ
-2. Schema không còn khóa chặt theo giả định `1 account active duy nhất`
-3. Dữ liệu profile/account/contact/group lưu được đầy đủ hơn và không ghi đè chéo giữa các account
-4. Codebase sẵn sàng cho bước kế tiếp là multi-runtime thật sự ở gold-9
+Ghi chú trạng thái:
+- Còn giữ `primary account` và `loginRuntime` singleton để compatibility
+- `GoldStore` còn `activeAccountId` làm wrapper cho compatibility
+- Full profile field mở rộng và `system_users` schema sẽ vào gold-9
 
 ## Gold-9 — Planned
 
-Mục tiêu: Multi-account Zalo runtimes active đồng thời
+Mục tiêu: System users + authentication + authorization theo Zalo account + full profile storage
 
 Scope dự kiến:
 
-1. Tạo `AccountRuntimeManager` quản lý nhiều `GoldRuntime`
-2. Mỗi `GoldRuntime` gắn với đúng `1 Zalo account`
-3. Nhiều account có thể login/reconnect/listener song song
-4. REST API đổi sang `account-scoped`
-5. WebSocket subscription đổi sang `{ accountId, conversationId }`
-6. UI có account switcher cơ bản
-7. Server startup có thể restore và reconnect nhiều account từ DB
-
-## Gold-10 — Planned
-
-Mục tiêu: User hệ thống + authentication + authorization theo Zalo account
-
-Scope dự kiến:
-
-1. Thêm `system_users`
-2. Thêm session/login cho user hệ thống
-3. Thêm `zalo_account_memberships`
-4. Role per account:
-   - `owner`
-   - `manager`
-   - `agent`
-   - `viewer`
+1. Mở rộng schema DB cho full profile:
+   - `accounts` thêm `profile_json`, `last_profile_sync_at`, `bio`, `gender`, `birth_date`, `cover_url`, `avatar`
+   - `friends` thêm `profile_json`, `last_profile_sync_at`
+   - `groups` thêm `profile_json`, `last_profile_sync_at`
+2. Thêm schema `system_users`, `system_user_sessions`, `zalo_account_memberships`
+3. Auth flow: login/logout cho user hệ thống, session management
+4. Role per account: `owner`, `manager`, `agent`, `viewer`
 5. Middleware authorization cho toàn bộ API và WebSocket
 6. UI chỉ hiện các account mà user hiện tại được cấp quyền
+7. Dọn sạch `primary account` concept, chuyển `loginRuntime` sang manager-native
+8. Dọn sạch `activeAccountId` trong store, bỏ compatibility wrapper
 
-## Gold-11 — Planned
+## Gold-10 — Planned
 
 Mục tiêu: Shared inbox workflow cho team vận hành
 
