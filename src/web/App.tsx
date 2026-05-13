@@ -1,9 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { useWebSocket } from './useWebSocket';
-import type { Contact, ConversationSummary, Group, Message, SessionStatus } from './types';
+import type {
+  AccountSummary,
+  Contact,
+  ConversationSummary,
+  Group,
+  HistorySyncResult,
+  Message,
+  SessionStatus,
+  WsConversationMessagePayload,
+  WsConversationSummariesPayload,
+  WsSessionStatusPayload,
+} from './types';
 
 type SidebarTab = 'conversations' | 'contacts' | 'groups';
+
+type AccountSidebarItem = AccountSummary;
 
 function formatTime(ts: string) {
   try {
@@ -22,6 +35,15 @@ function formatSize(bytes?: number) {
 
 function getInitial(name: string) {
   return (name ?? '?').charAt(0).toUpperCase();
+}
+
+function getContactDisplayName(contact: Pick<Contact, 'displayName' | 'hubAlias' | 'zaloAlias' | 'zaloName' | 'phoneNumber' | 'userId'>) {
+  return contact.hubAlias?.trim()
+    || contact.zaloAlias?.trim()
+    || contact.zaloName?.trim()
+    || contact.phoneNumber?.trim()
+    || contact.displayName?.trim()
+    || contact.userId;
 }
 
 function directConversationId(contactId: string) {
@@ -134,78 +156,203 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [syncingHistory, setSyncingHistory] = useState(false);
   const [text, setText] = useState('');
   const [attachFile, setAttachFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [loadError, setLoadError] = useState('');
+  const [knownAccounts, setKnownAccounts] = useState<AccountSidebarItem[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loginPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const activeConversationIdRef = useRef('');
+  const selectionTokenRef = useRef(0);
+  const messageCacheRef = useRef(new Map<string, Message[]>());
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  function mergeMessages(incoming: Message[]) {
-    setMessages((prev) => {
-      const seen = new Set(prev.map((m) => m.id));
-      const merged = [...prev];
-      for (const m of incoming) {
-        if (!seen.has(m.id)) {
-          seen.add(m.id);
-          merged.push(m);
-        }
-      }
-      return merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    });
+  function mergeMessageList(base: Message[], incoming: Message[]) {
+    const byKey = new Map<string, Message>();
+    for (const message of base) {
+      byKey.set(message.providerMessageId ?? message.id, message);
+    }
+    for (const message of incoming) {
+      byKey.set(message.providerMessageId ?? message.id, message);
+    }
+    return [...byKey.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
 
-  function prependMessages(incoming: Message[]) {
-    setMessages((prev) => {
-      const seen = new Set(prev.map((m) => m.id));
-      const merged = [...incoming.filter((m) => !seen.has(m.id)), ...prev];
-      return merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    });
+  function getConversationCacheKey(accountId: string, conversationId: string) {
+    return `${accountId}::${conversationId}`;
+  }
+
+  function setConversationCache(accountId: string, conversationId: string, nextMessages: Message[]) {
+    messageCacheRef.current.set(getConversationCacheKey(accountId, conversationId), nextMessages);
+  }
+
+  function mergeMessagesIntoConversation(accountId: string, conversationId: string, incoming: Message[], mode: 'append' | 'replace' = 'append') {
+    const previous = messageCacheRef.current.get(getConversationCacheKey(accountId, conversationId)) ?? [];
+    const next = mode === 'replace' ? mergeMessageList([], incoming) : mergeMessageList(previous, incoming);
+    setConversationCache(accountId, conversationId, next);
+    if (activeConversationIdRef.current === conversationId) {
+      setMessages(next);
+    }
+    return next;
+  }
+
+  function getWorkspaceAccountId(statusOverride?: SessionStatus | null) {
+    return selectedAccountId || statusOverride?.account?.userId || status?.account?.userId || '';
+  }
+
+  function buildHistoryStatus(result: HistorySyncResult) {
+    if (result.timedOut) {
+      return 'Đồng bộ lịch sử bị timeout. Có thể điện thoại hoặc nguồn sync của Zalo chưa phản hồi.';
+    }
+
+    if (result.remoteCount === 0) {
+      return 'Zalo không trả thêm lịch sử cũ cho cuộc trò chuyện này.';
+    }
+
+    return `Đồng bộ lịch sử: nhận ${result.remoteCount} tin, thêm mới ${result.insertedCount}, bỏ trùng ${result.dedupedCount}.`;
+  }
+
+  function clearComposer() {
+    setText('');
+    setAttachFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function refreshConversationMessages(accountId: string, conversationId: string, options: { preserveScrollTop?: boolean } = {}) {
+    const token = selectionTokenRef.current;
+    const r = await api.accountMessages(accountId, conversationId, { limit: 40 });
+    const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
+    mergeMessagesIntoConversation(accountId, conversationId, r.messages, 'replace');
+    if (stillActive) {
+      setHasMoreHistory(Boolean(r.hasMore && r.messages.length >= 40));
+    }
+    if (stillActive && !options.preserveScrollTop) {
+      requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
+    }
+    return r;
+  }
+
+  async function syncConversationHistory(accountId: string, conversationId: string, beforeMessageId?: string) {
+    const token = selectionTokenRef.current;
+    if (activeConversationIdRef.current === conversationId) {
+      setSyncingHistory(true);
+    }
+    try {
+      const result = await api.accountSyncHistory(accountId, conversationId, { beforeMessageId, timeoutMs: 15000 });
+      await refreshConversationMessages(accountId, conversationId, { preserveScrollTop: Boolean(beforeMessageId) });
+      const cv = await api.accountConversations(accountId);
+      if (token === selectionTokenRef.current) {
+        setConversations(cv.conversations);
+      }
+      if (activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
+        setStatusMsg(buildHistoryStatus(result));
+        setHasMoreHistory(result.hasMore || result.insertedCount > 0);
+      }
+      return result;
+    } finally {
+      if (activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
+        setSyncingHistory(false);
+      }
+    }
+  }
+
+  function prependMessages(conversationId: string, incoming: Message[]) {
+    const accountId = getWorkspaceAccountId();
+    if (!accountId) {
+      return [];
+    }
+    return mergeMessagesIntoConversation(accountId, conversationId, incoming, 'append');
   }
 
   const { subscribe, unsubscribe } = useWebSocket({
-    onStatus: (s) => setStatus(s),
-    onConversations: (c) => setConversations(c),
-    onMessage: (m) => {
+    onStatus: ({ accountId, status: nextStatus }: WsSessionStatusPayload) => {
+      if (!accountId || accountId === getWorkspaceAccountId(nextStatus)) {
+        setStatus(nextStatus);
+      }
+    },
+    onConversations: ({ accountId, conversations: nextConversations }: WsConversationSummariesPayload) => {
+      if (!accountId || accountId === getWorkspaceAccountId()) {
+        setConversations(nextConversations);
+      }
+    },
+    onMessage: ({ accountId, message }: WsConversationMessagePayload) => {
+      if (accountId !== getWorkspaceAccountId()) {
+        return;
+      }
       setConversations((prev) => {
         const next = [...prev];
-        const index = next.findIndex((entry) => entry.id === m.conversationId);
+        const index = next.findIndex((entry) => entry.id === message.conversationId);
         if (index >= 0) {
           next[index] = {
             ...next[index],
-            lastMessageText: m.text,
-            lastMessageKind: m.kind,
-            lastMessageTimestamp: m.timestamp,
-            lastDirection: m.direction,
+            lastMessageText: message.text,
+            lastMessageKind: message.kind,
+            lastMessageTimestamp: message.timestamp,
+            lastDirection: message.direction,
           };
         }
         return next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
       });
 
-      if (m.conversationId === activeConversationId) {
-        mergeMessages([m]);
-      }
+      mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
     },
   });
 
   useEffect(() => {
     api.status().then(setStatus).catch(() => {});
+    api.accounts().then((result) => {
+      setKnownAccounts(result.accounts);
+      if (result.activeAccountId) {
+        setSelectedAccountId(result.activeAccountId);
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!status?.sessionActive) {
+    const userId = status?.account?.userId?.trim();
+    const displayName = status?.account?.displayName?.trim();
+    if (!userId) {
       return;
     }
 
-    void loadData(status);
-  }, [status?.sessionActive]);
+    setKnownAccounts((prev) => {
+      const nextItem = {
+        accountId: userId,
+        displayName: displayName || userId,
+        phoneNumber: status?.account?.phoneNumber,
+        isActive: true,
+      } satisfies AccountSidebarItem;
+      const existingIndex = prev.findIndex((entry) => entry.accountId === userId);
+      const next = existingIndex >= 0
+        ? prev.map((entry, index) => index === existingIndex ? { ...entry, ...nextItem } : entry)
+        : [...prev, nextItem];
+      return next;
+    });
+
+    setSelectedAccountId((prev) => prev || userId);
+  }, [status?.account?.displayName, status?.account?.phoneNumber, status?.account?.userId]);
+
+  useEffect(() => {
+    const accountId = getWorkspaceAccountId();
+    if (!status?.sessionActive || !accountId) {
+      return;
+    }
+
+    void loadData(accountId, status);
+  }, [selectedAccountId, status?.sessionActive]);
 
   async function refreshQr() {
     try {
@@ -217,6 +364,10 @@ export default function App() {
   }
 
   async function startLogin() {
+    clearComposer();
+    setLoadError('');
+    setStatusMsg('Đang mở flow thêm tài khoản...');
+    const knownAccountIds = new Set(knownAccounts.map((account) => account.accountId));
     await api.loginStart();
     await refreshQr();
     if (loginPollRef.current) clearInterval(loginPollRef.current);
@@ -224,12 +375,25 @@ export default function App() {
     loginPollRef.current = setInterval(async () => {
       try {
         const s = await api.status();
-        setStatus(s);
-        await refreshQr();
-        if (s.loggedIn) {
+          setStatus(s);
+          api.accounts().then((result) => {
+            setKnownAccounts(result.accounts);
+            const newlyReadyAccount = result.accounts.find((account) => account.sessionActive && !knownAccountIds.has(account.accountId));
+            if (newlyReadyAccount) {
+              setSelectedAccountId(newlyReadyAccount.accountId);
+            } else if (result.activeAccountId) {
+              setSelectedAccountId(result.activeAccountId);
+            }
+          }).catch(() => {});
+          await refreshQr();
+          if (s.loggedIn) {
           clearInterval(loginPollRef.current!);
           setLoginPolling(false);
-          loadData(s);
+          const accountId = s.account?.userId ?? '';
+          if (accountId) {
+            setSelectedAccountId(accountId);
+            loadData(accountId, s);
+          }
         }
       } catch {
         // ignore
@@ -237,11 +401,17 @@ export default function App() {
     }, 1500);
   }
 
-  async function loadData(s?: SessionStatus) {
+  async function loadData(accountId: string, s?: SessionStatus, options: { refresh?: boolean } = {}) {
     const cur = s ?? status;
+    if (!accountId) return;
     if (!cur?.sessionActive) return;
     try {
-      const [ct, gp, cv] = await Promise.all([api.contacts(), api.groups(), api.conversations()]);
+      const refresh = Boolean(options.refresh);
+      const [ct, gp, cv] = await Promise.all([
+        api.accountContacts(accountId, refresh),
+        api.accountGroups(accountId, refresh),
+        api.accountConversations(accountId),
+      ]);
       setContacts(ct.contacts);
       setGroups(gp.groups);
       setConversations(cv.conversations);
@@ -260,23 +430,98 @@ export default function App() {
     setGroups([]);
     setActiveConversationId('');
     setMessages([]);
+    clearComposer();
+    activeConversationIdRef.current = '';
+    selectionTokenRef.current += 1;
+    messageCacheRef.current.clear();
     setLoadError('');
     unsubscribe();
     setStatusMsg('Đã đăng xuất.');
     api.status().then(setStatus).catch(() => {});
+    api.accounts().then((result) => {
+      setKnownAccounts(result.accounts);
+      setSelectedAccountId(result.activeAccountId ?? '');
+    }).catch(() => {});
+  }
+
+  async function handleSelectAccount(accountId: string) {
+    setSelectedAccountId(accountId);
+    if (accountId === status?.account?.userId) {
+      setStatusMsg('');
+      return;
+    }
+
+    try {
+      setStatusMsg('Đang chuyển tài khoản...');
+      setLoadError('');
+      selectionTokenRef.current += 1;
+      activeConversationIdRef.current = '';
+      setActiveConversationId('');
+      setMessages([]);
+      clearComposer();
+      setConversations([]);
+      setContacts([]);
+      setGroups([]);
+      messageCacheRef.current.clear();
+      unsubscribe();
+
+      const result = await api.activateAccount(accountId);
+      setStatus(result.status);
+      const accountsResult = await api.accounts();
+      setKnownAccounts(accountsResult.accounts);
+      setSelectedAccountId(accountsResult.activeAccountId ?? accountId);
+      await loadData(accountId, result.status, { refresh: true });
+      setStatusMsg('Đã chuyển tài khoản.');
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Không chuyển được tài khoản');
+      setStatusMsg('');
+      api.status().then(setStatus).catch(() => {});
+      api.accounts().then((result) => {
+        setKnownAccounts(result.accounts);
+        setSelectedAccountId(result.activeAccountId ?? status?.account?.userId ?? '');
+      }).catch(() => {});
+    }
   }
 
   async function selectConversation(conversationId: string) {
+    const accountId = getWorkspaceAccountId();
+    if (!accountId) {
+      setLoadError('Chưa có tài khoản workspace được chọn');
+      return;
+    }
+    const token = selectionTokenRef.current + 1;
+    clearComposer();
+    selectionTokenRef.current = token;
     setActiveConversationId(conversationId);
-    setMessages([]);
+    activeConversationIdRef.current = conversationId;
+    const cached = messageCacheRef.current.get(getConversationCacheKey(accountId, conversationId)) ?? [];
+    setMessages(cached);
     setHasMoreHistory(false);
     setLoadError('');
-    subscribe(conversationId);
+    setStatusMsg('');
+    subscribe(accountId, conversationId);
     try {
-      const r = await api.messages(conversationId, { limit: 40 });
-      setMessages([]);
-      mergeMessages(r.messages);
-      setHasMoreHistory(Boolean(r.hasMore && r.messages.length >= 40));
+      const synced = await api.accountSyncConversationMetadata(accountId, conversationId);
+      if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) {
+        return;
+      }
+
+      if (synced.conversationId !== conversationId) {
+        setActiveConversationId(synced.conversationId);
+        activeConversationIdRef.current = synced.conversationId;
+        subscribe(accountId, synced.conversationId);
+        conversationId = synced.conversationId;
+      }
+
+      mergeMessagesIntoConversation(accountId, conversationId, synced.messages, 'replace');
+      await loadData(accountId, undefined, { refresh: true });
+      const r = await refreshConversationMessages(accountId, conversationId);
+      if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) {
+        return;
+      }
+      if (r.messages.length < 40) {
+        await syncConversationHistory(accountId, conversationId, r.messages[0]?.providerMessageId);
+      }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Không tải được history');
     }
@@ -284,6 +529,10 @@ export default function App() {
 
   async function loadOlderMessages() {
     if (!activeConversationId || loadingOlder || !hasMoreHistory || messages.length === 0) {
+      return;
+    }
+    const accountId = getWorkspaceAccountId();
+    if (!accountId) {
       return;
     }
 
@@ -295,9 +544,22 @@ export default function App() {
 
     setLoadingOlder(true);
     try {
-      const r = await api.messages(activeConversationId, { before: oldest, limit: 40 });
-      prependMessages(r.messages);
-      setHasMoreHistory(Boolean(r.messages.length >= 40));
+      const r = await api.accountMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
+      if (r.messages.length > 0) {
+        prependMessages(activeConversationId, r.messages);
+      } else {
+        const syncResult = await syncConversationHistory(accountId, activeConversationId, messages[0]?.providerMessageId);
+        if (syncResult.insertedCount > 0) {
+          const next = await api.accountMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
+          prependMessages(activeConversationId, next.messages);
+          setHasMoreHistory(Boolean(next.messages.length >= 40 || syncResult.hasMore));
+        } else {
+          setHasMoreHistory(false);
+        }
+      }
+      if (r.messages.length > 0) {
+        setHasMoreHistory(Boolean(r.messages.length >= 40));
+      }
       requestAnimationFrame(() => {
         if (!container) return;
         const nextHeight = container.scrollHeight;
@@ -318,12 +580,13 @@ export default function App() {
 
   async function openDirectConversation(contact: Contact) {
     const conversationId = directConversationId(contact.userId);
+    const displayName = getContactDisplayName(contact);
     if (!conversations.find((entry) => entry.id === conversationId)) {
       setConversations((prev) => [{
         id: conversationId,
         threadId: contact.userId,
         type: 'direct',
-        title: contact.displayName,
+        title: displayName,
         avatar: contact.avatar,
         lastMessageText: 'Nhấn để mở chat',
         lastMessageKind: 'text',
@@ -357,21 +620,25 @@ export default function App() {
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     if (!activeConversationId || (!text.trim() && !attachFile)) return;
+    const accountId = getWorkspaceAccountId();
+    if (!accountId) {
+      setStatusMsg('Chưa có tài khoản workspace được chọn');
+      return;
+    }
     setSending(true);
     setStatusMsg('');
     try {
       if (attachFile) {
-        await api.sendAttachment(activeConversationId, attachFile, text.trim() || undefined);
+        await api.accountSendAttachment(accountId, activeConversationId, attachFile, text.trim() || undefined);
         setAttachFile(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
       } else {
-        await api.sendText(activeConversationId, text.trim());
+        await api.accountSendText(accountId, activeConversationId, text.trim());
       }
       setText('');
-      const r = await api.messages(activeConversationId, { limit: 40 });
-      setMessages([]);
-      mergeMessages(r.messages);
-      const cv = await api.conversations();
+      const r = await api.accountMessages(accountId, activeConversationId, { limit: 40 });
+      mergeMessagesIntoConversation(accountId, activeConversationId, r.messages, 'replace');
+      const cv = await api.accountConversations(accountId);
       setConversations(cv.conversations);
       setStatusMsg('Đã gửi.');
       setLoadError('');
@@ -392,6 +659,19 @@ export default function App() {
   const activeConversation = conversations.find((entry) => entry.id === activeConversationId);
   const activeName = activeConversation?.title ?? activeConversationId;
   const isGroupConversation = activeConversation?.type === 'group';
+  const currentAccountId = status?.account?.userId ?? '';
+  const sidebarAccounts = useMemo(() => {
+    if (currentAccountId && !knownAccounts.some((entry) => entry.accountId === currentAccountId)) {
+      return [...knownAccounts, {
+        accountId: currentAccountId,
+        displayName: status?.account?.displayName ?? currentAccountId,
+        phoneNumber: status?.account?.phoneNumber,
+        isActive: true,
+      } satisfies AccountSidebarItem];
+    }
+
+    return knownAccounts;
+  }, [currentAccountId, knownAccounts, status?.account?.displayName, status?.account?.phoneNumber]);
 
   const filteredConversations = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -402,7 +682,7 @@ export default function App() {
   const filteredContacts = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return contacts;
-    return contacts.filter((entry) => entry.displayName.toLowerCase().includes(q));
+    return contacts.filter((entry) => getContactDisplayName(entry).toLowerCase().includes(q));
   }, [contacts, query]);
 
   const filteredGroups = useMemo(() => {
@@ -438,6 +718,41 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <div className="mini-sidebar">
+        <button className="mini-sidebar-add" type="button" title="Thêm tài khoản Zalo" onClick={() => void startLogin()}>
+          +
+        </button>
+
+        <div className="mini-sidebar-list">
+          {sidebarAccounts.map((account) => {
+            const isCurrent = account.accountId === currentAccountId;
+            const isSelected = account.accountId === (selectedAccountId || currentAccountId);
+            const label = account.displayName ?? account.accountId;
+            const subtitle = account.phoneNumber;
+            const canActivate = account.sessionActive ?? account.accountId === currentAccountId;
+            return (
+              <button
+                key={account.accountId}
+                type="button"
+                title={subtitle ? `${label} • ${subtitle}` : label}
+                className={`mini-account ${isSelected ? 'active' : ''} ${isCurrent ? 'is-current' : ''}`}
+                onClick={() => {
+                  if (!canActivate) {
+                    setLoadError(`Tài khoản ${label} chưa có session hoạt động. Hãy đăng nhập lại bằng QR.`);
+                    setStatusMsg('');
+                    return;
+                  }
+                  void handleSelectAccount(account.accountId);
+                }}
+              >
+                <span className="mini-account-avatar">{getInitial(label)}</span>
+                {isCurrent && <span className="mini-account-dot" aria-hidden="true" />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="sidebar">
         <div className="sidebar-header">
           <div>
@@ -450,7 +765,7 @@ export default function App() {
             <span className={`status-badge ${status?.listener?.connected ? 'connected' : 'error'}`}>
               {status?.listener?.connected ? 'Live' : 'Offline'}
             </span>
-            <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => loadData()}>
+            <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => loadData(undefined, { refresh: true })}>
               Làm mới
             </button>
             <button className="btn btn-danger" style={{ padding: '4px 10px', fontSize: 12 }} onClick={handleLogout}>
@@ -499,9 +814,9 @@ export default function App() {
               className={`conversation-item ${activeConversationId === directConversationId(entry.userId) ? 'active' : ''}`}
               onClick={() => openDirectConversation(entry)}
             >
-              <div className="avatar">{getInitial(entry.displayName)}</div>
+              <div className="avatar">{getInitial(getContactDisplayName(entry))}</div>
               <div className="conversation-info">
-                <div className="conversation-name">{entry.displayName}</div>
+                <div className="conversation-name">{getContactDisplayName(entry)}</div>
                 <div className="conversation-last">Nhấn để mở chat</div>
               </div>
             </div>
@@ -546,7 +861,7 @@ export default function App() {
 
             <div className="messages-area" ref={messagesAreaRef} onScroll={handleMessagesScroll}>
               {hasMoreHistory && (
-                <div className="history-loader">{loadingOlder ? 'Đang tải thêm tin cũ...' : 'Kéo lên để tải thêm tin cũ'}</div>
+                <div className="history-loader">{loadingOlder || syncingHistory ? 'Đang tải thêm tin cũ...' : 'Kéo lên để tải thêm tin cũ'}</div>
               )}
               {messages.length === 0 && (
                 <div className="empty-hint">Chưa có tin nhắn. Hãy gửi tin nhắn đầu tiên!</div>

@@ -4,6 +4,13 @@ export interface GoldStoredCredential {
   userAgent: string;
 }
 
+export interface GoldAccountRecord {
+  accountId: string;
+  displayName?: string;
+  phoneNumber?: string;
+  isActive?: boolean;
+}
+
 export type GoldConversationType = 'direct' | 'group';
 export type GoldMessageKind = 'text' | 'image' | 'file' | 'video';
 
@@ -12,6 +19,8 @@ export interface GoldContactRecord {
   userId: string;
   displayName: string;
   zaloName?: string;
+  zaloAlias?: string;
+  hubAlias?: string;
   avatar?: string;
   status?: string;
   phoneNumber?: string;

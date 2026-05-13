@@ -1,6 +1,8 @@
 # Zalo Hub
 
-App chat Zalo cho `1 user`, chạy trên nền backend Node.js + React frontend.
+App chat Zalo chạy trên nền backend Node.js + React frontend.
+
+Codebase hiện đã hoàn thành giai đoạn app thực dụng cho `1 user` tới `gold-7`, và từ `gold-8` sẽ chuyển hướng sang nền tảng nhiều tài khoản Zalo active đồng thời, có `system user` và phân quyền theo từng tài khoản Zalo.
 
 Xem `GOLD.md` để hiểu quy trình phát triển và ý nghĩa các mốc gold.
 
@@ -13,7 +15,7 @@ src/
   web/      Frontend React
 ```
 
-## Tính năng hiện tại (tính đến gold-6)
+## Tính năng hiện tại (tính đến gold-7)
 
 1. Đăng nhập bằng QR
 2. Reconnect bằng credential local sau restart
@@ -30,6 +32,22 @@ src/
 13. Lazy load history
 14. Local media mirror tại app server `data/media/`
 15. Repair/backfill attachment cho dữ liệu cũ còn cứu được
+16. History sync từ runtime Zalo vào local DB
+17. Dedupe message theo `provider_message_id`
+18. Canonical conversation identity `direct:<id>` / `group:<id>`
+19. Sync metadata khi mở conversation và persist vào local DB
+20. Enrich sender name cho group message và lưu lại vào DB local
+
+## Hướng kiến trúc từ gold-8
+
+Từ `gold-8`, dự án đổi hướng sang mô hình:
+
+1. Nhiều `Zalo account` active đồng thời
+2. Có `system user` đăng nhập vào app
+3. Mỗi `system user` được cấp quyền vào một hay nhiều `Zalo account`
+4. API và WebSocket sẽ dần chuyển sang `account-scoped`
+
+Xem `gold-8.md` và `GOLD.md` để theo dõi lộ trình mới.
 
 ## Chạy backend (server)
 

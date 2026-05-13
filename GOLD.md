@@ -71,8 +71,11 @@ archived/
 | gold-4 | App hoàn chỉnh 1 user: SQLite, React UI, image/file, public domain | Done | `gold-4.md` |
 | gold-5 | Refactor cấu trúc src + tài liệu convention gold | Done | `archived/GOLD-5-RESULT.md` |
 | gold-6 | Contacts + Groups + Conversations: 3 tab UI, group chat realtime, refactor conversation model, lazy history, local media mirror, legacy attachment repair | Done | `archived/GOLD-6-RESULT.md` |
-| gold-7 | Recent/history sync từ Zalo, chống duplicate theo provider message id | Planned | — |
-| gold-8 | Account profile/avatar và enrich contact/group profile | Planned | — |
+| gold-7 | Recent/history sync từ Zalo, chống duplicate theo provider message id, canonical direct/group conversation, sync metadata khi mở chat, enrich sender name group và persist local DB | Done | `archived/GOLD-7-RESULT.md` |
+| gold-8 | Foundation cho multi-account + full profile storage + account-scoped architecture: mở rộng DB profile/account/group/contact, raw profile JSON, chuẩn hóa hướng runtime per account, account-scoped API/WebSocket, chốt domain system users và permissions | Planned | `gold-8.md` |
+| gold-9 | Multi-account runtimes active đồng thời: account manager, nhiều listener/session song song, account-scoped REST/WebSocket, account switcher cơ bản | Planned | — |
+| gold-10 | User hệ thống + authentication + authorization theo từng Zalo account | Planned | — |
+| gold-11 | Shared inbox workflow: assignment, notes, labels, trạng thái conversation, audit log | Planned | — |
 
 ---
 

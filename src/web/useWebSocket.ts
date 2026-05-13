@@ -1,24 +1,29 @@
 import { useEffect, useRef, useCallback } from 'react';
-import type { ConversationSummary, Message, SessionStatus } from './types';
+import type {
+  WsConversationMessagePayload,
+  WsConversationSummariesPayload,
+  WsSessionStatusPayload,
+} from './types';
 
 type WsPayload =
   | { type: 'connected' }
-  | { type: 'session_state'; status: SessionStatus }
-  | { type: 'conversation_summaries'; conversations: ConversationSummary[] }
-  | { type: 'conversation_message'; message: Message }
-  | { type: 'subscribed'; conversationId: string }
+  | ({ type: 'session_state' } & WsSessionStatusPayload)
+  | ({ type: 'conversation_summaries' } & WsConversationSummariesPayload)
+  | ({ type: 'conversation_message' } & WsConversationMessagePayload)
+  | { type: 'subscribed'; accountId?: string; conversationId: string }
   | { type: 'error'; error: string };
 
 interface WsHandlers {
-  onStatus?: (status: SessionStatus) => void;
-  onConversations?: (conversations: ConversationSummary[]) => void;
-  onMessage?: (message: Message) => void;
+  onStatus?: (payload: WsSessionStatusPayload) => void;
+  onConversations?: (payload: WsConversationSummariesPayload) => void;
+  onMessage?: (payload: WsConversationMessagePayload) => void;
 }
 
 export function useWebSocket(handlers: WsHandlers) {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeConversationId = useRef<string>('');
+  const activeAccountId = useRef<string>('');
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
@@ -31,17 +36,17 @@ export function useWebSocket(handlers: WsHandlers) {
 
     socket.addEventListener('open', () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      if (activeConversationId.current) {
-        socket.send(JSON.stringify({ type: 'subscribe', conversationId: activeConversationId.current }));
+      if (activeConversationId.current && activeAccountId.current) {
+        socket.send(JSON.stringify({ type: 'subscribe', accountId: activeAccountId.current, conversationId: activeConversationId.current }));
       }
     });
 
     socket.addEventListener('message', (event) => {
       try {
         const payload = JSON.parse(String(event.data)) as WsPayload;
-        if (payload.type === 'session_state') handlersRef.current.onStatus?.(payload.status);
-        if (payload.type === 'conversation_summaries') handlersRef.current.onConversations?.(payload.conversations);
-        if (payload.type === 'conversation_message') handlersRef.current.onMessage?.(payload.message);
+        if (payload.type === 'session_state') handlersRef.current.onStatus?.({ accountId: payload.accountId, status: payload.status });
+        if (payload.type === 'conversation_summaries') handlersRef.current.onConversations?.({ accountId: payload.accountId, conversations: payload.conversations });
+        if (payload.type === 'conversation_message') handlersRef.current.onMessage?.({ accountId: payload.accountId, message: payload.message });
       } catch { /* ignore */ }
     });
 
@@ -61,14 +66,16 @@ export function useWebSocket(handlers: WsHandlers) {
     };
   }, [connect]);
 
-  const subscribe = useCallback((conversationId: string) => {
+  const subscribe = useCallback((accountId: string, conversationId: string) => {
+    activeAccountId.current = accountId;
     activeConversationId.current = conversationId;
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: 'subscribe', conversationId }));
+      ws.current.send(JSON.stringify({ type: 'subscribe', accountId, conversationId }));
     }
   }, []);
 
   const unsubscribe = useCallback(() => {
+    activeAccountId.current = '';
     activeConversationId.current = '';
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: 'unsubscribe' }));

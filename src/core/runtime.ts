@@ -9,6 +9,7 @@ import QRCode from 'qrcode';
 import { GoldLogger } from './logger.js';
 import { GoldMediaStore } from './media-store.js';
 import { GoldStore } from './store.js';
+import { getAllGroups as fetchAllGroups, getGroupInfo as fetchGroupInfo } from './zalo-group-client.js';
 import type {
   GoldAttachment,
   GoldContactRecord,
@@ -63,6 +64,8 @@ type ListenerMessage = {
 type ListenerLike = {
   on: (event: string, handler: (...args: any[]) => void) => void;
   start: (options?: { retryOnClose?: boolean }) => void;
+  requestOldMessages?: (threadType: number, lastMsgId?: string | null) => void;
+  stop?: () => void;
 };
 
 type ListenerState = {
@@ -77,6 +80,31 @@ type ListenerState = {
 };
 
 type ConversationListener = (message: GoldConversationMessage) => void;
+
+type HistorySyncState = {
+  conversationId: string;
+  threadId: string;
+  type: GoldConversationType;
+  beforeMessageId?: string;
+  requestedAt: number;
+  resolve: (result: HistorySyncResult) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+type HistorySyncResult = {
+  conversationId: string;
+  threadId: string;
+  type: GoldConversationType;
+  requestedBeforeMessageId?: string;
+  remoteCount: number;
+  insertedCount: number;
+  dedupedCount: number;
+  oldestTimestamp?: string;
+  oldestProviderMessageId?: string;
+  hasMore: boolean;
+  timedOut?: boolean;
+};
 
 function normalizeMessageText(data: Record<string, unknown>) {
   const content = data.content;
@@ -326,12 +354,58 @@ function normalizeGroupInfoMap(response: unknown) {
   return [];
 }
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 function getConversationTypeFromThreadId(threadId: string, knownGroupIds: Set<string>): GoldConversationType {
   return knownGroupIds.has(threadId) ? 'group' : 'direct';
 }
 
 function getConversationId(threadId: string, type: GoldConversationType) {
   return `${type}:${threadId}`;
+}
+
+function normalizeUserInfoMap(response: unknown) {
+  if (!response || typeof response !== 'object') {
+    return [];
+  }
+
+  const candidateKeys = ['changed_profiles', 'profiles', 'data', 'users'];
+  for (const key of candidateKeys) {
+    const value = (response as Record<string, unknown>)[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.entries(value as Record<string, unknown>).map(([userId, user]) => ({
+        userId: userId.replace(/_0$/, ''),
+        ...(user && typeof user === 'object' ? user as Record<string, unknown> : {}),
+      }));
+    }
+  }
+
+  return [];
+}
+
+function normalizeGroupMemberInfoMap(response: unknown) {
+  if (!response || typeof response !== 'object') {
+    return [];
+  }
+
+  const candidateKeys = ['gridMemMap', 'members', 'data', 'profiles'];
+  for (const key of candidateKeys) {
+    const value = (response as Record<string, unknown>)[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.entries(value as Record<string, unknown>).map(([userId, user]) => ({
+        userId: userId.replace(/_0$/, ''),
+        ...(user && typeof user === 'object' ? user as Record<string, unknown> : {}),
+      }));
+    }
+  }
+
+  return [];
 }
 
 function prepareCookiesForChatSession(rawCookie: string) {
@@ -434,6 +508,8 @@ export class GoldRuntime {
   private listenerAttached = false;
   private readonly conversationListeners = new Set<ConversationListener>();
   private readonly mediaStore = new GoldMediaStore();
+  private readonly pendingHistorySyncs = new Map<string, Promise<HistorySyncResult>>();
+  private historySyncState: HistorySyncState | undefined;
   private listenerState: ListenerState = {
     attached: false,
     started: false,
@@ -456,16 +532,7 @@ export class GoldRuntime {
       const messages = this.store.listConversationMessages(summary.id);
       this.conversations.set(summary.id, messages);
       for (const message of messages) {
-        this.seenMessageKeys.add(
-          this.buildMessageKey(
-            message.conversationId,
-            message.text,
-            message.timestamp,
-            message.direction,
-            message.kind,
-            message.imageUrl,
-          ),
-        );
+        this.seenMessageKeys.add(this.buildSeenKey(message));
       }
     }
   }
@@ -478,6 +545,48 @@ export class GoldRuntime {
     }
 
     return this.loginWithCredential(credential);
+  }
+
+  async startBoundAccount() {
+    return this.loginWithStoredCredential();
+  }
+
+  async activateAccount(accountId: string) {
+    const normalizedAccountId = accountId.trim();
+    if (!normalizedAccountId) {
+      throw new Error('accountId la bat buoc');
+    }
+
+    const credential = this.store.getCredentialForAccount(normalizedAccountId);
+    if (!credential) {
+      throw new Error('Account nay chua co credential de reconnect');
+    }
+
+    if (this.session) {
+      try {
+        await this.closeMessageListener();
+      } catch {
+        // ignore listener close failure during switch
+      }
+    }
+
+    this.store.activateAccount(normalizedAccountId);
+    this.currentAccount = undefined;
+    this.currentQrCode = undefined;
+    this.conversations.clear();
+    this.seenMessageKeys.clear();
+    this.session = undefined;
+    this.listenerStarted = false;
+    this.listenerAttached = false;
+    this.listenerState = {
+      attached: false,
+      started: false,
+      connected: false,
+      startAttempts: 0,
+    };
+
+    await this.loginWithCredential(credential);
+    return this.getCurrentAccount();
   }
 
   private async loginWithCredential(credential: GoldStoredCredential) {
@@ -506,6 +615,7 @@ export class GoldRuntime {
         displayName: this.currentAccount.displayName,
         phoneNumber: this.currentAccount.phoneNumber,
       });
+      this.store.canonicalizeConversationData();
       this.hydrateConversationsFromStore();
       void this.backfillMediaForStoredMessages();
     }
@@ -522,6 +632,52 @@ export class GoldRuntime {
     imageUrl = '',
   ) {
     return `${conversationId}::${direction}::${kind}::${timestamp}::${text}::${imageUrl}`;
+  }
+
+  private buildSeenKey(message: Pick<GoldConversationMessage, 'conversationId' | 'providerMessageId' | 'text' | 'timestamp' | 'direction' | 'kind' | 'imageUrl'>) {
+    if (message.providerMessageId?.trim()) {
+      return `provider::${message.conversationId}::${message.providerMessageId.trim()}`;
+    }
+
+    return `fallback::${this.buildMessageKey(
+      message.conversationId,
+      message.text,
+      message.timestamp,
+      message.direction,
+      message.kind,
+      message.imageUrl,
+    )}`;
+  }
+
+  private isLikelyDuplicateMessage(existing: GoldConversationMessage[], message: GoldConversationMessage) {
+    if (message.providerMessageId?.trim()) {
+      if (existing.some((item) => item.providerMessageId?.trim() === message.providerMessageId?.trim())) {
+        return true;
+      }
+
+      if (this.store.hasMessageByProviderId(message.conversationId, message.providerMessageId.trim())) {
+        return true;
+      }
+    }
+
+    const messageTime = Date.parse(message.timestamp);
+    return existing.some((item) => {
+      if (
+        item.direction !== message.direction ||
+        item.text !== message.text ||
+        item.kind !== message.kind ||
+        item.imageUrl !== message.imageUrl
+      ) {
+        return false;
+      }
+
+      const itemTime = Date.parse(item.timestamp);
+      if (!Number.isFinite(itemTime) || !Number.isFinite(messageTime)) {
+        return false;
+      }
+
+      return Math.abs(itemTime - messageTime) <= 15_000;
+    });
   }
 
   private getActiveAccountId() {
@@ -619,37 +775,13 @@ export class GoldRuntime {
   }
 
   private appendConversationMessage(message: GoldConversationMessage) {
-    const key = this.buildMessageKey(
-      message.conversationId,
-      message.text,
-      message.timestamp,
-      message.direction,
-      message.kind,
-      message.imageUrl,
-    );
+    const key = this.buildSeenKey(message);
     if (this.seenMessageKeys.has(key)) {
       return false;
     }
 
     const existing = this.conversations.get(message.conversationId) ?? [];
-    const messageTime = Date.parse(message.timestamp);
-    const looksDuplicated = existing.some((item) => {
-      if (
-        item.direction !== message.direction ||
-        item.text !== message.text ||
-        item.kind !== message.kind ||
-        item.imageUrl !== message.imageUrl
-      ) {
-        return false;
-      }
-
-      const itemTime = Date.parse(item.timestamp);
-      if (!Number.isFinite(itemTime) || !Number.isFinite(messageTime)) {
-        return false;
-      }
-
-      return Math.abs(itemTime - messageTime) <= 15_000;
-    });
+    const looksDuplicated = this.isLikelyDuplicateMessage(existing, message);
 
     if (looksDuplicated) {
       this.seenMessageKeys.add(key);
@@ -688,6 +820,9 @@ export class GoldRuntime {
       listener.on('message', (message: ListenerMessage) => {
         void this.handleIncomingListenerMessage(message);
       });
+      listener.on('old_messages', (messages: ListenerMessage[], threadType: number) => {
+        void this.handleOldMessages(messages, threadType);
+      });
       listener.on('error', (error: unknown) => {
         this.listenerState.connected = false;
         this.listenerState.lastEventAt = new Date().toISOString();
@@ -720,6 +855,92 @@ export class GoldRuntime {
     this.logger.info('message_listener_started', { startAttempts: this.listenerState.startAttempts });
   }
 
+  private async normalizeListenerMessage(message: ListenerMessage, forcedType?: GoldConversationType): Promise<GoldConversationMessage | undefined> {
+    const threadId = String(message.threadId ?? '').trim();
+    const knownGroupIds = new Set(this.store.listGroups().map((group) => group.groupId));
+    const conversationType = forcedType
+      ?? (message.type === ThreadType.Group ? 'group' : undefined)
+      ?? getConversationTypeFromThreadId(threadId, knownGroupIds);
+    const conversationId = getConversationId(threadId, conversationType);
+    const data = message.data ?? {};
+    const text = normalizeMessageText(data);
+    const kind = normalizeMessageKind(data);
+    const attachments = normalizeAttachments(data);
+    const imageUrl = normalizeImageUrl(data);
+
+    if (!threadId || (!text && attachments.length === 0)) {
+      return undefined;
+    }
+
+    const normalized: GoldConversationMessage = {
+      id: String(data.msgId ?? data.cliMsgId ?? randomUUID()),
+      providerMessageId: String(data.msgId ?? data.cliMsgId ?? randomUUID()),
+      conversationId,
+      threadId,
+      conversationType,
+      text: text || (kind !== 'text' ? `[${kind}]` : ''),
+      kind,
+      attachments,
+      imageUrl,
+      direction: message.isSelf ? 'outgoing' : 'incoming',
+      isSelf: Boolean(message.isSelf),
+      senderId: typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined,
+      senderName: conversationType === 'group'
+        ? this.resolveGroupSenderName(threadId, typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined)
+        : undefined,
+      timestamp: normalizeMessageTimestamp(data),
+      rawMessageJson: JSON.stringify(data),
+    };
+
+    return normalized;
+  }
+
+  private async handleOldMessages(messages: ListenerMessage[], threadType: number) {
+    const sync = this.historySyncState;
+    if (!sync) {
+      this.logger.info('history_sync_old_messages_ignored', { reason: 'no_pending_sync', count: messages.length, threadType });
+      return;
+    }
+
+    const forcedType = threadType === ThreadType.Group ? 'group' : 'direct';
+    const normalizedCandidates = await Promise.all(messages.map((message) => this.normalizeListenerMessage(message, forcedType)));
+    const normalized = normalizedCandidates
+      .filter((message): message is GoldConversationMessage => message !== undefined)
+      .filter((message) => message.threadId === sync.threadId && message.conversationType === sync.type)
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+
+    let insertedCount = 0;
+    let dedupedCount = 0;
+    for (const message of normalized) {
+      const persisted = await this.persistMessageAttachmentsLocally(message);
+      if (this.appendConversationMessage(persisted)) {
+        insertedCount += 1;
+      } else {
+        dedupedCount += 1;
+      }
+    }
+
+    const oldestMessage = normalized[0];
+    const result: HistorySyncResult = {
+      conversationId: sync.conversationId,
+      threadId: sync.threadId,
+      type: sync.type,
+      requestedBeforeMessageId: sync.beforeMessageId,
+      remoteCount: normalized.length,
+      insertedCount,
+      dedupedCount,
+      oldestTimestamp: oldestMessage?.timestamp,
+      oldestProviderMessageId: oldestMessage?.providerMessageId,
+      hasMore: normalized.length > 0 && insertedCount > 0,
+    };
+
+    clearTimeout(sync.timer);
+    this.historySyncState = undefined;
+    this.pendingHistorySyncs.delete(sync.conversationId);
+    this.logger.info('history_sync_completed', result);
+    sync.resolve(result);
+  }
+
   private async handleIncomingListenerMessage(message: ListenerMessage) {
     if (message?.type !== 0 && message?.type !== undefined) {
       this.logger.info('conversation_listener_message_non_zero_type', {
@@ -729,14 +950,17 @@ export class GoldRuntime {
     }
 
     const threadId = String(message.threadId ?? '').trim();
-    const knownGroupIds = new Set(this.store.listGroups().map((group) => group.groupId));
-    const conversationType = getConversationTypeFromThreadId(threadId, knownGroupIds);
-    const conversationId = getConversationId(threadId, conversationType);
     const data = message.data ?? {};
     const text = normalizeMessageText(data);
     const kind = normalizeMessageKind(data);
     const attachments = normalizeAttachments(data);
-    const imageUrl = normalizeImageUrl(data); // legacy compat
+    const imageUrl = normalizeImageUrl(data);
+
+    if (message.type === ThreadType.Group && threadId) {
+      await this.ensureGroupMetadata(threadId);
+    }
+
+    const normalizedMessage = await this.normalizeListenerMessage(message);
 
       this.logger.info('conversation_listener_message_received', {
       threadId,
@@ -760,31 +984,22 @@ export class GoldRuntime {
       return;
     }
 
-    const normalizedMessage: GoldConversationMessage = {
-      id: String(data.msgId ?? data.cliMsgId ?? randomUUID()),
-      providerMessageId: String(data.msgId ?? data.cliMsgId ?? randomUUID()),
-      conversationId,
-      threadId,
-      conversationType,
-      text: text || (kind !== 'text' ? `[${kind}]` : ''),
-      kind,
-      attachments,
-      imageUrl, // legacy compat
-      direction: message.isSelf ? 'outgoing' : 'incoming',
-      isSelf: Boolean(message.isSelf),
-      senderId: typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined,
-      senderName: conversationType === 'group'
-        ? this.resolveGroupSenderName(threadId, typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined)
-        : undefined,
-      timestamp: normalizeMessageTimestamp(data),
-      rawMessageJson: JSON.stringify(data),
-    };
+    if (!normalizedMessage) {
+      this.logger.error('conversation_listener_message_ignored', {
+        reason: !threadId ? 'missing_thread_id' : 'missing_content',
+        threadId,
+        isSelf: Boolean(message.isSelf),
+        kind,
+        summary: summarizeListenerData(data),
+      });
+      return;
+    }
 
     const persistedMessage = await this.persistMessageAttachmentsLocally(normalizedMessage);
 
     if (this.appendConversationMessage(persistedMessage)) {
         this.logger.info('conversation_message_captured', {
-        conversationId,
+        conversationId: normalizedMessage.conversationId,
         direction: persistedMessage.direction,
         kind,
         textLength: text.length,
@@ -793,7 +1008,7 @@ export class GoldRuntime {
     }
 
     this.logger.info('conversation_message_deduped', {
-      conversationId,
+      conversationId: normalizedMessage.conversationId,
       direction: normalizedMessage.direction,
       kind,
       textLength: text.length,
@@ -862,11 +1077,14 @@ export class GoldRuntime {
             imei: generateZaloUUID(userAgent),
             userAgent,
           };
-          this.store.setCredential(credential);
           this.logger.info('qr_credential_captured_from_result', {
             cookieCount: Array.isArray(result?.cookies) ? result.cookies.length : 0,
           });
           await this.loginWithCredential(credential);
+          if (!this.currentAccount?.userId) {
+            throw new Error('Khong xac dinh duoc account sau khi login QR');
+          }
+          this.store.setCredentialForAccount(this.currentAccount.userId, credential);
           this.logger.info('qr_login_completed');
           flowDoneResolve?.();
         })
@@ -882,12 +1100,15 @@ export class GoldRuntime {
                 userAgent,
               };
 
-              this.store.setCredential(credential);
               this.logger.info('qr_login_recovered_from_cookie_jar', {
                 cookieCount: fallbackCookies.length,
                 originalError: error instanceof Error ? error.message : String(error),
               });
               await this.loginWithCredential(credential);
+              if (!this.currentAccount?.userId) {
+                throw new Error('Khong xac dinh duoc account sau khi recover login QR');
+              }
+              this.store.setCredentialForAccount(this.currentAccount.userId, credential);
               this.logger.info('qr_login_completed_after_recovery');
               flowDoneResolve?.();
               return;
@@ -949,6 +1170,31 @@ export class GoldRuntime {
     }
 
     return messages.filter((message) => message.timestamp > since);
+  }
+
+  async syncConversationMetadata(conversationId: string) {
+    if (!this.session) {
+      await this.loginWithStoredCredential();
+    }
+
+    const target = this.resolveConversationTarget(conversationId);
+    if (target.type === 'group') {
+      await this.refreshGroupMetadata(target.threadId);
+    } else {
+      await this.refreshContactMetadata(target.threadId);
+    }
+
+    this.store.canonicalizeConversationData();
+    const canonicalConversationId = getConversationId(target.threadId, target.type);
+    const messages = this.store.enrichConversationMessageSenders(canonicalConversationId);
+    this.hydrateConversationsFromStore();
+
+    return {
+      conversationId: canonicalConversationId,
+      type: target.type,
+      threadId: target.threadId,
+      messages,
+    };
   }
 
   getConversationSummaries() {
@@ -1032,7 +1278,7 @@ export class GoldRuntime {
   }
 
   restartListener() {
-    const listener = this.session?.api?.listener as (ListenerLike & { stop?: () => void }) | undefined;
+    const listener = this.session?.api?.listener as ListenerLike | undefined;
     if (!listener) {
       throw new Error('Message listener unavailable');
     }
@@ -1044,6 +1290,89 @@ export class GoldRuntime {
     this.listenerState.lastEventAt = new Date().toISOString();
     this.startMessageListener(listener);
     return this.getListenerState();
+  }
+
+  async closeMessageListener() {
+    const listener = this.session?.api?.listener as ListenerLike | undefined;
+    listener?.stop?.();
+    this.listenerStarted = false;
+    this.listenerAttached = false;
+    this.listenerState.started = false;
+    this.listenerState.connected = false;
+    this.listenerState.attached = false;
+    this.listenerState.lastEventAt = new Date().toISOString();
+  }
+
+  async syncConversationHistory(conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number } = {}) {
+    if (!this.session) {
+      await this.loginWithStoredCredential();
+    }
+
+    const listener = this.session?.api?.listener as ListenerLike | undefined;
+    if (!listener?.requestOldMessages) {
+      throw new Error('Session hien tai khong ho tro requestOldMessages');
+    }
+
+    const active = this.pendingHistorySyncs.get(conversationId);
+    if (active) {
+      return active;
+    }
+
+    const target = this.resolveConversationTarget(conversationId);
+    const oldestLocal = this.store.listConversationMessages(conversationId, { limit: 1 })[0];
+    const beforeMessageId = options.beforeMessageId?.trim() || oldestLocal?.providerMessageId;
+    const timeoutMs = Math.max(3_000, Math.min(options.timeoutMs ?? 12_000, 45_000));
+
+    const promise = new Promise<HistorySyncResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.historySyncState?.conversationId !== conversationId) {
+          return;
+        }
+
+        this.historySyncState = undefined;
+        this.pendingHistorySyncs.delete(conversationId);
+        const result: HistorySyncResult = {
+          conversationId,
+          threadId: target.threadId,
+          type: target.type,
+          requestedBeforeMessageId: beforeMessageId,
+          remoteCount: 0,
+          insertedCount: 0,
+          dedupedCount: 0,
+          hasMore: false,
+          timedOut: true,
+        };
+        this.logger.info('history_sync_timeout', result);
+        resolve(result);
+      }, timeoutMs);
+
+      this.historySyncState = {
+        conversationId,
+        threadId: target.threadId,
+        type: target.type,
+        beforeMessageId,
+        requestedAt: Date.now(),
+        resolve,
+        reject,
+        timer,
+      };
+
+      this.logger.info('history_sync_requested', {
+        conversationId,
+        threadId: target.threadId,
+        type: target.type,
+        beforeMessageId,
+        timeoutMs,
+      });
+
+      listener.requestOldMessages?.(
+        target.type === 'group' ? ThreadType.Group : ThreadType.User,
+        beforeMessageId ?? null,
+      );
+    });
+
+    this.pendingHistorySyncs.set(conversationId, promise);
+    return promise;
   }
 
   logout() {
@@ -1139,8 +1468,9 @@ export class GoldRuntime {
     });
     const friends = normalizeFriendList(response).map((friend: any) => ({
       userId: String(friend.userId),
-      displayName: String(friend.displayName || friend.zaloName || friend.username || friend.userId),
-      zaloName: friend.zaloName ? String(friend.zaloName) : undefined,
+      displayName: String(friend.aliasName || friend.alias || friend.displayName || friend.zaloName || friend.username || friend.userId),
+      zaloName: friend.zaloName ? String(friend.zaloName) : friend.displayName ? String(friend.displayName) : undefined,
+      zaloAlias: friend.aliasName ? String(friend.aliasName) : friend.alias ? String(friend.alias) : undefined,
       avatar: friend.avatar ? String(friend.avatar) : undefined,
       status: friend.status ? String(friend.status) : undefined,
       phoneNumber: friend.phoneNumber ? String(friend.phoneNumber) : undefined,
@@ -1156,11 +1486,19 @@ export class GoldRuntime {
       await this.loginWithStoredCredential();
     }
 
-    if (typeof this.session?.api?.getAllGroups !== 'function') {
-      throw new Error('Session hien tai khong ho tro getAllGroups');
+    if (!this.session?.api) {
+      throw new Error('Session hien tai khong co API de tai groups');
     }
 
-    const response = await this.session.api.getAllGroups();
+    let response: unknown;
+    try {
+      response = await fetchAllGroups(this.session.api);
+    } catch (error) {
+      this.logger.error('groups_fetch_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     this.logger.info('groups_raw_response_received', {
       responseType: Array.isArray(response) ? 'array' : typeof response,
       keys: response && typeof response === 'object' && !Array.isArray(response) ? Object.keys(response as Record<string, unknown>) : [],
@@ -1174,15 +1512,43 @@ export class GoldRuntime {
         ? Object.keys(gridVerMap as Record<string, unknown>)
         : [];
 
-      if (groupIds.length > 0 && typeof this.session?.api?.getGroupInfo === 'function') {
-        const infoResponse = await this.session.api.getGroupInfo(groupIds);
-        this.logger.info('groups_info_response_received', {
-          responseType: Array.isArray(infoResponse) ? 'array' : typeof infoResponse,
-          keys: infoResponse && typeof infoResponse === 'object' && !Array.isArray(infoResponse) ? Object.keys(infoResponse as Record<string, unknown>) : [],
-          sample: infoResponse,
-        });
-        groups = normalizeGroupInfoMap(infoResponse);
+      if (groupIds.length > 0) {
+        const mergedGroups: Array<Record<string, unknown>> = [];
+        for (const batch of chunkArray(groupIds, 20)) {
+          const infoResponse = await fetchGroupInfo(this.session.api, batch);
+          const decodedGroups = normalizeGroupInfoMap(infoResponse) as Array<Record<string, unknown>>;
+          this.logger.info('groups_info_response_received', {
+            requestedCount: batch.length,
+            responseType: Array.isArray(infoResponse) ? 'array' : typeof infoResponse,
+            keys: infoResponse && typeof infoResponse === 'object' && !Array.isArray(infoResponse) ? Object.keys(infoResponse as Record<string, unknown>) : [],
+            decodedCount: decodedGroups.length,
+          });
+          mergedGroups.push(...decodedGroups);
+        }
+        groups = mergedGroups;
       }
+    }
+
+    const conversationGroupIds = this.store.listConversationSummaries()
+      .filter((summary) => summary.type === 'group')
+      .map((summary) => summary.threadId)
+      .filter((threadId): threadId is string => Boolean(threadId));
+    const knownGroupIds = new Set(groups.map((group: any) => String(group.groupId ?? group.grid ?? group.id ?? group.group_id)));
+    const missingGroupIds = conversationGroupIds.filter((groupId) => !knownGroupIds.has(groupId));
+    if (missingGroupIds.length > 0) {
+      const infoResponse = await fetchGroupInfo(this.session.api, missingGroupIds);
+      const infoGroups = normalizeGroupInfoMap(infoResponse);
+      for (const group of infoGroups) {
+        const normalizedGroupId = String((group as Record<string, unknown>).groupId ?? (group as Record<string, unknown>).grid ?? (group as Record<string, unknown>).id ?? (group as Record<string, unknown>).group_id);
+        if (!knownGroupIds.has(normalizedGroupId)) {
+          groups.push(group);
+          knownGroupIds.add(normalizedGroupId);
+        }
+      }
+      this.logger.info('groups_merged_from_conversations', {
+        missingCount: missingGroupIds.length,
+        mergedCount: infoGroups.length,
+      });
     }
 
     const normalizedGroups: Omit<GoldGroupRecord, 'id'>[] = groups.map((group: any) => {
@@ -1215,7 +1581,237 @@ export class GoldRuntime {
     });
 
     this.logger.info('groups_normalized', { count: normalizedGroups.length });
-    return this.store.replaceGroups(normalizedGroups);
+    this.store.replaceGroups(normalizedGroups);
+    this.store.canonicalizeConversationData();
+    this.hydrateConversationsFromStore();
+    return this.store.listGroups();
+  }
+
+  private async refreshContactMetadata(userId: string) {
+    if (!userId || !this.session?.api) {
+      return;
+    }
+
+    const api = this.session.api;
+    if (typeof api.getUserInfo !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await api.getUserInfo(userId);
+      const users = normalizeUserInfoMap(response) as Array<Record<string, unknown> & { userId: string }>;
+      const user = users.find((entry) => entry.userId === userId) ?? users[0];
+      if (!user) {
+        return;
+      }
+
+      this.store.upsertContact({
+        userId,
+        displayName: String(user.aliasName ?? user.alias ?? user.displayName ?? user.zaloName ?? user.name ?? userId),
+        zaloName: typeof user.zaloName === 'string'
+          ? user.zaloName
+          : typeof user.displayName === 'string'
+            ? user.displayName
+          : typeof user.name === 'string'
+            ? user.name
+            : undefined,
+        zaloAlias: typeof user.aliasName === 'string'
+          ? user.aliasName
+          : typeof user.alias === 'string'
+            ? user.alias
+            : undefined,
+        avatar: typeof user.avatar === 'string'
+          ? user.avatar
+          : typeof user.avatarUrl === 'string'
+            ? user.avatarUrl
+            : undefined,
+        status: typeof user.status === 'string' ? user.status : undefined,
+        phoneNumber: typeof user.phoneNumber === 'string' ? user.phoneNumber : undefined,
+        lastSyncAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      this.logger.error('contact_metadata_refresh_failed', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async refreshGroupMetadata(groupId: string) {
+    if (!groupId || !this.session?.api) {
+      return;
+    }
+
+    const api = this.session.api;
+    if (typeof api.getContext !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await fetchGroupInfo(api, [groupId]);
+      const groups = normalizeGroupInfoMap(response) as Array<Record<string, unknown>>;
+      const group = groups.find((entry) => String(entry.groupId ?? entry.grid ?? entry.id ?? entry.group_id) === groupId);
+      if (!group) {
+        return;
+      }
+
+      const baseMembers = this.normalizeGroupMembers(group.members ?? group.memVerList ?? group.memberIds) ?? [];
+      const memberIds = Array.from(new Set(baseMembers.map((member) => member.userId)));
+      const groupMemberProfiles = memberIds.length > 0 && typeof api.getGroupMembersInfo === 'function'
+        ? normalizeGroupMemberInfoMap(await api.getGroupMembersInfo(memberIds)) as Array<Record<string, unknown> & { userId: string }>
+        : [];
+      const users = memberIds.length > 0 && typeof api.getUserInfo === 'function'
+        ? normalizeUserInfoMap(await api.getUserInfo(memberIds)) as Array<Record<string, unknown> & { userId: string }>
+        : [];
+      const groupProfilesById = new Map(groupMemberProfiles.map((user) => [String(user.userId), user]));
+      const usersById = new Map(users.map((user) => [String(user.userId), user]));
+      const members = baseMembers.map((member) => {
+        const groupProfile = groupProfilesById.get(member.userId);
+        const user = usersById.get(member.userId);
+        return {
+          ...member,
+          displayName: typeof groupProfile?.displayName === 'string'
+            ? groupProfile.displayName
+            : typeof groupProfile?.aliasName === 'string'
+              ? groupProfile.aliasName
+              : typeof groupProfile?.name === 'string'
+                ? groupProfile.name
+                : typeof user?.displayName === 'string'
+            ? user.displayName
+            : typeof user?.aliasName === 'string'
+              ? user.aliasName
+              : typeof user?.alias === 'string'
+                ? user.alias
+              : typeof user?.zaloName === 'string'
+                ? user.zaloName
+                : typeof user?.name === 'string'
+                  ? user.name
+                : member.displayName,
+          avatar: typeof groupProfile?.avatar === 'string'
+            ? groupProfile.avatar
+            : typeof groupProfile?.avatarUrl === 'string'
+              ? groupProfile.avatarUrl
+              : typeof user?.avatar === 'string'
+            ? user.avatar
+            : typeof user?.avatarUrl === 'string'
+              ? user.avatarUrl
+              : member.avatar,
+        };
+      });
+
+      this.store.upsertGroup({
+        groupId,
+        displayName: String(group.displayName ?? group.name ?? group.subject ?? group.groupName ?? groupId),
+        avatar: typeof group.avatar === 'string'
+          ? group.avatar
+          : typeof group.avatarUrl === 'string'
+            ? group.avatarUrl
+            : typeof group.thumb === 'string'
+              ? group.thumb
+              : typeof group.avt === 'string'
+                ? group.avt
+                : undefined,
+        memberCount: typeof group.memberCount === 'number'
+          ? group.memberCount
+          : typeof group.totalMember === 'number'
+            ? group.totalMember
+            : members.length,
+        members,
+        lastSyncAt: new Date().toISOString(),
+      });
+
+      for (const user of users) {
+        this.store.upsertContact({
+          userId: String(user.userId),
+          displayName: String(user.aliasName ?? user.alias ?? user.displayName ?? user.zaloName ?? user.name ?? user.userId),
+          zaloName: typeof user.zaloName === 'string'
+            ? user.zaloName
+            : typeof user.displayName === 'string'
+              ? user.displayName
+            : typeof user.name === 'string'
+              ? user.name
+              : undefined,
+          zaloAlias: typeof user.aliasName === 'string'
+            ? user.aliasName
+            : typeof user.alias === 'string'
+              ? user.alias
+              : undefined,
+          avatar: typeof user.avatar === 'string'
+            ? user.avatar
+            : typeof user.avatarUrl === 'string'
+              ? user.avatarUrl
+              : undefined,
+          status: typeof user.status === 'string' ? user.status : undefined,
+          phoneNumber: typeof user.phoneNumber === 'string' ? user.phoneNumber : undefined,
+          lastSyncAt: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      this.logger.error('group_metadata_refresh_failed', {
+        groupId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async ensureGroupMetadata(groupId: string) {
+    if (!groupId || this.store.listGroups().some((group) => group.groupId === groupId)) {
+      return;
+    }
+
+    if (!this.session) {
+      await this.loginWithStoredCredential();
+    }
+
+    const api = this.session?.api;
+    if (typeof api?.getContext !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await fetchGroupInfo(api, [groupId]);
+      const groups = normalizeGroupInfoMap(response) as Array<Record<string, unknown>>;
+      if (groups.length === 0) {
+        return;
+      }
+
+      const existingGroups = this.store.listGroups();
+      const groupsById = new Map(existingGroups.map((group) => [group.groupId, group]));
+      for (const group of groups) {
+        const normalizedGroupId = String(group.groupId ?? group.grid ?? group.id ?? group.group_id);
+        groupsById.set(normalizedGroupId, {
+          id: groupsById.get(normalizedGroupId)?.id ?? randomUUID(),
+          groupId: normalizedGroupId,
+          displayName: String(group.displayName ?? group.name ?? group.subject ?? group.groupName ?? normalizedGroupId),
+          avatar: typeof group.avatar === 'string'
+            ? group.avatar
+            : typeof group.avatarUrl === 'string'
+              ? group.avatarUrl
+              : typeof group.thumb === 'string'
+                ? group.thumb
+                : typeof group.avt === 'string'
+                  ? group.avt
+                  : undefined,
+          memberCount: typeof group.memberCount === 'number'
+            ? group.memberCount
+            : typeof group.totalMember === 'number'
+              ? group.totalMember
+              : Array.isArray(group.members) ? group.members.length : undefined,
+          members: this.normalizeGroupMembers(group.members ?? group.memVerList ?? group.memberIds),
+          lastSyncAt: new Date().toISOString(),
+        });
+      }
+
+      this.store.replaceGroups([...groupsById.values()].map(({ id: _id, ...group }) => group));
+      this.store.canonicalizeConversationData();
+      this.hydrateConversationsFromStore();
+      this.logger.info('group_metadata_enriched', { groupId, fetchedCount: groups.length });
+    } catch (error) {
+      this.logger.error('group_metadata_enrich_failed', {
+        groupId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async sendText(conversationId: string, text: string) {

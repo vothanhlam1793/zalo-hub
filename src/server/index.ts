@@ -10,6 +10,7 @@ import { mediaDir } from '../core/media-store.js';
 import { GoldRuntime } from '../core/runtime.js';
 import { GoldStore } from '../core/store.js';
 import type { GoldConversationMessage } from '../core/types.js';
+import { AccountRuntimeManager } from './account-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +18,9 @@ const clientDir = path.resolve(__dirname, 'client');
 const gold4ClientDir = path.resolve(__dirname, '../../dist/web');
 
 const logger = new GoldLogger();
-const runtime = new GoldRuntime(new GoldStore(), logger);
+const loginStore = new GoldStore();
+const loginRuntime = new GoldRuntime(loginStore, logger);
+const accountManager = new AccountRuntimeManager(logger);
 const app = express();
 const port = Number(process.env.GOLD2_PORT ?? 3399);
 const server = createServer(app);
@@ -25,7 +28,7 @@ const wsServer = new WebSocketServer({ server, path: '/ws' });
 
 let loginPromise: Promise<void> | undefined;
 
-const wsSubscriptions = new Map<WebSocket, string>();
+const wsSubscriptions = new Map<WebSocket, { accountId: string; conversationId: string }>();
 
 function broadcast(payload: Record<string, unknown>) {
   const body = JSON.stringify(payload);
@@ -38,14 +41,15 @@ function broadcast(payload: Record<string, unknown>) {
   }
 }
 
-function broadcastConversationMessage(message: GoldConversationMessage) {
-  const payload = JSON.stringify({ type: 'conversation_message', message });
+function broadcastConversationMessage(accountId: string, message: GoldConversationMessage) {
+  const payload = JSON.stringify({ type: 'conversation_message', accountId, message });
   for (const client of wsServer.clients) {
     if (client.readyState !== client.OPEN) {
       continue;
     }
 
-    if (wsSubscriptions.get(client) !== message.conversationId) {
+    const subscription = wsSubscriptions.get(client);
+    if (!subscription || subscription.accountId !== accountId || subscription.conversationId !== message.conversationId) {
       continue;
     }
 
@@ -53,23 +57,37 @@ function broadcastConversationMessage(message: GoldConversationMessage) {
   }
 }
 
-runtime.onConversationMessage((message) => {
-  broadcastConversationMessage(message);
-  broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
-  broadcast({ type: 'session_state', status: getStatus() });
+accountManager.onConversationMessage(({ accountId, message }) => {
+  broadcastConversationMessage(accountId, message);
+  const accountRuntime = accountManager.getRuntime(accountId);
+  if (!accountRuntime) {
+    return;
+  }
+  broadcast({ type: 'conversation_summaries', accountId, conversations: accountRuntime.getConversationSummaries() });
+  broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(accountRuntime) });
 });
 
 wsServer.on('connection', (socket: WebSocket) => {
   socket.send(JSON.stringify({ type: 'connected' }));
-  socket.send(JSON.stringify({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() }));
-  socket.send(JSON.stringify({ type: 'session_state', status: getStatus() }));
+  const primaryAccountId = accountManager.getPrimaryAccountId();
+  const primaryRuntime = accountManager.getPrimaryRuntime();
+  socket.send(JSON.stringify({
+    type: 'conversation_summaries',
+    accountId: primaryAccountId,
+    conversations: primaryRuntime?.getConversationSummaries() ?? [],
+  }));
+  socket.send(JSON.stringify({
+    type: 'session_state',
+    accountId: primaryAccountId,
+    status: primaryRuntime ? getStatusForRuntime(primaryRuntime) : getEmptyStatus(),
+  }));
 
   socket.on('message', (raw: string | Buffer) => {
     try {
-      const payload = JSON.parse(String(raw)) as { type?: string; conversationId?: string };
-      if (payload.type === 'subscribe' && payload.conversationId) {
-        wsSubscriptions.set(socket, String(payload.conversationId));
-        socket.send(JSON.stringify({ type: 'subscribed', conversationId: String(payload.conversationId) }));
+      const payload = JSON.parse(String(raw)) as { type?: string; conversationId?: string; accountId?: string };
+      if (payload.type === 'subscribe' && payload.conversationId && payload.accountId) {
+        wsSubscriptions.set(socket, { accountId: String(payload.accountId), conversationId: String(payload.conversationId) });
+        socket.send(JSON.stringify({ type: 'subscribed', accountId: String(payload.accountId), conversationId: String(payload.conversationId) }));
         return;
       }
 
@@ -111,22 +129,60 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
 
-function getStatus(loginInProgress = Boolean(loginPromise)) {
-  const account = runtime.getCurrentAccount();
+function getEmptyStatus(loginInProgress = false) {
   return {
-    hasCredential: runtime.hasCredential(),
-    sessionActive: runtime.isSessionActive(),
-    friendCacheCount: runtime.getFriendCache().length,
-    qrCodeAvailable: Boolean(runtime.getCurrentQrCode()),
-    account,
-    listener: runtime.getListenerState(),
+    hasCredential: false,
+    sessionActive: false,
+    friendCacheCount: 0,
+    qrCodeAvailable: false,
+    account: undefined,
+    listener: { connected: false, started: false },
     loginInProgress,
-    loggedIn: Boolean(runtime.hasCredential() || runtime.isSessionActive() || account?.userId || account?.displayName),
+    loggedIn: false,
   };
 }
 
+function getStatus(loginInProgress = Boolean(loginPromise)) {
+  const primaryRuntime = accountManager.getPrimaryRuntime();
+  if (!primaryRuntime) {
+    return getEmptyStatus(loginInProgress);
+  }
+  return getStatusForRuntime(primaryRuntime, loginInProgress);
+}
+
+function getStatusForRuntime(targetRuntime: GoldRuntime, loginInProgress = false) {
+  const account = targetRuntime.getCurrentAccount();
+  return {
+    hasCredential: targetRuntime.hasCredential(),
+    sessionActive: targetRuntime.isSessionActive(),
+    friendCacheCount: targetRuntime.getFriendCache().length,
+    qrCodeAvailable: Boolean(targetRuntime.getCurrentQrCode()),
+    account,
+    listener: targetRuntime.getListenerState(),
+    loginInProgress,
+    loggedIn: Boolean(targetRuntime.hasCredential() || targetRuntime.isSessionActive() || account?.userId || account?.displayName),
+  };
+}
+
+async function getRuntimeForAccount(accountId: string) {
+  const normalized = accountId.trim();
+  if (!normalized) {
+    throw new Error('accountId la bat buoc');
+  }
+  return accountManager.ensureRuntime(normalized);
+}
+
+async function getPrimaryRuntimeOrThrow() {
+  const primaryRuntime = await accountManager.ensurePrimaryRuntime();
+  if (!primaryRuntime) {
+    throw new Error('Chua co primary account de thao tac');
+  }
+  return primaryRuntime;
+}
+
 function requireActiveSession(res: express.Response) {
-  if (runtime.isSessionActive()) {
+  const primaryRuntime = accountManager.getPrimaryRuntime();
+  if (primaryRuntime?.isSessionActive()) {
     return true;
   }
 
@@ -140,32 +196,337 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/status', (_req, res) => {
   void (async () => {
-    if (!loginPromise && runtime.hasCredential() && !runtime.isSessionActive()) {
-      await runtime.loginWithStoredCredential().catch((error) => {
+    const primaryRuntime = await accountManager.ensurePrimaryRuntime().catch((error) => {
+      logger.error('primary_runtime_ensure_failed', error);
+      return undefined;
+    });
+
+    if (primaryRuntime?.hasCredential() && !primaryRuntime.isSessionActive()) {
+      await primaryRuntime.loginWithStoredCredential().catch((error) => {
         logger.error('gold2_status_reconnect_failed', error);
       });
     }
 
-    if (runtime.hasCredential() && !runtime.getCurrentAccount()) {
-      await runtime.fetchAccountInfo().catch((error) => {
+    if (primaryRuntime?.hasCredential() && !primaryRuntime.getCurrentAccount()) {
+      await primaryRuntime.fetchAccountInfo().catch((error) => {
         logger.error('gold2_status_account_fetch_failed', error);
       });
     }
 
-    res.json(getStatus());
+    res.json(primaryRuntime ? getStatusForRuntime(primaryRuntime, Boolean(loginPromise)) : getEmptyStatus(Boolean(loginPromise)));
+  })();
+});
+
+app.get('/api/accounts', (_req, res) => {
+  res.json({
+    accounts: accountManager.listAccountStatuses(),
+    activeAccountId: accountManager.getPrimaryAccountId(),
+  });
+});
+
+app.post('/api/accounts/activate', (req, res) => {
+  void (async () => {
+    const accountId = String(req.body?.accountId ?? '').trim();
+    if (!accountId) {
+      res.status(400).json({ error: 'accountId la bat buoc' });
+      return;
+    }
+
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session. Hay dang nhap lai bang QR.' });
+        return;
+      }
+      accountManager.activatePrimaryAccount(accountId);
+      broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
+      res.json({ ok: true, accountId, status: getStatusForRuntime(targetRuntime) });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Kich hoat account that bai' });
+    }
+  })();
+});
+
+app.get('/api/accounts/:accountId/status', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    if (!accountId) {
+      res.status(400).json({ error: 'accountId la bat buoc' });
+      return;
+    }
+
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (targetRuntime.hasCredential() && !targetRuntime.isSessionActive()) {
+        await targetRuntime.loginWithStoredCredential().catch((error) => {
+          logger.error('account_status_reconnect_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        });
+      }
+      if (targetRuntime.hasCredential() && !targetRuntime.getCurrentAccount()) {
+        await targetRuntime.fetchAccountInfo().catch((error) => {
+          logger.error('account_status_profile_fetch_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        });
+      }
+      res.json(getStatusForRuntime(targetRuntime));
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai status account that bai' });
+    }
+  })();
+});
+
+app.get('/api/accounts/:accountId/contacts', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      const refresh = req.query.refresh === '1';
+      const contacts = refresh || targetRuntime.getContactCache().length === 0
+        ? await targetRuntime.listFriends()
+        : targetRuntime.getContactCache();
+      res.json({ contacts, count: contacts.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai contacts that bai' });
+    }
+  })();
+});
+
+app.get('/api/accounts/:accountId/groups', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      const refresh = req.query.refresh === '1';
+      const groups = refresh || targetRuntime.getGroupCache().length === 0
+        ? await targetRuntime.listGroups().catch((error) => {
+            logger.error('account_groups_refresh_failed', {
+              accountId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            const fallbackGroups = targetRuntime.getGroupCache();
+            if (fallbackGroups.length > 0) {
+              return fallbackGroups;
+            }
+            throw error;
+          })
+        : targetRuntime.getGroupCache();
+      res.json({ groups, count: groups.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai groups that bai' });
+    }
+  })();
+});
+
+app.get('/api/accounts/:accountId/conversations', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      const conversations = targetRuntime.getConversationSummaries();
+      res.json({ conversations, count: conversations.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversations that bai' });
+    }
+  })();
+});
+
+app.get('/api/accounts/:accountId/conversations/:conversationId/messages', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    const conversationId = String(req.params.conversationId ?? '').trim();
+    const since = typeof req.query.since === 'string' ? req.query.since : undefined;
+    const before = typeof req.query.before === 'string' ? req.query.before : undefined;
+    const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      const messages = targetRuntime.getConversationMessages(conversationId, { since, before, limit });
+      const oldestTimestamp = messages[0]?.timestamp;
+      const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
+      res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversation that bai' });
+    }
+  })();
+});
+
+app.post('/api/accounts/:accountId/conversations/:conversationId/sync-metadata', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    const conversationId = String(req.params.conversationId ?? '').trim();
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      const result = await targetRuntime.syncConversationMetadata(conversationId);
+      broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Sync metadata that bai' });
+    }
+  })();
+});
+
+app.post('/api/accounts/:accountId/conversations/sync-history', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    const conversationId = String(req.body?.conversationId ?? '').trim();
+    const beforeMessageId = typeof req.body?.beforeMessageId === 'string' ? req.body.beforeMessageId.trim() : undefined;
+    const timeoutMs = typeof req.body?.timeoutMs === 'number' ? req.body.timeoutMs : undefined;
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      const result = await targetRuntime.syncConversationHistory(conversationId, { beforeMessageId, timeoutMs });
+      broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Sync history that bai' });
+    }
+  })();
+});
+
+app.post('/api/accounts/:accountId/send', (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    const conversationId = String(req.body?.conversationId ?? '').trim();
+    const text = String(req.body?.text ?? '').trim();
+    const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
+    const imageFileName = typeof req.body?.imageFileName === 'string' ? req.body.imageFileName.trim() : '';
+    const imageMimeType = typeof req.body?.imageMimeType === 'string' ? req.body.imageMimeType.trim() : '';
+
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      let result;
+      if (imageBase64) {
+        if (!imageFileName || !imageMimeType) {
+          res.status(400).json({ error: 'imageFileName va imageMimeType la bat buoc khi gui anh' });
+          return;
+        }
+        result = await targetRuntime.sendImage(conversationId, {
+          imageBuffer: Buffer.from(imageBase64, 'base64'),
+          fileName: imageFileName,
+          mimeType: imageMimeType,
+          caption: text || undefined,
+        });
+      } else {
+        if (!text) {
+          res.status(400).json({ error: 'Can co text hoac image de gui' });
+          return;
+        }
+        result = await targetRuntime.sendText(conversationId, text);
+      }
+      broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Gui tin that bai' });
+    }
+  })();
+});
+
+app.post('/api/accounts/:accountId/send-attachment', upload.single('file'), (req, res) => {
+  void (async () => {
+    const accountId = String(req.params.accountId ?? '').trim();
+    const conversationId = String(req.body?.conversationId ?? '').trim();
+    const caption = String(req.body?.caption ?? '').trim();
+
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: 'File la bat buoc' });
+      return;
+    }
+
+    try {
+      const targetRuntime = await getRuntimeForAccount(accountId);
+      if (!targetRuntime.isSessionActive()) {
+        res.status(401).json({ error: 'Account chua active session' });
+        return;
+      }
+      const result = await targetRuntime.sendAttachment(conversationId, {
+        fileBuffer: req.file.buffer,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        caption: caption || undefined,
+      });
+      broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
+    }
   })();
 });
 
 app.post('/api/login/start', (_req, res) => {
   if (!loginPromise) {
     logger.info('gold2_login_start_requested');
-    loginPromise = runtime
+    loginPromise = loginRuntime
       .loginByQr({
         onQr(qrCode) {
           logger.info('gold2_qr_ready', { qrLength: qrCode.length });
         },
       })
-      .then(() => {
+      .then(async () => {
+        const accountId = loginRuntime.getCurrentAccount()?.userId;
+        if (accountId) {
+          accountManager.activatePrimaryAccount(accountId);
+          await accountManager.ensureRuntime(accountId).catch((error) => {
+            logger.error('gold2_account_runtime_start_failed_after_qr', {
+              accountId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
         logger.info('gold2_login_completed');
       })
       .catch((error) => {
@@ -177,11 +538,11 @@ app.post('/api/login/start', (_req, res) => {
       });
   }
 
-  res.json({ started: true, qrCodeAvailable: Boolean(runtime.getCurrentQrCode()) });
+  res.json({ started: true, qrCodeAvailable: Boolean(loginRuntime.getCurrentQrCode()) });
 });
 
 app.get('/api/login/qr', (_req, res) => {
-  const qrCode = runtime.getCurrentQrCode();
+  const qrCode = loginRuntime.getCurrentQrCode();
   if (!qrCode) {
     res.status(404).json({ error: 'QR chua san sang' });
     return;
@@ -191,7 +552,7 @@ app.get('/api/login/qr', (_req, res) => {
 });
 
 app.post('/api/logout', (_req, res) => {
-  const result = runtime.logout();
+  const result = loginRuntime.logout();
   logger.info('gold2_logout_completed');
   res.json(result);
 });
@@ -203,12 +564,14 @@ app.get('/api/friends', (req, res) => {
         return;
       }
 
+       const primaryRuntime = await getPrimaryRuntimeOrThrow();
+
       const refresh = req.query.refresh === '1';
-      const friends = refresh || runtime.getContactCache().length === 0
-        ? await runtime.listFriends()
-        : runtime.getContactCache();
-      if (!runtime.getCurrentAccount()) {
-        await runtime.fetchAccountInfo().catch((error) => {
+      const friends = refresh || primaryRuntime.getContactCache().length === 0
+        ? await primaryRuntime.listFriends()
+        : primaryRuntime.getContactCache();
+      if (!primaryRuntime.getCurrentAccount()) {
+        await primaryRuntime.fetchAccountInfo().catch((error) => {
           logger.error('gold2_friends_account_fetch_failed', error);
         });
       }
@@ -226,10 +589,12 @@ app.get('/api/contacts', (req, res) => {
         return;
       }
 
+      const primaryRuntime = await getPrimaryRuntimeOrThrow();
+
       const refresh = req.query.refresh === '1';
-      const contacts = refresh || runtime.getContactCache().length === 0
-        ? await runtime.listFriends()
-        : runtime.getContactCache();
+      const contacts = refresh || primaryRuntime.getContactCache().length === 0
+        ? await primaryRuntime.listFriends()
+        : primaryRuntime.getContactCache();
       res.json({ contacts, count: contacts.length });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Tai contacts that bai' });
@@ -244,10 +609,12 @@ app.get('/api/groups', (req, res) => {
         return;
       }
 
+      const primaryRuntime = await getPrimaryRuntimeOrThrow();
+
       const refresh = req.query.refresh === '1';
-      const groups = refresh || runtime.getGroupCache().length === 0
-        ? await runtime.listGroups()
-        : runtime.getGroupCache();
+      const groups = refresh || primaryRuntime.getGroupCache().length === 0
+        ? await primaryRuntime.listGroups()
+        : primaryRuntime.getGroupCache();
       res.json({ groups, count: groups.length });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Tai groups that bai' });
@@ -271,13 +638,72 @@ app.get('/api/conversations/:conversationId/messages', (req, res) => {
   }
 
   try {
-    const messages = runtime.getConversationMessages(conversationId, { since, before, limit });
+    const primaryRuntime = accountManager.getPrimaryRuntime();
+    if (!primaryRuntime) {
+      res.status(401).json({ error: 'Phien dang nhap khong con active. Hay dang nhap lai.' });
+      return;
+    }
+    const messages = primaryRuntime.getConversationMessages(conversationId, { since, before, limit });
     const oldestTimestamp = messages[0]?.timestamp;
+    const oldestProviderMessageId = messages[0]?.providerMessageId;
     const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
     res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversation that bai' });
   }
+});
+
+app.post('/api/conversations/:conversationId/sync-metadata', (req, res) => {
+  void (async () => {
+    if (!requireActiveSession(res)) {
+      return;
+    }
+
+    const conversationId = String(req.params.conversationId ?? '').trim();
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+
+    try {
+      const primaryRuntime = await getPrimaryRuntimeOrThrow();
+      const primaryAccountId = accountManager.getPrimaryAccountId();
+      const result = await primaryRuntime.syncConversationMetadata(conversationId);
+      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Sync metadata that bai' });
+    }
+  })();
+});
+
+app.post('/api/conversations/sync-history', (req, res) => {
+  void (async () => {
+    if (!requireActiveSession(res)) {
+      return;
+    }
+
+    const conversationId = String(req.body?.conversationId ?? '').trim();
+    const beforeMessageId = typeof req.body?.beforeMessageId === 'string' ? req.body.beforeMessageId.trim() : undefined;
+    const timeoutMs = typeof req.body?.timeoutMs === 'number' ? req.body.timeoutMs : undefined;
+
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
+      return;
+    }
+
+    try {
+      const primaryRuntime = await getPrimaryRuntimeOrThrow();
+      const primaryAccountId = accountManager.getPrimaryAccountId();
+      const result = await primaryRuntime.syncConversationHistory(conversationId, { beforeMessageId, timeoutMs });
+      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Sync history that bai' });
+    }
+  })();
 });
 
 app.get('/api/conversations', (_req, res) => {
@@ -286,7 +712,12 @@ app.get('/api/conversations', (_req, res) => {
   }
 
   try {
-    const conversations = runtime.getConversationSummaries();
+    const primaryRuntime = accountManager.getPrimaryRuntime();
+    if (!primaryRuntime) {
+      res.status(401).json({ error: 'Phien dang nhap khong con active. Hay dang nhap lai.' });
+      return;
+    }
+    const conversations = primaryRuntime.getConversationSummaries();
     res.json({ conversations, count: conversations.length });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversations that bai' });
@@ -320,6 +751,8 @@ app.post('/api/send', (req, res) => {
     }
 
     try {
+      const primaryRuntime = await getPrimaryRuntimeOrThrow();
+      const primaryAccountId = accountManager.getPrimaryAccountId();
       let result;
       if (imageBase64) {
         if (!imageFileName || !imageMimeType) {
@@ -328,7 +761,7 @@ app.post('/api/send', (req, res) => {
         }
 
         const imageBuffer = Buffer.from(imageBase64, 'base64');
-        result = await runtime.sendImage(conversationId, {
+        result = await primaryRuntime.sendImage(conversationId, {
           imageBuffer,
           fileName: imageFileName,
           mimeType: imageMimeType,
@@ -340,11 +773,11 @@ app.post('/api/send', (req, res) => {
           return;
         }
 
-        result = await runtime.sendText(conversationId, text);
+        result = await primaryRuntime.sendText(conversationId, text);
       }
 
-      broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
-      broadcast({ type: 'session_state', status: getStatus() });
+      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Gui tin that bai' });
@@ -377,15 +810,17 @@ app.post('/api/send-attachment', upload.single('file'), (req, res) => {
     });
 
     try {
-      const result = await runtime.sendAttachment(conversationId, {
+      const primaryRuntime = await getPrimaryRuntimeOrThrow();
+      const primaryAccountId = accountManager.getPrimaryAccountId();
+      const result = await primaryRuntime.sendAttachment(conversationId, {
         fileBuffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
         caption: caption || undefined,
       });
 
-      broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
-      broadcast({ type: 'session_state', status: getStatus() });
+      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: primaryAccountId, status: getStatusForRuntime(primaryRuntime) });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
@@ -398,8 +833,10 @@ app.post('/api/media/backfill', (_req, res) => {
     if (!requireActiveSession(res)) return;
 
     try {
-      const result = await runtime.backfillMediaForStoredMessages();
-      broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
+      const primaryRuntime = await getPrimaryRuntimeOrThrow();
+      const primaryAccountId = accountManager.getPrimaryAccountId();
+      const result = await primaryRuntime.backfillMediaForStoredMessages();
+      broadcast({ type: 'conversation_summaries', accountId: primaryAccountId, conversations: primaryRuntime.getConversationSummaries() });
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Backfill media that bai' });
@@ -420,4 +857,5 @@ app.get('*', (_req, res) => {
 
 server.listen(port, () => {
   console.log(`gold-2-web running at http://localhost:${port}`);
+  void accountManager.warmStartAllAccounts();
 });

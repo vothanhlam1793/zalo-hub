@@ -30,8 +30,23 @@ export interface Message {
   timestamp: string;
   senderId?: string;
   senderName?: string;
+  providerMessageId?: string;
   imageUrl?: string; // legacy
   rawMessageJson?: string;
+}
+
+export interface HistorySyncResult {
+  conversationId: string;
+  threadId: string;
+  type: ConversationType;
+  requestedBeforeMessageId?: string;
+  remoteCount: number;
+  insertedCount: number;
+  dedupedCount: number;
+  oldestTimestamp?: string;
+  oldestProviderMessageId?: string;
+  hasMore: boolean;
+  timedOut?: boolean;
 }
 
 export interface ConversationSummary {
@@ -51,6 +66,10 @@ export interface Contact {
   id: string;
   userId: string;
   displayName: string;
+  zaloName?: string;
+  zaloAlias?: string;
+  hubAlias?: string;
+  phoneNumber?: string;
   avatar?: string;
 }
 
@@ -62,6 +81,16 @@ export interface Group {
   memberCount?: number;
 }
 
+export interface AccountSummary {
+  accountId: string;
+  displayName?: string;
+  phoneNumber?: string;
+  isActive?: boolean;
+  hasCredential?: boolean;
+  runtimeLoaded?: boolean;
+  sessionActive?: boolean;
+}
+
 export interface SessionStatus {
   hasCredential: boolean;
   sessionActive: boolean;
@@ -71,4 +100,19 @@ export interface SessionStatus {
   qrCodeAvailable: boolean;
   account?: { userId?: string; displayName?: string; phoneNumber?: string };
   listener?: { connected: boolean; started: boolean; lastError?: string };
+}
+
+export interface WsConversationSummariesPayload {
+  accountId?: string;
+  conversations: ConversationSummary[];
+}
+
+export interface WsSessionStatusPayload {
+  accountId?: string;
+  status: SessionStatus;
+}
+
+export interface WsConversationMessagePayload {
+  accountId: string;
+  message: Message;
 }
