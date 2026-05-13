@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   root: '.',
   build: {
-    outDir: '../../dist/gold-4-web',
+    outDir: '../../dist/web',
     emptyOutDir: true,
   },
   server: {

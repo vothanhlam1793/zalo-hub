@@ -7,8 +7,19 @@ import jsQRModule from 'jsqr';
 import { PNG } from 'pngjs';
 import QRCode from 'qrcode';
 import { GoldLogger } from './logger.js';
+import { GoldMediaStore } from './media-store.js';
 import { GoldStore } from './store.js';
-import type { GoldAttachment, GoldConversationMessage, GoldConversationSummary, GoldMessageKind, GoldStoredCredential } from './types.js';
+import type {
+  GoldAttachment,
+  GoldContactRecord,
+  GoldConversationMessage,
+  GoldConversationSummary,
+  GoldConversationType,
+  GoldGroupMemberRecord,
+  GoldGroupRecord,
+  GoldMessageKind,
+  GoldStoredCredential,
+} from './types.js';
 
 const jsQR = jsQRModule as unknown as (
   data: Uint8ClampedArray,
@@ -16,7 +27,10 @@ const jsQR = jsQRModule as unknown as (
   height: number,
 ) => { data: string } | null;
 
-const { Zalo } = ZaloApi as { Zalo: new (options?: Record<string, unknown>) => any };
+const { Zalo, ThreadType } = ZaloApi as {
+  Zalo: new (options?: Record<string, unknown>) => any;
+  ThreadType: { User: number; Group: number };
+};
 
 type CookieShape = {
   key?: string;
@@ -106,7 +120,8 @@ function normalizeMessageKind(data: Record<string, unknown>): GoldMessageKind {
     msgType === 'chat.file' ||
     msgType === 'chat.doc' ||
     msgType === 'chat.voice' ||
-    msgType === 'chat.gif'
+    msgType === 'chat.gif' ||
+    msgType === 'share.file'
   ) return 'file';
   return 'text';
 }
@@ -140,7 +155,7 @@ function normalizeAttachments(data: Record<string, unknown>): GoldAttachment[] {
     }];
   }
 
-  if (msgType === 'chat.file' || msgType === 'chat.doc' || msgType === 'chat.voice' || msgType === 'chat.gif') {
+  if (msgType === 'chat.file' || msgType === 'chat.doc' || msgType === 'chat.voice' || msgType === 'chat.gif' || msgType === 'share.file') {
     const url = typeof contentObj?.href === 'string' ? contentObj.href.trim() : undefined;
     const fileName = typeof contentObj?.title === 'string' ? contentObj.title.trim()
       : typeof contentObj?.fileName === 'string' ? contentObj.fileName.trim() : undefined;
@@ -156,6 +171,30 @@ function normalizeAttachments(data: Record<string, unknown>): GoldAttachment[] {
   }
 
   return [];
+}
+
+function mergeAttachmentMetadata(existing: GoldAttachment | undefined, normalized: GoldAttachment, fallbackKind: GoldMessageKind) {
+  const inferredType = normalized.type === 'text' ? fallbackKind : normalized.type;
+  return {
+    ...existing,
+    ...normalized,
+    type: inferredType,
+    fileName: normalized.fileName ?? existing?.fileName,
+    mimeType: normalized.mimeType ?? existing?.mimeType,
+    size: normalized.size ?? existing?.size,
+    width: normalized.width ?? existing?.width,
+    height: normalized.height ?? existing?.height,
+    duration: normalized.duration ?? existing?.duration,
+  } satisfies GoldAttachment;
+}
+
+function localMediaUrlNeedsRepair(url?: string) {
+  if (!url?.startsWith('/media/')) {
+    return false;
+  }
+
+  const fileName = url.split('/').pop() ?? '';
+  return !/\.[a-zA-Z0-9]{2,8}$/.test(fileName);
 }
 
 // legacy compat - chỉ dùng để backward compat với gold-3
@@ -239,6 +278,60 @@ function normalizeFriendList(response: unknown) {
   }
 
   return [];
+}
+
+function normalizeGroupList(response: unknown) {
+  if (Array.isArray(response)) {
+    return response;
+  }
+
+  if (response && typeof response === 'object') {
+    const candidateKeys = ['groups', 'items', 'data', 'results', 'conversations'];
+    for (const key of candidateKeys) {
+      const value = (response as Record<string, unknown>)[key];
+      if (Array.isArray(value)) {
+        return value;
+      }
+
+      if (value && typeof value === 'object') {
+        for (const nestedKey of candidateKeys) {
+          const nestedValue = (value as Record<string, unknown>)[nestedKey];
+          if (Array.isArray(nestedValue)) {
+            return nestedValue;
+          }
+        }
+      }
+    }
+  }
+
+  return [];
+}
+
+function normalizeGroupInfoMap(response: unknown) {
+  if (!response || typeof response !== 'object') {
+    return [];
+  }
+
+  const candidateKeys = ['gridInfoMap', 'groupInfoMap', 'groups', 'data'];
+  for (const key of candidateKeys) {
+    const value = (response as Record<string, unknown>)[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.entries(value as Record<string, unknown>).map(([groupId, group]) => ({
+        groupId,
+        ...(group && typeof group === 'object' ? group as Record<string, unknown> : {}),
+      }));
+    }
+  }
+
+  return [];
+}
+
+function getConversationTypeFromThreadId(threadId: string, knownGroupIds: Set<string>): GoldConversationType {
+  return knownGroupIds.has(threadId) ? 'group' : 'direct';
+}
+
+function getConversationId(threadId: string, type: GoldConversationType) {
+  return `${type}:${threadId}`;
 }
 
 function prepareCookiesForChatSession(rawCookie: string) {
@@ -340,6 +433,7 @@ export class GoldRuntime {
   private listenerStarted = false;
   private listenerAttached = false;
   private readonly conversationListeners = new Set<ConversationListener>();
+  private readonly mediaStore = new GoldMediaStore();
   private listenerState: ListenerState = {
     attached: false,
     started: false,
@@ -359,12 +453,12 @@ export class GoldRuntime {
     this.seenMessageKeys.clear();
 
     for (const summary of this.store.listConversationSummaries()) {
-      const messages = this.store.listConversationMessages(summary.friendId);
-      this.conversations.set(summary.friendId, messages);
+      const messages = this.store.listConversationMessages(summary.id);
+      this.conversations.set(summary.id, messages);
       for (const message of messages) {
         this.seenMessageKeys.add(
           this.buildMessageKey(
-            message.friendId,
+            message.conversationId,
             message.text,
             message.timestamp,
             message.direction,
@@ -413,25 +507,120 @@ export class GoldRuntime {
         phoneNumber: this.currentAccount.phoneNumber,
       });
       this.hydrateConversationsFromStore();
+      void this.backfillMediaForStoredMessages();
     }
     this.logger.info('login_with_credential_succeeded');
     return this.session;
   }
 
   private buildMessageKey(
-    friendId: string,
+    conversationId: string,
     text: string,
     timestamp: string,
     direction: 'incoming' | 'outgoing',
     kind = 'text',
     imageUrl = '',
   ) {
-    return `${friendId}::${direction}::${kind}::${timestamp}::${text}::${imageUrl}`;
+    return `${conversationId}::${direction}::${kind}::${timestamp}::${text}::${imageUrl}`;
+  }
+
+  private getActiveAccountId() {
+    return this.currentAccount?.userId ?? this.store.getCurrentAccountId();
+  }
+
+  private async persistAttachmentLocally(messageId: string, attachment: GoldAttachment) {
+    if (!attachment.url && !attachment.sourceUrl) {
+      return attachment;
+    }
+
+    const remoteSourceUrl = attachment.sourceUrl ?? attachment.url;
+    const localUrlNeedsRepair = localMediaUrlNeedsRepair(attachment.url);
+
+    if (attachment.url?.startsWith('/media/') && !localUrlNeedsRepair) {
+      return attachment;
+    }
+
+    try {
+      const mirrored = await this.mediaStore.mirrorRemoteUrl({
+        accountId: this.getActiveAccountId(),
+        messageId,
+        sourceUrl: remoteSourceUrl as string,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+      });
+
+      return {
+        ...attachment,
+        url: mirrored.publicUrl,
+        sourceUrl: remoteSourceUrl,
+        localPath: mirrored.localPath,
+      } satisfies GoldAttachment;
+    } catch (error) {
+      this.logger.error('mirror_remote_attachment_failed', {
+        messageId,
+        url: remoteSourceUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        ...attachment,
+        sourceUrl: remoteSourceUrl,
+      } satisfies GoldAttachment;
+    }
+  }
+
+  private async persistMessageAttachmentsLocally(message: GoldConversationMessage) {
+    if (!message.attachments.length) {
+      return message;
+    }
+
+    const attachments = await Promise.all(message.attachments.map((attachment) => this.persistAttachmentLocally(message.id, attachment)));
+    const imageAttachment = attachments.find((attachment) => attachment.type === 'image' && attachment.url);
+    return {
+      ...message,
+      attachments,
+      imageUrl: imageAttachment?.url ?? message.imageUrl,
+    } satisfies GoldConversationMessage;
+  }
+
+  private repairMessageFromRawPayload(message: GoldConversationMessage) {
+    if (!message.rawMessageJson) {
+      return message;
+    }
+
+    try {
+      const raw = JSON.parse(message.rawMessageJson) as Record<string, unknown>;
+      const normalizedKind = normalizeMessageKind(raw);
+      const normalizedText = normalizeMessageText(raw);
+      const normalizedAttachments = normalizeAttachments(raw);
+      const normalizedImageUrl = normalizeImageUrl(raw);
+
+      if (normalizedAttachments.length === 0 && normalizedKind === 'text' && !normalizedImageUrl) {
+        return message;
+      }
+
+      const nextAttachments = normalizedAttachments.length > 0
+        ? normalizedAttachments.map((attachment, index) => mergeAttachmentMetadata(message.attachments[index], attachment, normalizedKind))
+        : message.attachments;
+
+      return {
+        ...message,
+        text: normalizedText || message.text,
+        kind: normalizedKind !== 'text' || nextAttachments.length > 0 ? normalizedKind : message.kind,
+        attachments: nextAttachments,
+        imageUrl: normalizedImageUrl ?? nextAttachments.find((attachment) => attachment.type === 'image')?.url ?? message.imageUrl,
+      } satisfies GoldConversationMessage;
+    } catch (error) {
+      this.logger.error('repair_message_from_raw_payload_failed', {
+        messageId: message.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return message;
+    }
   }
 
   private appendConversationMessage(message: GoldConversationMessage) {
     const key = this.buildMessageKey(
-      message.friendId,
+      message.conversationId,
       message.text,
       message.timestamp,
       message.direction,
@@ -442,7 +631,7 @@ export class GoldRuntime {
       return false;
     }
 
-    const existing = this.conversations.get(message.friendId) ?? [];
+    const existing = this.conversations.get(message.conversationId) ?? [];
     const messageTime = Date.parse(message.timestamp);
     const looksDuplicated = existing.some((item) => {
       if (
@@ -470,8 +659,8 @@ export class GoldRuntime {
     this.seenMessageKeys.add(key);
     existing.push(message);
     existing.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
-    this.conversations.set(message.friendId, existing);
-    this.store.replaceConversationMessages(message.friendId, existing);
+    this.conversations.set(message.conversationId, existing);
+    this.store.replaceConversationMessages(message.conversationId, existing);
     for (const listener of this.conversationListeners) {
       listener(message);
     }
@@ -497,7 +686,7 @@ export class GoldRuntime {
         this.logger.info('message_listener_cipher_key_received');
       });
       listener.on('message', (message: ListenerMessage) => {
-        this.handleIncomingListenerMessage(message);
+        void this.handleIncomingListenerMessage(message);
       });
       listener.on('error', (error: unknown) => {
         this.listenerState.connected = false;
@@ -531,24 +720,26 @@ export class GoldRuntime {
     this.logger.info('message_listener_started', { startAttempts: this.listenerState.startAttempts });
   }
 
-  private handleIncomingListenerMessage(message: ListenerMessage) {
+  private async handleIncomingListenerMessage(message: ListenerMessage) {
     if (message?.type !== 0 && message?.type !== undefined) {
-      this.logger.info('conversation_listener_message_skipped_non_user', {
+      this.logger.info('conversation_listener_message_non_zero_type', {
         type: message?.type,
         threadId: message?.threadId,
       });
-      return;
     }
 
-    const friendId = String(message.threadId ?? '').trim();
+    const threadId = String(message.threadId ?? '').trim();
+    const knownGroupIds = new Set(this.store.listGroups().map((group) => group.groupId));
+    const conversationType = getConversationTypeFromThreadId(threadId, knownGroupIds);
+    const conversationId = getConversationId(threadId, conversationType);
     const data = message.data ?? {};
     const text = normalizeMessageText(data);
     const kind = normalizeMessageKind(data);
     const attachments = normalizeAttachments(data);
     const imageUrl = normalizeImageUrl(data); // legacy compat
 
-    this.logger.info('conversation_listener_message_received', {
-      threadId: friendId,
+      this.logger.info('conversation_listener_message_received', {
+      threadId,
       isSelf: Boolean(message.isSelf),
       textLength: text.length,
       kind,
@@ -558,10 +749,10 @@ export class GoldRuntime {
     this.listenerState.lastEventAt = new Date().toISOString();
     this.listenerState.lastMessageAt = this.listenerState.lastEventAt;
 
-    if (!friendId || (!text && attachments.length === 0)) {
+    if (!threadId || (!text && attachments.length === 0)) {
       this.logger.error('conversation_listener_message_ignored', {
-        reason: !friendId ? 'missing_thread_id' : 'missing_content',
-        threadId: friendId,
+        reason: !threadId ? 'missing_thread_id' : 'missing_content',
+        threadId,
         isSelf: Boolean(message.isSelf),
         kind,
         summary: summarizeListenerData(data),
@@ -571,20 +762,30 @@ export class GoldRuntime {
 
     const normalizedMessage: GoldConversationMessage = {
       id: String(data.msgId ?? data.cliMsgId ?? randomUUID()),
-      friendId,
+      providerMessageId: String(data.msgId ?? data.cliMsgId ?? randomUUID()),
+      conversationId,
+      threadId,
+      conversationType,
       text: text || (kind !== 'text' ? `[${kind}]` : ''),
       kind,
       attachments,
       imageUrl, // legacy compat
       direction: message.isSelf ? 'outgoing' : 'incoming',
       isSelf: Boolean(message.isSelf),
+      senderId: typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined,
+      senderName: conversationType === 'group'
+        ? this.resolveGroupSenderName(threadId, typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined)
+        : undefined,
       timestamp: normalizeMessageTimestamp(data),
+      rawMessageJson: JSON.stringify(data),
     };
 
-    if (this.appendConversationMessage(normalizedMessage)) {
-      this.logger.info('conversation_message_captured', {
-        friendId,
-        direction: normalizedMessage.direction,
+    const persistedMessage = await this.persistMessageAttachmentsLocally(normalizedMessage);
+
+    if (this.appendConversationMessage(persistedMessage)) {
+        this.logger.info('conversation_message_captured', {
+        conversationId,
+        direction: persistedMessage.direction,
         kind,
         textLength: text.length,
       });
@@ -592,7 +793,7 @@ export class GoldRuntime {
     }
 
     this.logger.info('conversation_message_deduped', {
-      friendId,
+      conversationId,
       direction: normalizedMessage.direction,
       kind,
       textLength: text.length,
@@ -726,11 +927,23 @@ export class GoldRuntime {
   }
 
   getFriendCache() {
-    return this.store.listFriends();
+    return this.store.listContacts();
   }
 
-  getConversationMessages(friendId: string, since?: string) {
-    const messages = this.conversations.get(friendId) ?? this.store.listConversationMessages(friendId);
+  getContactCache() {
+    return this.store.listContacts();
+  }
+
+  getGroupCache() {
+    return this.store.listGroups();
+  }
+
+  getConversationMessages(conversationId: string, options: { since?: string; before?: string; limit?: number } = {}) {
+    const { since, before, limit } = options;
+    const messages = before || limit
+      ? this.store.listConversationMessages(conversationId, { before, limit })
+      : (this.conversations.get(conversationId) ?? this.store.listConversationMessages(conversationId));
+
     if (!since) {
       return [...messages];
     }
@@ -743,28 +956,7 @@ export class GoldRuntime {
       return this.store.listConversationSummaries();
     }
 
-    const friendNameByUserId = new Map(this.getFriendCache().map((friend) => [friend.userId, friend.displayName]));
-    const summaries: GoldConversationSummary[] = [];
-
-    for (const [friendId, messages] of this.conversations.entries()) {
-      const lastMessage = messages[messages.length - 1];
-      if (!lastMessage) {
-        continue;
-      }
-
-      summaries.push({
-        friendId,
-        displayName: friendNameByUserId.get(friendId),
-        lastMessageText: lastMessage.text,
-        lastMessageKind: lastMessage.kind ?? 'text',
-        lastMessageTimestamp: lastMessage.timestamp,
-        lastDirection: lastMessage.direction,
-        messageCount: messages.length,
-      });
-    }
-
-    summaries.sort((left, right) => right.lastMessageTimestamp.localeCompare(left.lastMessageTimestamp));
-    return summaries;
+    return this.store.listConversationSummaries();
   }
 
   onConversationMessage(listener: ConversationListener) {
@@ -776,6 +968,52 @@ export class GoldRuntime {
 
   getListenerState() {
     return { ...this.listenerState };
+  }
+
+  async backfillMediaForStoredMessages() {
+    let updatedMessages = 0;
+    let repairedMessages = 0;
+    for (const summary of this.store.listConversationSummaries()) {
+      const messages = this.store.listConversationMessages(summary.id);
+      let changed = false;
+      const nextMessages: GoldConversationMessage[] = [];
+      for (const message of messages) {
+        const repaired = this.repairMessageFromRawPayload(message);
+        const needsBackfill = repaired.attachments.some((attachment) =>
+          Boolean((attachment.sourceUrl || attachment.url) && (!attachment.url || !attachment.url.startsWith('/media/') || localMediaUrlNeedsRepair(attachment.url))),
+        );
+        const persisted = needsBackfill ? await this.persistMessageAttachmentsLocally(repaired) : repaired;
+        nextMessages.push(persisted);
+
+        const metadataChanged =
+          repaired.kind !== message.kind ||
+          repaired.text !== message.text ||
+          JSON.stringify(repaired.attachments) !== JSON.stringify(message.attachments) ||
+          repaired.imageUrl !== message.imageUrl;
+        const mediaChanged =
+          JSON.stringify(persisted.attachments) !== JSON.stringify(message.attachments) ||
+          persisted.imageUrl !== message.imageUrl;
+
+        if (metadataChanged || mediaChanged) {
+          changed = true;
+          updatedMessages += 1;
+          if (metadataChanged) {
+            repairedMessages += 1;
+          }
+        }
+      }
+
+      if (changed) {
+        this.store.replaceConversationMessages(summary.id, nextMessages);
+        this.conversations.set(summary.id, nextMessages);
+      }
+    }
+
+    if (updatedMessages > 0) {
+      this.logger.info('media_backfill_completed', { updatedMessages, repairedMessages });
+    }
+
+    return { updatedMessages, repairedMessages };
   }
 
   async pingSession() {
@@ -910,12 +1148,79 @@ export class GoldRuntime {
     }));
 
     this.logger.info('friends_normalized', { count: friends.length });
-    return this.store.replaceFriends(friends);
+    return this.store.replaceContacts(friends);
   }
 
-  async sendText(friendId: string, text: string) {
-    if (!friendId || !text) {
-      throw new Error('friendId va text la bat buoc');
+  async listGroups() {
+    if (!this.session) {
+      await this.loginWithStoredCredential();
+    }
+
+    if (typeof this.session?.api?.getAllGroups !== 'function') {
+      throw new Error('Session hien tai khong ho tro getAllGroups');
+    }
+
+    const response = await this.session.api.getAllGroups();
+    this.logger.info('groups_raw_response_received', {
+      responseType: Array.isArray(response) ? 'array' : typeof response,
+      keys: response && typeof response === 'object' && !Array.isArray(response) ? Object.keys(response as Record<string, unknown>) : [],
+      sample: response,
+    });
+    let groups = normalizeGroupList(response);
+
+    if (groups.length === 0 && response && typeof response === 'object') {
+      const gridVerMap = (response as Record<string, unknown>).gridVerMap;
+      const groupIds = gridVerMap && typeof gridVerMap === 'object'
+        ? Object.keys(gridVerMap as Record<string, unknown>)
+        : [];
+
+      if (groupIds.length > 0 && typeof this.session?.api?.getGroupInfo === 'function') {
+        const infoResponse = await this.session.api.getGroupInfo(groupIds);
+        this.logger.info('groups_info_response_received', {
+          responseType: Array.isArray(infoResponse) ? 'array' : typeof infoResponse,
+          keys: infoResponse && typeof infoResponse === 'object' && !Array.isArray(infoResponse) ? Object.keys(infoResponse as Record<string, unknown>) : [],
+          sample: infoResponse,
+        });
+        groups = normalizeGroupInfoMap(infoResponse);
+      }
+    }
+
+    const normalizedGroups: Omit<GoldGroupRecord, 'id'>[] = groups.map((group: any) => {
+      const groupId = String(group.groupId ?? group.grid ?? group.id ?? group.group_id);
+      const displayName = String(group.displayName ?? group.name ?? group.subject ?? group.groupName ?? groupId);
+      const avatar = typeof group.avatar === 'string'
+        ? group.avatar
+        : typeof group.avatarUrl === 'string'
+          ? group.avatarUrl
+          : typeof group.thumb === 'string'
+            ? group.thumb
+            : typeof group.avt === 'string'
+              ? group.avt
+            : undefined;
+      const members = this.normalizeGroupMembers(group.members ?? group.memVerList ?? group.memberIds);
+      const memberCount = typeof group.memberCount === 'number'
+        ? group.memberCount
+        : typeof group.totalMember === 'number'
+          ? group.totalMember
+        : members?.length;
+
+      return {
+        groupId,
+        displayName,
+        avatar,
+        memberCount,
+        members,
+        lastSyncAt: new Date().toISOString(),
+      };
+    });
+
+    this.logger.info('groups_normalized', { count: normalizedGroups.length });
+    return this.store.replaceGroups(normalizedGroups);
+  }
+
+  async sendText(conversationId: string, text: string) {
+    if (!conversationId || !text) {
+      throw new Error('conversationId va text la bat buoc');
     }
 
     if (!this.session) {
@@ -923,14 +1228,22 @@ export class GoldRuntime {
     }
 
     const api = this.session?.api;
-    this.logger.info('send_text_started', { friendId, text });
+    const target = this.resolveConversationTarget(conversationId);
+    this.logger.info('send_text_started', { conversationId, threadId: target.threadId, type: target.type, text });
 
     if (typeof api?.sendMessage === 'function') {
       try {
-        const result = await api.sendMessage({ msg: text }, friendId);
+        const result = await api.sendMessage(
+          { msg: text },
+          target.threadId,
+          target.type === 'group' ? ThreadType.Group : ThreadType.User,
+        );
         this.appendConversationMessage({
           id: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
-          friendId,
+          providerMessageId: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
+          conversationId,
+          threadId: target.threadId,
+          conversationType: target.type,
           text,
           kind: 'text',
           attachments: [],
@@ -938,20 +1251,23 @@ export class GoldRuntime {
           isSelf: true,
           timestamp: new Date().toISOString(),
         });
-        this.logger.info('send_text_succeeded', { method: 'sendMessage', friendId, result });
+        this.logger.info('send_text_succeeded', { method: 'sendMessage', conversationId, result });
         return { method: 'sendMessage', result };
       } catch (error) {
-        this.logger.error('send_method_failed', { method: 'sendMessage', friendId, error });
+        this.logger.error('send_method_failed', { method: 'sendMessage', conversationId, error });
         console.error('[gold-1] send method sendMessage failed', error);
       }
     }
 
     if (typeof api?.sendMsg === 'function') {
       try {
-        const result = await api.sendMsg({ msg: text }, friendId);
+        const result = await api.sendMsg({ msg: text }, target.threadId);
         this.appendConversationMessage({
           id: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
-          friendId,
+          providerMessageId: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
+          conversationId,
+          threadId: target.threadId,
+          conversationType: target.type,
           text,
           kind: 'text',
           attachments: [],
@@ -959,28 +1275,28 @@ export class GoldRuntime {
           isSelf: true,
           timestamp: new Date().toISOString(),
         });
-        this.logger.info('send_text_succeeded', { method: 'sendMsg', friendId, result });
-        return { method: 'sendMsg', friendId, result };
+        this.logger.info('send_text_succeeded', { method: 'sendMsg', conversationId, result });
+        return { method: 'sendMsg', conversationId, result };
       } catch (error) {
-        this.logger.error('send_method_failed', { method: 'sendMsg', friendId, error });
+        this.logger.error('send_method_failed', { method: 'sendMsg', conversationId, error });
         console.error('[gold-1] send method sendMsg failed', error);
       }
     }
 
     const apiKeys = api && typeof api === 'object' ? Object.keys(api).sort() : [];
-    this.logger.error('send_method_not_found', { friendId, apiKeys });
+    this.logger.error('send_method_not_found', { conversationId, apiKeys });
     throw new Error(
       `Khong tim thay send API phu hop tren session. Available methods: ${apiKeys.join(', ')}`,
     );
   }
 
-  async sendAttachment(friendId: string, options: {
+  async sendAttachment(conversationId: string, options: {
     fileBuffer: Buffer;
     fileName: string;
     mimeType: string;
     caption?: string;
   }) {
-    if (!friendId) throw new Error('friendId la bat buoc');
+    if (!conversationId) throw new Error('conversationId la bat buoc');
     if (!options.fileBuffer?.length) throw new Error('fileBuffer la bat buoc');
     if (!options.fileName.trim()) throw new Error('fileName la bat buoc');
 
@@ -993,6 +1309,8 @@ export class GoldRuntime {
       throw new Error('Session khong ho tro sendMessage');
     }
 
+    const target = this.resolveConversationTarget(conversationId);
+
     const caption = options.caption?.trim() ?? '';
     const mimeType = options.mimeType.trim();
     const kind: GoldMessageKind = mimeType.startsWith('image/') ? 'image' : 'file';
@@ -1003,7 +1321,8 @@ export class GoldRuntime {
     const tempFilePath = path.join(tempDir, `${Date.now()}-${randomUUID()}-${safeFileName}`);
 
     this.logger.info('send_attachment_started', {
-      friendId,
+      conversationId,
+      threadId: target.threadId,
       kind,
       fileName: options.fileName,
       mimeType,
@@ -1015,15 +1334,23 @@ export class GoldRuntime {
     try {
       const result = await api.sendMessage(
         { msg: caption, attachments: [tempFilePath] },
-        friendId,
+        target.threadId,
+        target.type === 'group' ? ThreadType.Group : ThreadType.User,
       );
 
-      this.logger.info('send_attachment_api_result', { friendId, result });
+      this.logger.info('send_attachment_api_result', { conversationId, result });
 
       // attachment[] có thể chứa photoId (image) hoặc fileId/msgId (file)
       const att = result?.attachment?.[0];
       const msgResult = result?.message;
       const messageId = String(att?.photoId ?? att?.fileId ?? att?.msgId ?? msgResult?.msgId ?? randomUUID());
+      const storedMedia = this.mediaStore.saveBuffer({
+        accountId: this.getActiveAccountId(),
+        messageId,
+        fileName: options.fileName,
+        mimeType,
+        buffer: options.fileBuffer,
+      });
 
       const attachmentUrl = att?.normalUrl ?? att?.hdUrl ?? att?.thumbUrl ?? att?.fileUrl ?? undefined;
       const thumbnailUrl = att?.thumbUrl ?? att?.normalUrl ?? undefined;
@@ -1031,8 +1358,11 @@ export class GoldRuntime {
       const goldAttachment: GoldAttachment = {
         id: messageId,
         type: kind,
-        url: attachmentUrl,
-        thumbnailUrl,
+        url: storedMedia.publicUrl,
+        sourceUrl: attachmentUrl,
+        localPath: storedMedia.localPath,
+        thumbnailUrl: kind === 'image' ? storedMedia.publicUrl : thumbnailUrl,
+        thumbnailSourceUrl: thumbnailUrl,
         fileName: options.fileName,
         mimeType,
         size: options.fileBuffer.length,
@@ -1040,17 +1370,21 @@ export class GoldRuntime {
 
       this.appendConversationMessage({
         id: messageId,
-        friendId,
+        providerMessageId: messageId,
+        conversationId,
+        threadId: target.threadId,
+        conversationType: target.type,
         text: caption || `[${kind}]`,
         kind,
         attachments: [goldAttachment],
-        imageUrl: kind === 'image' ? (attachmentUrl ?? undefined) : undefined,
+        imageUrl: kind === 'image' ? storedMedia.publicUrl : undefined,
         direction: 'outgoing',
         isSelf: true,
         timestamp: new Date().toISOString(),
+        rawMessageJson: JSON.stringify(result ?? {}),
       });
 
-      this.logger.info('send_attachment_succeeded', { friendId, kind, messageId });
+      this.logger.info('send_attachment_succeeded', { conversationId, kind, messageId });
       return { method: 'sendMessage', kind, result };
     } finally {
       try { unlinkSync(tempFilePath); } catch { /* ignore */ }
@@ -1058,12 +1392,12 @@ export class GoldRuntime {
   }
 
   // Compat wrappers
-  async sendImage(friendId: string, options: { imageBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
-    return this.sendAttachment(friendId, { fileBuffer: options.imageBuffer, ...options });
+  async sendImage(conversationId: string, options: { imageBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
+    return this.sendAttachment(conversationId, { fileBuffer: options.imageBuffer, ...options });
   }
 
-  async sendFile(friendId: string, options: { fileBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
-    return this.sendAttachment(friendId, options);
+  async sendFile(conversationId: string, options: { fileBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
+    return this.sendAttachment(conversationId, options);
   }
 
   async renderQrToTerminal(qrCode: string) {
@@ -1123,6 +1457,42 @@ export class GoldRuntime {
 
     await this.session.api.getAllFriends(1, 1);
     this.logger.info('verify_session_succeeded');
+  }
+
+  private resolveConversationTarget(conversationId: string) {
+    if (conversationId.startsWith('group:')) {
+      return { threadId: conversationId.slice('group:'.length), type: 'group' as const };
+    }
+
+    if (conversationId.startsWith('direct:')) {
+      return { threadId: conversationId.slice('direct:'.length), type: 'direct' as const };
+    }
+
+    return { threadId: conversationId, type: 'direct' as const };
+  }
+
+  private normalizeGroupMembers(members: unknown): GoldGroupMemberRecord[] | undefined {
+    if (!Array.isArray(members)) {
+      return undefined;
+    }
+
+    return members
+      .filter((member) => member && typeof member === 'object')
+      .map((member: any) => ({
+        userId: String(member.userId ?? member.uid ?? member.id),
+        displayName: member.displayName ? String(member.displayName) : member.name ? String(member.name) : undefined,
+        avatar: member.avatar ? String(member.avatar) : member.avatarUrl ? String(member.avatarUrl) : undefined,
+        role: member.role ? String(member.role) : undefined,
+      }));
+  }
+
+  private resolveGroupSenderName(groupId: string, senderId?: string) {
+    if (!senderId) return undefined;
+    const group = this.store.listGroups().find((entry) => entry.groupId === groupId);
+    const member = group?.members?.find((entry) => entry.userId === senderId);
+    if (member?.displayName) return member.displayName;
+    const contact = this.store.listContacts().find((entry) => entry.userId === senderId);
+    return contact?.displayName;
   }
 
   static parseSendArgs(argv: string[]) {

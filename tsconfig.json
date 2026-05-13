@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src/**/*"],
-  "exclude": ["src/gold-4-web/**/*"]
+  "exclude": ["src/web/**/*"]
 }

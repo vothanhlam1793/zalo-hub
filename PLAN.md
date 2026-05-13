@@ -1,109 +1,119 @@
 # Plan
 
-## Muc Tieu Hien Tai
+Xem `GOLD.md` để hiểu quy trình phát triển, convention đặt tên, và lịch sử các gold.
 
-Sau `gold-3`, huong phat trien duoc chot lai thanh:
+## Mục Tiêu Hiện Tại
 
-1. giu `gold-1` va `gold-2` lam nen tang da prove
-2. giu `gold-3` lam moc chat 1-1 da prove tren web
-3. chi mo rong them khi co KPI ro rang cho `gold-3B` hoac `gold-4`
+Sau gold-5, hướng phát triển tiếp theo là gold-6.
 
-## Ket Qua `gold-1`
+gold-5 đã chốt:
+- Refactor cấu trúc `src/` theo vai trò (`core/`, `server/`, `web/`)
+- Tạo `GOLD.md` định nghĩa convention gold
+- Cập nhật README và PLAN
 
-Da dat duoc:
+## Scope Nền Tảng Đã Có
 
-1. QR login thanh cong
-2. recover session tu cookie jar khi `loginQR` cua package fail o buoc hau kiem
-3. reconnect session bang credential luu local
-4. `getAllFriends()` tra ve du lieu that
-5. gui duoc tin nhan text 1-1
-6. co `doctor` de verify session
-7. co menu CLI va log theo tung lan chay
+`src/core/` hiện có:
 
-## Ket Qua `gold-2`
+- `index.ts`: CLI menu
+- `runtime.ts`: runtime login, reconnect, friends, send, receive, attachment
+- `store.ts`: SQLite local — accounts, friends, conversations, messages, attachments
+- `logger.ts`: log theo từng run
+- `types.ts`: kiểu dữ liệu core
 
-Da dat duoc:
+`src/server/` hiện có:
 
-1. web UI co ban cho login QR
-2. web UI tai duoc friend list
-3. web UI gui duoc tin nhan text 1-1
-4. web UI hien thi trang thai dang nhap ro hon
-5. web UI hien thi thong tin tai khoan dang nhap o muc API cho phep
-6. web UI co logout flow
-7. server `gold-2` co the truy cap tu may khac trong LAN
+- `index.ts`: backend Express + WebSocket + REST API
+- `client/`: fallback UI HTML cũ
 
-## Ket Qua `gold-3`
+`src/web/` hiện có:
 
-Da dat duoc:
+- `App.tsx`: React app chính
+- `api.ts`: client HTTP
+- `useWebSocket.ts`: WebSocket hook
+- `types.ts`: kiểu dữ liệu frontend
 
-1. web UI co khung chat 1-1 co ban
-2. chon friend de mo conversation rieng
-3. gui tin nhan text trong khung chat
-4. backend bat duoc incoming message that tu Zalo
-5. frontend nhan tin moi qua websocket tich hop trong cung backend `gold-2`
-6. timeline hien thi duoc tin text hai chieu
-7. timeline hien thi duoc tin nhan anh nhan toi
-8. giu duoc logout flow va reconnect flow da co
+## Những Việc Đã Hoàn Tất
 
-## Scope Nen Tang Da Co
-
-`gold-1` hien co:
-
-- `src/gold-1/index.ts`: CLI menu
-- `src/gold-1/runtime.ts`: runtime login, reconnect, friends, send
-- `src/gold-1/store.ts`: luu credential va friend cache
-- `src/gold-1/logger.ts`: log theo tung run
-- `gold.sh`: script chay nhanh
-
-`gold-2` hien co:
-
-- `src/gold-2/server.ts`: backend-lite cho web
-- `src/gold-2/client/index.html`: giao dien co ban
-- `src/gold-2/client/app.js`: login, friends, send, status, logout
-- `src/gold-2/client/styles.css`: giao dien web toi gian
-
-`gold-3` hien co them:
-
-- runtime conversation cache trong `src/gold-1/runtime.ts`
-- listener bat incoming message that tu Zalo
-- websocket tich hop trong `src/gold-2/server.ts`
-- chat UI 1-1 trong `src/gold-2/client/*`
-
-## Huong `gold-3`
-
-`gold-3` da duoc prove. Huong hien tai la giu no on dinh truoc khi mo rong them.
-
-Nguyen tac sau `gold-3`:
-
-1. bat dau tu logic da prove trong `gold-1`
-2. bat dau tu web UX va API da prove trong `gold-2`
-3. uu tien nang cap kha nang van hanh va do on dinh cua `gold-3`
-4. chi tach thanh service lon hon khi co nhu cau that su, khong tach som
-
-## Nhung Viec Da Hoan Tat
-
-- login va reconnect voi credential local
-- friend sync
-- send text 1-1
+- Login và reconnect với credential local
+- Friend sync
+- Send text 1-1
 - QR render trong terminal
-- log debug theo run
-- `doctor` pass
-- web login flow
-- web friend list flow
-- web send message flow
-- web logout flow
-- web chat 1-1 flow
-- incoming message listener flow
-- websocket realtime flow tu backend sang frontend
-- incoming image render flow
+- Log debug theo run
+- Doctor pass
+- Web login flow
+- Web friend list
+- Web send message
+- Web logout
+- Web chat 1-1
+- Incoming message listener
+- WebSocket realtime
+- Incoming image/file/video render
+- Outgoing attachment multipart
+- SQLite local history
+- React UI
+- Public domain qua proxy
+- Refactor cấu trúc src/ theo vai trò (gold-5)
+- Tài liệu convention gold (gold-5)
 
-## Nhung Viec Khong Con La Uu Tien Truc Tiep Luc Nay
+## Gold-6 — Done
 
-- tai lieu kien truc cu o root
-- `chat-server` / `zalo-service` lam tam diem phat trien ngay lap tuc
-- event contracts / Postgres / Chatwoot integration trong pha hien tai
-- tach websocket thanh service rieng truoc khi co nhu cau that
+Mục tiêu đã chốt: Contacts + Groups + Conversations
 
-## Ghi Chu
+Những gì đã done:
 
-Tai lieu cu duoc dua vao `archived/` de tra cuu khi can.
+1. Có 3 tab UI:
+   - `Cuộc trò chuyện`
+   - `Bạn bè`
+   - `Nhóm`
+2. `Bạn bè` có tìm kiếm và mở direct conversation
+3. `Nhóm` có tìm kiếm và mở group conversation
+4. Domain local đổi từ `friendId -> messages` sang `conversationId = direct:<id> | group:<id>`
+5. Sync được danh sách group
+6. Chat được với group
+7. Nhận được direct/group message realtime
+8. UI group conversation hiển thị tên người gửi cho incoming message
+9. Lazy load history theo `before + limit`
+10. Incoming/outgoing attachment được mirror vào app server local storage `data/media/`
+11. Backend serve media qua `/media/*`
+12. Repair dữ liệu cũ:
+    - chuẩn hóa lại `kind`
+    - chuẩn hóa lại `attachments`
+    - backfill file cũ còn nguồn về local storage
+13. Case legacy `share.file`/`text + image_url + filename` được canonicalize về file attachment thay vì neo text
+
+Ghi chú trạng thái:
+
+- gold-6 đã pass nghiệm thu
+- dữ liệu cũ được cứu tối đa trong phạm vi còn source/raw payload
+- chưa có history API chính thức từ Zalo package để mỗi lần mở conversation pull full remote history rồi reconcile tự động
+
+## Gold-7 — Planned
+
+Mục tiêu: Recent/history sync từ Zalo theo hướng có remote history thật
+
+Scope dự kiến:
+
+1. Research/reverse khả năng tải recent/history từ Zalo package/runtime hoặc `custom`
+2. Sync danh sách conversation gần nhất từ Zalo
+3. Sync incremental message history từ remote source thật
+4. Reconcile local DB với remote history theo `provider_message_id` và canonical attachment shape
+
+## Gold-8 — Planned
+
+Mục tiêu: Account profile + avatar
+
+Scope dự kiến:
+
+1. Lấy đầy đủ self profile từ `fetchAccountInfo()` — bao gồm avatar
+2. Expose qua `/api/status`
+3. Hiển thị avatar account ở sidebar
+4. Hiển thị avatar thật của contact/group trên UI
+5. Enrich profile contact/group khi cần
+
+## Những Việc Không Còn Là Ưu Tiên Trực Tiếp
+
+- `chat-server` / `zalo-service` (đã chuyển vào `archived/`)
+- Event contracts / Postgres / Chatwoot integration
+- Tách websocket thành service riêng
+- Multi-user shared inbox (chưa có nhu cầu thực)

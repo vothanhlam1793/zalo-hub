@@ -1,4 +1,4 @@
-import type { ConversationSummary, Friend, Message, SessionStatus } from './types';
+import type { Contact, ConversationSummary, Group, Message, SessionStatus } from './types';
 
 async function req<T>(url: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {
@@ -26,25 +26,37 @@ export const api = {
   logout: () => req('/api/logout', { method: 'POST', body: '{}' }),
 
   friends: (refresh = false) =>
-    req<{ friends: Friend[] }>(`/api/friends${refresh ? '?refresh=1' : ''}`),
+    req<{ friends: Contact[] }>(`/api/friends${refresh ? '?refresh=1' : ''}`),
+
+  contacts: (refresh = false) =>
+    req<{ contacts: Contact[] }>(`/api/contacts${refresh ? '?refresh=1' : ''}`),
+
+  groups: (refresh = false) =>
+    req<{ groups: Group[] }>(`/api/groups${refresh ? '?refresh=1' : ''}`),
 
   conversations: () =>
     req<{ conversations: ConversationSummary[] }>('/api/conversations'),
 
-  messages: (friendId: string, since?: string) =>
-    req<{ messages: Message[] }>(
-      `/api/conversations/${encodeURIComponent(friendId)}/messages${since ? `?since=${encodeURIComponent(since)}` : ''}`,
-    ),
+  messages: (conversationId: string, options: { since?: string; before?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (options.since) params.set('since', options.since);
+    if (options.before) params.set('before', options.before);
+    if (options.limit) params.set('limit', String(options.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return req<{ messages: Message[]; count: number; oldestTimestamp?: string; hasMore?: boolean }>(
+      `/api/conversations/${encodeURIComponent(conversationId)}/messages${suffix}`,
+    );
+  },
 
-  sendText: (friendId: string, text: string) =>
+  sendText: (conversationId: string, text: string) =>
     req('/api/send', {
       method: 'POST',
-      body: JSON.stringify({ friendId, text }),
+      body: JSON.stringify({ conversationId, text }),
     }),
 
-  sendAttachment: (friendId: string, file: File, caption?: string) => {
+  sendAttachment: (conversationId: string, file: File, caption?: string) => {
     const fd = new FormData();
-    fd.append('friendId', friendId);
+    fd.append('conversationId', conversationId);
     fd.append('file', file, file.name);
     if (caption) fd.append('caption', caption);
     return upload('/api/send-attachment', fd);

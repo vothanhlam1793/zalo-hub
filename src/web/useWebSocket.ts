@@ -6,7 +6,7 @@ type WsPayload =
   | { type: 'session_state'; status: SessionStatus }
   | { type: 'conversation_summaries'; conversations: ConversationSummary[] }
   | { type: 'conversation_message'; message: Message }
-  | { type: 'subscribed'; friendId: string }
+  | { type: 'subscribed'; conversationId: string }
   | { type: 'error'; error: string };
 
 interface WsHandlers {
@@ -18,7 +18,7 @@ interface WsHandlers {
 export function useWebSocket(handlers: WsHandlers) {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeFriendId = useRef<string>('');
+  const activeConversationId = useRef<string>('');
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
@@ -31,8 +31,8 @@ export function useWebSocket(handlers: WsHandlers) {
 
     socket.addEventListener('open', () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      if (activeFriendId.current) {
-        socket.send(JSON.stringify({ type: 'subscribe', friendId: activeFriendId.current }));
+      if (activeConversationId.current) {
+        socket.send(JSON.stringify({ type: 'subscribe', conversationId: activeConversationId.current }));
       }
     });
 
@@ -61,15 +61,15 @@ export function useWebSocket(handlers: WsHandlers) {
     };
   }, [connect]);
 
-  const subscribe = useCallback((friendId: string) => {
-    activeFriendId.current = friendId;
+  const subscribe = useCallback((conversationId: string) => {
+    activeConversationId.current = conversationId;
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: 'subscribe', friendId }));
+      ws.current.send(JSON.stringify({ type: 'subscribe', conversationId }));
     }
   }, []);
 
   const unsubscribe = useCallback(() => {
-    activeFriendId.current = '';
+    activeConversationId.current = '';
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: 'unsubscribe' }));
     }

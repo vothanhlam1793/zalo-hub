@@ -258,6 +258,16 @@ body {
   gap: 10px;
 }
 
+.history-loader {
+  align-self: center;
+  font-size: 12px;
+  color: #7b8597;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 999px;
+  padding: 6px 10px;
+}
+
 .empty-hint {
   flex: 1;
   display: flex;
@@ -310,9 +320,22 @@ body {
   display: block;
 }
 
+.media-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-video {
+  max-width: 320px;
+  width: 100%;
+  border-radius: 12px;
+  background: #000;
+}
+
 .bubble .file-attachment {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 8px;
   background: rgba(255,255,255,0.05);
@@ -335,6 +358,40 @@ body {
   font-size: 11px;
   color: #666;
   margin-top: 2px;
+}
+
+.file-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.file-chip {
+  font-size: 10px;
+  font-weight: 700;
+  color: #8cb1ff;
+  background: rgba(79,122,255,0.15);
+  border: 1px solid rgba(79,122,255,0.22);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.attachment-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.attachment-actions a {
+  font-size: 12px;
+  color: #9fc0ff;
+  text-decoration: none;
+}
+
+.attachment-actions a:hover {
+  text-decoration: underline;
 }
 
 /* Composer */

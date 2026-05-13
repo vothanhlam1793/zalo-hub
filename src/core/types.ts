@@ -4,7 +4,10 @@ export interface GoldStoredCredential {
   userAgent: string;
 }
 
-export interface GoldFriendRecord {
+export type GoldConversationType = 'direct' | 'group';
+export type GoldMessageKind = 'text' | 'image' | 'file' | 'video';
+
+export interface GoldContactRecord {
   id: string;
   userId: string;
   displayName: string;
@@ -15,13 +18,32 @@ export interface GoldFriendRecord {
   lastSyncAt: string;
 }
 
-export type GoldMessageKind = 'text' | 'image' | 'file' | 'video';
+export interface GoldGroupRecord {
+  id: string;
+  groupId: string;
+  displayName: string;
+  avatar?: string;
+  memberCount?: number;
+  members?: GoldGroupMemberRecord[];
+  lastSyncAt: string;
+}
+
+export interface GoldGroupMemberRecord {
+  userId: string;
+  displayName?: string;
+  avatar?: string;
+  role?: string;
+}
 
 export interface GoldAttachment {
   id: string;
   type: GoldMessageKind;
   url?: string;
+  sourceUrl?: string;
+  localPath?: string;
   thumbnailUrl?: string;
+  thumbnailSourceUrl?: string;
+  thumbnailLocalPath?: string;
   fileName?: string;
   mimeType?: string;
   size?: number;
@@ -32,20 +54,28 @@ export interface GoldAttachment {
 
 export interface GoldConversationMessage {
   id: string;
-  friendId: string;
+  conversationId: string;
+  threadId: string;
+  conversationType: GoldConversationType;
   text: string;
   kind: GoldMessageKind;
   attachments: GoldAttachment[];
   direction: 'incoming' | 'outgoing';
   isSelf: boolean;
   timestamp: string;
-  // legacy compat - được giữ để hydrate từ DB cũ
+  senderId?: string;
+  senderName?: string;
+  providerMessageId?: string;
   imageUrl?: string;
+  rawMessageJson?: string;
 }
 
 export interface GoldConversationSummary {
-  friendId: string;
-  displayName?: string;
+  id: string;
+  threadId: string;
+  type: GoldConversationType;
+  title: string;
+  avatar?: string;
   lastMessageText: string;
   lastMessageKind: GoldMessageKind;
   lastMessageTimestamp: string;
@@ -55,7 +85,7 @@ export interface GoldConversationSummary {
 
 export interface GoldState {
   credential?: GoldStoredCredential;
-  friends: GoldFriendRecord[];
+  friends: GoldContactRecord[];
   conversations?: Record<string, GoldConversationMessage[]>;
   updatedAt?: string;
 }

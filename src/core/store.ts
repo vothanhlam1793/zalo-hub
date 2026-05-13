@@ -3,11 +3,14 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { dataDir } from './media-store.js';
 import type {
   GoldAttachment,
+  GoldContactRecord,
   GoldConversationMessage,
   GoldConversationSummary,
-  GoldFriendRecord,
+  GoldGroupMemberRecord,
+  GoldGroupRecord,
   GoldMessageKind,
   GoldStoredCredential,
 } from './types.js';
@@ -36,7 +39,22 @@ type RawFriendRow = {
   last_sync_at: string;
 };
 
+type RawGroupRow = {
+  id: string;
+  group_id: string;
+  display_name: string;
+  avatar: string | null;
+  member_count: number | null;
+  members_json: string | null;
+  last_sync_at: string;
+};
+
 type RawConversationRow = {
+  id: string;
+  thread_id: string;
+  type: 'direct' | 'group';
+  title: string | null;
+  avatar: string | null;
   friend_id: string;
   display_name_snapshot: string | null;
   last_message_text: string;
@@ -48,6 +66,9 @@ type RawConversationRow = {
 
 type RawMessageRow = {
   id: string;
+  conversation_id: string | null;
+  thread_id: string | null;
+  conversation_type: 'direct' | 'group' | null;
   friend_id: string;
   text: string;
   kind: string;
@@ -55,6 +76,10 @@ type RawMessageRow = {
   direction: 'incoming' | 'outgoing';
   is_self: number;
   timestamp: string;
+  sender_id: string | null;
+  sender_name: string | null;
+  provider_message_id: string | null;
+  raw_message_json: string | null;
 };
 
 type RawAttachmentRow = {
@@ -62,7 +87,11 @@ type RawAttachmentRow = {
   message_id: string;
   type: string;
   url: string | null;
+  source_url: string | null;
+  local_path: string | null;
   thumbnail_url: string | null;
+  thumbnail_source_url: string | null;
+  thumbnail_local_path: string | null;
   file_name: string | null;
   mime_type: string | null;
   size: number | null;
@@ -73,7 +102,6 @@ type RawAttachmentRow = {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const dataDir = path.resolve(__dirname, '../../data');
 const dbPath = path.join(dataDir, 'gold-4.sqlite');
 const legacyStatePath = path.join(dataDir, 'gold-1-state.json');
 
@@ -90,6 +118,83 @@ function nowIso() {
 function toMessageKind(raw: string): GoldMessageKind {
   if (raw === 'image' || raw === 'file' || raw === 'video') return raw;
   return 'text';
+}
+
+function looksLikeFileName(value: string) {
+  return /\.(xlsx|xls|csv|doc|docx|pdf|zip|rar|7z|txt|ppt|pptx)$/i.test(value.trim());
+}
+
+function guessKindFromAttachment(attachment: GoldAttachment | undefined): GoldMessageKind | undefined {
+  if (!attachment) {
+    return undefined;
+  }
+
+  if (attachment.type === 'image' || attachment.type === 'video' || attachment.type === 'file') {
+    return attachment.type;
+  }
+
+  const mimeType = (attachment.mimeType ?? '').toLowerCase();
+  const fileName = (attachment.fileName ?? attachment.url ?? attachment.sourceUrl ?? '').toLowerCase();
+  if (mimeType.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/.test(fileName)) return 'image';
+  if (mimeType.startsWith('video/') || /\.(mp4|mov|webm|mkv|avi)$/.test(fileName)) return 'video';
+  if (attachment.url || attachment.sourceUrl || looksLikeFileName(attachment.fileName ?? '')) return 'file';
+  return undefined;
+}
+
+function canonicalizeStoredMessage(row: RawMessageRow, currentAttachments: GoldAttachment[]) {
+  const attachments = [...currentAttachments];
+  const rowKind = toMessageKind(row.kind);
+
+  if (rowKind === 'image' && attachments.length === 0 && row.image_url) {
+    attachments.push({
+      id: `legacy-${row.id}`,
+      type: 'image',
+      url: row.image_url,
+      sourceUrl: row.image_url,
+      thumbnailUrl: row.image_url,
+      thumbnailSourceUrl: row.image_url,
+    });
+  }
+
+  if (attachments.length === 0 && row.image_url && looksLikeFileName(row.text) && (rowKind === 'text' || rowKind === 'file')) {
+    attachments.push({
+      id: `legacy-file-${row.id}`,
+      type: 'file',
+      url: row.image_url,
+      sourceUrl: row.image_url,
+      fileName: row.text,
+    });
+  }
+
+  const primaryAttachment = attachments[0];
+  const inferredKind = guessKindFromAttachment(primaryAttachment) ?? rowKind;
+  const canonicalKind = rowKind === 'text' && inferredKind !== 'text' ? inferredKind : (rowKind === 'file' && inferredKind !== 'text' ? inferredKind : rowKind);
+  const canonicalText = canonicalKind === 'image'
+    ? (row.text === '' || row.text === '[image]' ? '[image]' : row.text)
+    : canonicalKind === 'video'
+      ? (row.text === '' || row.text === '[video]' ? '[video]' : row.text)
+      : row.text;
+
+  if ((canonicalKind === 'file' || canonicalKind === 'video' || canonicalKind === 'image') && attachments.length === 0 && row.image_url) {
+    attachments.push({
+      id: `legacy-canonical-${row.id}`,
+      type: canonicalKind,
+      url: row.image_url,
+      sourceUrl: row.image_url,
+      thumbnailUrl: canonicalKind === 'image' ? row.image_url : undefined,
+      thumbnailSourceUrl: canonicalKind === 'image' ? row.image_url : undefined,
+      fileName: looksLikeFileName(row.text) ? row.text : undefined,
+    });
+  }
+
+  return {
+    kind: canonicalKind,
+    text: canonicalText,
+    attachments,
+    imageUrl: canonicalKind === 'image'
+      ? (attachments[0]?.url ?? row.image_url ?? undefined)
+      : row.image_url ?? undefined,
+  };
 }
 
 export class GoldStore {
@@ -180,6 +285,10 @@ export class GoldStore {
     }
   }
 
+  getCurrentAccountId() {
+    return this.activeAccountId;
+  }
+
   updateActiveAccountProfile(profile: { displayName?: string; phoneNumber?: string }) {
     if (!this.activeAccountId) {
       return;
@@ -201,7 +310,7 @@ export class GoldStore {
     return this.getAccount(this.activeAccountId);
   }
 
-  listFriends() {
+  listContacts() {
     if (!this.activeAccountId) {
       return [];
     }
@@ -222,20 +331,80 @@ export class GoldStore {
       status: row.status ?? undefined,
       phoneNumber: row.phone_number ?? undefined,
       lastSyncAt: row.last_sync_at,
-    } satisfies GoldFriendRecord));
+    } satisfies GoldContactRecord));
   }
 
-  listConversationMessages(friendId: string): GoldConversationMessage[] {
+  listFriends() {
+    return this.listContacts();
+  }
+
+  listGroups(): GoldGroupRecord[] {
     if (!this.activeAccountId) {
       return [];
     }
 
     const rows = this.db.prepare(`
-      SELECT id, friend_id, text, kind, image_url, direction, is_self, timestamp
-      FROM messages
-      WHERE account_id = ? AND friend_id = ?
-      ORDER BY timestamp ASC, created_at ASC
-    `).all(this.activeAccountId, friendId) as RawMessageRow[];
+      SELECT id, group_id, display_name, avatar, member_count, members_json, last_sync_at
+      FROM groups
+      WHERE account_id = ?
+      ORDER BY display_name COLLATE NOCASE ASC, group_id ASC
+    `).all(this.activeAccountId) as RawGroupRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      groupId: row.group_id,
+      displayName: row.display_name,
+      avatar: row.avatar ?? undefined,
+      memberCount: row.member_count ?? undefined,
+      members: row.members_json ? JSON.parse(row.members_json) as GoldGroupMemberRecord[] : undefined,
+      lastSyncAt: row.last_sync_at,
+    } satisfies GoldGroupRecord));
+  }
+
+  listConversationMessages(conversationId: string, options: { before?: string; limit?: number } = {}): GoldConversationMessage[] {
+    if (!this.activeAccountId) {
+      return [];
+    }
+
+    const { threadId, type } = this.parseConversationId(conversationId);
+    const directLegacyKey = type === 'direct' ? threadId : null;
+    const limit = Math.max(1, Math.min(options.limit ?? 40, 200));
+    const before = options.before?.trim();
+
+    const query = before
+      ? `
+        SELECT * FROM (
+          SELECT id, conversation_id, thread_id, conversation_type, friend_id, text, kind, image_url, direction, is_self, timestamp, sender_id, sender_name, provider_message_id, raw_message_json, created_at
+          FROM messages
+          WHERE account_id = ?
+            AND (
+              conversation_id = ?
+              OR (conversation_id IS NULL AND friend_id = ?)
+            )
+            AND timestamp < ?
+          ORDER BY timestamp DESC, created_at DESC
+          LIMIT ?
+        )
+        ORDER BY timestamp ASC, created_at ASC
+      `
+      : `
+        SELECT * FROM (
+          SELECT id, conversation_id, thread_id, conversation_type, friend_id, text, kind, image_url, direction, is_self, timestamp, sender_id, sender_name, provider_message_id, raw_message_json, created_at
+          FROM messages
+          WHERE account_id = ?
+            AND (
+              conversation_id = ?
+              OR (conversation_id IS NULL AND friend_id = ?)
+            )
+          ORDER BY timestamp DESC, created_at DESC
+          LIMIT ?
+        )
+        ORDER BY timestamp ASC, created_at ASC
+      `;
+
+    const rows = (before
+      ? this.db.prepare(query).all(this.activeAccountId, conversationId, directLegacyKey, before, limit)
+      : this.db.prepare(query).all(this.activeAccountId, conversationId, directLegacyKey, limit)) as RawMessageRow[];
 
     const messageIds = rows.map((r) => r.id);
 
@@ -244,7 +413,7 @@ export class GoldStore {
     if (messageIds.length > 0) {
       const placeholders = messageIds.map(() => '?').join(',');
       const attRows = this.db.prepare(`
-        SELECT id, message_id, type, url, thumbnail_url, file_name, mime_type, size, width, height, duration
+        SELECT id, message_id, type, url, source_url, local_path, thumbnail_url, thumbnail_source_url, thumbnail_local_path, file_name, mime_type, size, width, height, duration
         FROM attachments
         WHERE message_id IN (${placeholders})
       `).all(...messageIds) as RawAttachmentRow[];
@@ -255,7 +424,11 @@ export class GoldStore {
           id: att.id,
           type: toMessageKind(att.type),
           url: att.url ?? undefined,
+          sourceUrl: att.source_url ?? undefined,
+          localPath: att.local_path ?? undefined,
           thumbnailUrl: att.thumbnail_url ?? undefined,
+          thumbnailSourceUrl: att.thumbnail_source_url ?? undefined,
+          thumbnailLocalPath: att.thumbnail_local_path ?? undefined,
           fileName: att.file_name ?? undefined,
           mimeType: att.mime_type ?? undefined,
           size: att.size ?? undefined,
@@ -268,24 +441,21 @@ export class GoldStore {
     }
 
     return rows.map((row) => {
-      const attachments = attachmentsByMessageId.get(row.id) ?? [];
-      // legacy compat: nếu kind=image và không có attachment -> tạo attachment từ image_url cũ
-      if (toMessageKind(row.kind) === 'image' && attachments.length === 0 && row.image_url) {
-        attachments.push({
-          id: `legacy-${row.id}`,
-          type: 'image',
-          url: row.image_url,
-          thumbnailUrl: row.image_url,
-        });
-      }
+      const canonical = canonicalizeStoredMessage(row, attachmentsByMessageId.get(row.id) ?? []);
 
       return {
         id: row.id,
-        friendId: row.friend_id,
-        text: row.text,
-        kind: toMessageKind(row.kind),
-        attachments,
-        imageUrl: row.image_url ?? undefined,
+        conversationId: row.conversation_id ?? `direct:${row.friend_id}`,
+        threadId: row.thread_id ?? row.friend_id,
+        conversationType: row.conversation_type ?? 'direct',
+        text: canonical.text,
+        kind: canonical.kind,
+        attachments: canonical.attachments,
+        senderId: row.sender_id ?? undefined,
+        senderName: row.sender_name ?? undefined,
+        providerMessageId: row.provider_message_id ?? undefined,
+        imageUrl: canonical.imageUrl,
+        rawMessageJson: row.raw_message_json ?? undefined,
         direction: row.direction,
         isSelf: Boolean(row.is_self),
         timestamp: row.timestamp,
@@ -300,14 +470,22 @@ export class GoldStore {
 
     const rows = this.db.prepare(`
       SELECT friend_id, display_name_snapshot, last_message_text, last_message_kind, last_direction, last_message_timestamp, message_count
+           , id, thread_id, type, title, avatar
       FROM conversations
       WHERE account_id = ?
       ORDER BY last_message_timestamp DESC, updated_at DESC
     `).all(this.activeAccountId) as RawConversationRow[];
 
     return rows.map((row) => ({
-      friendId: row.friend_id,
-      displayName: row.display_name_snapshot ?? this.getFriendDisplayName(row.friend_id),
+      id: `${row.type}:${row.thread_id ?? row.friend_id}`,
+      threadId: row.thread_id ?? row.friend_id,
+      type: row.type ?? 'direct',
+      title: row.title
+        ?? row.display_name_snapshot
+        ?? ((row.type ?? 'direct') === 'group' ? this.getGroupDisplayName(row.thread_id ?? row.friend_id) : this.getFriendDisplayName(row.friend_id))
+        ?? row.thread_id
+        ?? row.friend_id,
+      avatar: row.avatar ?? ((row.type ?? 'direct') === 'group' ? this.getGroupAvatar(row.thread_id ?? row.friend_id) : this.getFriendAvatar(row.friend_id)),
       lastMessageText: row.last_message_text,
       lastMessageKind: toMessageKind(row.last_message_kind),
       lastMessageTimestamp: row.last_message_timestamp,
@@ -316,7 +494,7 @@ export class GoldStore {
     } satisfies GoldConversationSummary));
   }
 
-  replaceConversationMessages(friendId: string, messages: GoldConversationMessage[]) {
+  replaceConversationMessages(conversationId: string, messages: GoldConversationMessage[]) {
     if (!this.activeAccountId) {
       return [];
     }
@@ -324,15 +502,27 @@ export class GoldStore {
     const sortedMessages = [...messages].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.runInTransaction(() => {
       const accountId = this.activeAccountId as string;
-      // delete messages sẽ cascade xóa attachments nhờ FK
-      this.db.prepare('DELETE FROM messages WHERE account_id = ? AND friend_id = ?').run(accountId, friendId);
+      const { threadId, type } = this.parseConversationId(conversationId);
+      this.db.prepare(`
+        DELETE FROM messages
+        WHERE account_id = ?
+          AND (
+            conversation_id = ?
+            OR (conversation_id IS NULL AND friend_id = ?)
+          )
+      `).run(accountId, conversationId, type === 'direct' ? threadId : null);
 
       const insertMessage = this.db.prepare(`
         INSERT INTO messages (
           id,
+          conversation_id,
           account_id,
+          thread_id,
+          conversation_type,
           friend_id,
           provider_message_id,
+          sender_id,
+          sender_name,
           direction,
           kind,
           text,
@@ -340,8 +530,9 @@ export class GoldStore {
           is_self,
           timestamp,
           raw_summary_json,
+          raw_message_json,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
       `);
 
       const insertAttachment = this.db.prepare(`
@@ -350,7 +541,11 @@ export class GoldStore {
           message_id,
           type,
           url,
+          source_url,
+          local_path,
           thumbnail_url,
+          thumbnail_source_url,
+          thumbnail_local_path,
           file_name,
           mime_type,
           size,
@@ -358,25 +553,32 @@ export class GoldStore {
           height,
           duration,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const message of sortedMessages) {
+        const messageThreadId = message.threadId || threadId;
         // legacy compat: giữ image_url cho các message image cũ
         const legacyImageUrl = message.imageUrl
           ?? (message.kind === 'image' && message.attachments?.[0]?.url ? message.attachments[0].url : null);
 
         insertMessage.run(
           message.id,
+          message.conversationId,
           accountId,
-          friendId,
-          message.id,
+          messageThreadId,
+          message.conversationType,
+          message.conversationType === 'direct' ? messageThreadId : '',
+          message.providerMessageId ?? message.id,
+          message.senderId ?? null,
+          message.senderName ?? null,
           message.direction,
           message.kind,
           message.text,
           legacyImageUrl ?? null,
           message.isSelf ? 1 : 0,
           message.timestamp,
+          message.rawMessageJson ?? null,
           nowIso(),
         );
 
@@ -387,7 +589,11 @@ export class GoldStore {
             message.id,
             att.type,
             att.url ?? null,
+            att.sourceUrl ?? null,
+            att.localPath ?? null,
             att.thumbnailUrl ?? null,
+            att.thumbnailSourceUrl ?? null,
+            att.thumbnailLocalPath ?? null,
             att.fileName ?? null,
             att.mimeType ?? null,
             att.size ?? null,
@@ -399,19 +605,19 @@ export class GoldStore {
         }
       }
 
-      this.upsertConversation(accountId, friendId, sortedMessages);
+      this.upsertConversation(accountId, conversationId, sortedMessages);
     });
 
-    return this.listConversationMessages(friendId);
+    return this.listConversationMessages(conversationId);
   }
 
   appendConversationMessage(message: GoldConversationMessage) {
-    const existing = this.listConversationMessages(message.friendId);
+    const existing = this.listConversationMessages(message.conversationId);
     existing.push(message);
-    return this.replaceConversationMessages(message.friendId, existing);
+    return this.replaceConversationMessages(message.conversationId, existing);
   }
 
-  replaceFriends(friends: Omit<GoldFriendRecord, 'id'>[]) {
+  replaceContacts(friends: Omit<GoldContactRecord, 'id'>[]) {
     if (!this.activeAccountId) {
       return [];
     }
@@ -453,7 +659,54 @@ export class GoldStore {
       }
     });
 
-    return this.listFriends();
+    return this.listContacts();
+  }
+
+  replaceFriends(friends: Omit<GoldContactRecord, 'id'>[]) {
+    return this.replaceContacts(friends);
+  }
+
+  replaceGroups(groups: Omit<GoldGroupRecord, 'id'>[]) {
+    if (!this.activeAccountId) {
+      return [];
+    }
+
+    const timestamp = nowIso();
+    this.runInTransaction(() => {
+      const accountId = this.activeAccountId as string;
+      this.db.prepare('DELETE FROM groups WHERE account_id = ?').run(accountId);
+      const insertGroup = this.db.prepare(`
+        INSERT INTO groups (
+          id,
+          account_id,
+          group_id,
+          display_name,
+          avatar,
+          member_count,
+          members_json,
+          last_sync_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const group of groups) {
+        insertGroup.run(
+          randomUUID(),
+          accountId,
+          group.groupId,
+          group.displayName,
+          group.avatar ?? null,
+          group.memberCount ?? null,
+          group.members ? JSON.stringify(group.members) : null,
+          group.lastSyncAt,
+          timestamp,
+          timestamp,
+        );
+      }
+    });
+
+    return this.listGroups();
   }
 
   clearSession() {
@@ -526,6 +779,10 @@ export class GoldStore {
       CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+        thread_id TEXT,
+        type TEXT NOT NULL DEFAULT 'direct',
+        title TEXT,
+        avatar TEXT,
         friend_id TEXT NOT NULL,
         display_name_snapshot TEXT,
         last_message_text TEXT NOT NULL,
@@ -540,9 +797,14 @@ export class GoldStore {
 
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
+        conversation_id TEXT,
         account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+        thread_id TEXT,
+        conversation_type TEXT,
         friend_id TEXT NOT NULL,
         provider_message_id TEXT,
+        sender_id TEXT,
+        sender_name TEXT,
         direction TEXT NOT NULL,
         kind TEXT NOT NULL,
         text TEXT NOT NULL,
@@ -550,6 +812,7 @@ export class GoldStore {
         is_self INTEGER NOT NULL,
         timestamp TEXT NOT NULL,
         raw_summary_json TEXT,
+        raw_message_json TEXT,
         created_at TEXT NOT NULL
       );
 
@@ -559,12 +822,30 @@ export class GoldStore {
       CREATE INDEX IF NOT EXISTS idx_messages_account_time
       ON messages(account_id, timestamp);
 
+      CREATE TABLE IF NOT EXISTS groups (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+        group_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        avatar TEXT,
+        member_count INTEGER,
+        members_json TEXT,
+        last_sync_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(account_id, group_id)
+      );
+
       CREATE TABLE IF NOT EXISTS attachments (
         id TEXT PRIMARY KEY,
         message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
         type TEXT NOT NULL,
         url TEXT,
+        source_url TEXT,
+        local_path TEXT,
         thumbnail_url TEXT,
+        thumbnail_source_url TEXT,
+        thumbnail_local_path TEXT,
         file_name TEXT,
         mime_type TEXT,
         size INTEGER,
@@ -574,6 +855,23 @@ export class GoldStore {
         created_at TEXT NOT NULL
       );
     `);
+
+    this.addColumnIfMissing('conversations', 'thread_id', 'TEXT');
+    this.addColumnIfMissing('conversations', 'type', "TEXT NOT NULL DEFAULT 'direct'");
+    this.addColumnIfMissing('conversations', 'title', 'TEXT');
+    this.addColumnIfMissing('conversations', 'avatar', 'TEXT');
+    this.addColumnIfMissing('messages', 'conversation_id', 'TEXT');
+    this.addColumnIfMissing('messages', 'thread_id', 'TEXT');
+    this.addColumnIfMissing('messages', 'conversation_type', 'TEXT');
+    this.addColumnIfMissing('messages', 'sender_id', 'TEXT');
+    this.addColumnIfMissing('messages', 'sender_name', 'TEXT');
+    this.addColumnIfMissing('messages', 'raw_message_json', 'TEXT');
+    this.addColumnIfMissing('attachments', 'source_url', 'TEXT');
+    this.addColumnIfMissing('attachments', 'local_path', 'TEXT');
+    this.addColumnIfMissing('attachments', 'thumbnail_source_url', 'TEXT');
+    this.addColumnIfMissing('attachments', 'thumbnail_local_path', 'TEXT');
+
+    this.backfillConversationColumns();
   }
 
   private getAccount(accountId: string) {
@@ -651,28 +949,75 @@ export class GoldStore {
     return row?.display_name;
   }
 
-  private upsertConversation(accountId: string, friendId: string, messages: GoldConversationMessage[]) {
+  private getFriendAvatar(friendId: string) {
+    if (!this.activeAccountId) return undefined;
+    const row = this.db.prepare(`
+      SELECT avatar
+      FROM friends
+      WHERE account_id = ? AND friend_id = ?
+      LIMIT 1
+    `).get(this.activeAccountId, friendId) as { avatar: string | null } | undefined;
+    return row?.avatar ?? undefined;
+  }
+
+  private getGroupDisplayName(groupId: string) {
+    if (!this.activeAccountId) return undefined;
+    const row = this.db.prepare(`
+      SELECT display_name
+      FROM groups
+      WHERE account_id = ? AND group_id = ?
+      LIMIT 1
+    `).get(this.activeAccountId, groupId) as { display_name: string } | undefined;
+    return row?.display_name;
+  }
+
+  private getGroupAvatar(groupId: string) {
+    if (!this.activeAccountId) return undefined;
+    const row = this.db.prepare(`
+      SELECT avatar
+      FROM groups
+      WHERE account_id = ? AND group_id = ?
+      LIMIT 1
+    `).get(this.activeAccountId, groupId) as { avatar: string | null } | undefined;
+    return row?.avatar ?? undefined;
+  }
+
+  private upsertConversation(accountId: string, conversationId: string, messages: GoldConversationMessage[]) {
     const lastMessage = messages[messages.length - 1];
     const timestamp = nowIso();
 
     if (!lastMessage) {
-      this.db.prepare('DELETE FROM conversations WHERE account_id = ? AND friend_id = ?').run(accountId, friendId);
+      this.db.prepare('DELETE FROM conversations WHERE account_id = ? AND id = ?').run(accountId, conversationId);
       return;
     }
+
+    const threadId = lastMessage.threadId;
+    const type = lastMessage.conversationType;
+    const friendId = type === 'direct' ? threadId : `group:${threadId}`;
+    const title = type === 'group'
+      ? this.getGroupDisplayName(threadId) ?? threadId
+      : this.getFriendDisplayName(threadId) ?? threadId;
+    const avatar = type === 'group'
+      ? this.getGroupAvatar(threadId) ?? null
+      : this.getFriendAvatar(threadId) ?? null;
 
     const existing = this.db.prepare(`
       SELECT id, created_at
       FROM conversations
-      WHERE account_id = ? AND friend_id = ?
+      WHERE account_id = ? AND id = ?
       LIMIT 1
-    `).get(accountId, friendId) as { id: string; created_at: string } | undefined;
+    `).get(accountId, conversationId) as { id: string; created_at: string } | undefined;
 
-    const conversationId = existing?.id ?? randomUUID();
+    const storedConversationId = existing?.id ?? conversationId;
     const createdAt = existing?.created_at ?? timestamp;
     this.db.prepare(`
       INSERT INTO conversations (
         id,
         account_id,
+        thread_id,
+        type,
+        title,
+        avatar,
         friend_id,
         display_name_snapshot,
         last_message_text,
@@ -682,8 +1027,13 @@ export class GoldStore {
         message_count,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, friend_id) DO UPDATE SET
+        id = excluded.id,
+        thread_id = excluded.thread_id,
+        type = excluded.type,
+        title = excluded.title,
+        avatar = excluded.avatar,
         display_name_snapshot = excluded.display_name_snapshot,
         last_message_text = excluded.last_message_text,
         last_message_kind = excluded.last_message_kind,
@@ -692,18 +1042,68 @@ export class GoldStore {
         message_count = excluded.message_count,
         updated_at = excluded.updated_at
     `).run(
-      conversationId,
-      accountId,
-      friendId,
-      this.getFriendDisplayName(friendId) ?? null,
-      lastMessage.text,
-      lastMessage.kind,
-      lastMessage.direction,
+        storedConversationId,
+        accountId,
+        threadId,
+        type,
+        title,
+        avatar,
+        friendId,
+        type === 'direct' ? title : null,
+        lastMessage.text,
+        lastMessage.kind,
+        lastMessage.direction,
       lastMessage.timestamp,
       messages.length,
       createdAt,
-      timestamp,
-    );
+        timestamp,
+      );
+  }
+
+  private backfillConversationColumns() {
+    if (!this.activeAccountId) return;
+    this.db.prepare(`
+      UPDATE conversations
+      SET thread_id = COALESCE(thread_id, friend_id),
+          type = COALESCE(type, 'direct'),
+          title = COALESCE(title, display_name_snapshot, friend_id),
+          avatar = COALESCE(avatar, (
+            SELECT avatar FROM friends
+            WHERE friends.account_id = conversations.account_id AND friends.friend_id = conversations.friend_id
+            LIMIT 1
+          ))
+      WHERE account_id = ?
+    `).run(this.activeAccountId);
+
+    this.db.prepare(`
+      UPDATE messages
+      SET conversation_id = COALESCE(conversation_id, 'direct:' || friend_id),
+          thread_id = COALESCE(thread_id, friend_id),
+          conversation_type = COALESCE(conversation_type, 'direct'),
+          provider_message_id = COALESCE(provider_message_id, id)
+      WHERE account_id = ?
+    `).run(this.activeAccountId);
+  }
+
+  private addColumnIfMissing(tableName: string, columnName: string, definition: string) {
+    const columns = this.db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === columnName)) {
+      return;
+    }
+
+    this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  private parseConversationId(conversationId: string) {
+    if (conversationId.startsWith('group:')) {
+      return { type: 'group' as const, threadId: conversationId.slice('group:'.length) };
+    }
+
+    if (conversationId.startsWith('direct:')) {
+      return { type: 'direct' as const, threadId: conversationId.slice('direct:'.length) };
+    }
+
+    return { type: 'direct' as const, threadId: conversationId };
   }
 
   private getMetaValue(key: string) {
@@ -727,7 +1127,7 @@ export class GoldStore {
     try {
       const legacy = JSON.parse(readFileSync(legacyStatePath, 'utf8')) as {
         credential?: GoldStoredCredential;
-        friends?: GoldFriendRecord[];
+        friends?: GoldContactRecord[];
         conversations?: Record<string, GoldConversationMessage[]>;
       };
 

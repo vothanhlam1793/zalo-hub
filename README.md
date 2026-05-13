@@ -1,189 +1,156 @@
 # Zalo Hub
 
-Repo nay hien tap trung vao `gold-4`:
+App chat Zalo cho `1 user`, chạy trên nền backend Node.js + React frontend.
 
-- mot app chat Zalo cho `1 user`
-- co `SQLite` local cho history
-- realtime qua `websocket`
-- support `text + image + file`
-- UI chinh hien tai la frontend `React`
+Xem `GOLD.md` để hiểu quy trình phát triển và ý nghĩa các mốc gold.
 
-## Trang thai hien tai
+## Cấu trúc src/
 
-`gold-4` da duoc chot la moc hien tai.
+```
+src/
+  core/     Zalo runtime: login, reconnect, store, send/receive, logger
+  server/   Backend Express + WebSocket + REST API
+  web/      Frontend React
+```
 
-Nhung gi da co trong codebase hien tai:
+## Tính năng hiện tại (tính đến gold-6)
 
-1. dang nhap bang QR
-2. reconnect bang credential local sau restart
-3. tai danh sach ban be
-4. conversation list local theo account
-5. message history local bang `SQLite`
-6. realtime text qua `websocket`
-7. render incoming `image/file/video`
-8. outgoing attachment qua backend multipart
-9. frontend `React` moi cho `gold-4`
-10. public domain da expose qua proxy
+1. Đăng nhập bằng QR
+2. Reconnect bằng credential local sau restart
+3. Tải danh sách bạn bè
+4. Conversation list local theo account
+5. Message history local bằng SQLite
+6. Realtime text qua websocket
+7. Render incoming image/file/video
+8. Outgoing attachment qua backend multipart
+9. Frontend React
+10. Public domain qua proxy
+11. UI 3 tab: cuộc trò chuyện / bạn bè / nhóm
+12. Group chat realtime
+13. Lazy load history
+14. Local media mirror tại app server `data/media/`
+15. Repair/backfill attachment cho dữ liệu cũ còn cứu được
 
-Noi ngan gon:
+## Chạy backend (server)
 
-- `gold-1`: runtime/core voi Zalo that
-- `gold-2`: backend web va client cu, hien van giu server/API cho `gold-4`
-- `gold-4`: UI React moi + attachment persistence + public domain
+```bash
+npm run server:dev
+```
 
-## Chay `gold-1`
+Mặc định chạy trên:
 
-Lenh nhanh nhat:
+```
+http://localhost:3399
+```
+
+## Chạy frontend (web)
+
+Dev server:
+
+```bash
+npm run web:dev
+```
+
+Chạy trên:
+
+```
+http://localhost:3400
+```
+
+Build static:
+
+```bash
+npm run web:build
+```
+
+Output: `dist/web/`
+
+## CLI (debug/phát triển backend)
+
+```bash
+npm run cli:menu      # menu tương tác
+npm run cli:login     # login QR
+npm run cli:friends   # tải danh sách bạn bè
+npm run cli:doctor    # kiểm tra session
+npm run cli:send -- --to <friendId> --text "hello"
+```
+
+Hoặc dùng script nhanh:
 
 ```bash
 ./gold.sh
 ```
 
-Menu hien tai:
+## Data và log
 
-1. `Login bang QR`
-2. `Tai danh sach ban be`
-3. `Gui tin nhan`
-4. `Doctor`
-5. `Thoat`
-
-## Chay Backend
-
-Backend hien tai chay tren:
-
-```bash
-http://localhost:3399
-```
-
-Neu truy cap tu may khac trong cung mang LAN, dung dia chi IP cua may host. Vi du:
-
-```bash
-http://192.168.110.111:3399
-```
-
-Kha nang hien tai cua web app (`gold-3`):
-
-1. tao QR dang nhap
-2. hien thi QR tren web
-3. tai danh sach ban be
-4. chon ban be de mo khung chat rieng
-5. gui tin nhan trong khung chat
-6. nhan tin nhan moi theo realtime tu backend websocket tich hop
-7. hien thi tin nhan text hai chieu trong timeline
-8. hien thi tin nhan anh nhan toi
-9. hien thi trang thai dang nhap
-10. hien thi thong tin tai khoan dang nhap
-11. dang xuat
-
-## Chay Frontend `gold-4`
-
-Dev frontend:
-
-```bash
-npm run gold4:web
-```
-
-Frontend dev mac dinh chay tren:
-
-```bash
-http://localhost:3400
-```
-
-Build frontend tĩnh:
-
-```bash
-npm run gold4:build
-```
-
-Build output:
-
-- `dist/gold-4-web/*`
-
-## Du lieu va log
-
-State local:
-
-- `data/gold-4.sqlite`
-
-Log theo tung lan chay:
-
-- `logs/gold-1/*.log`
-
-## Cau truc chinh
-
-- `src/gold-1/*`: runtime/core + store + listener + send/receive
-- `src/gold-2/server.ts`: backend API/WebSocket hien tai cho `gold-4`
-- `src/gold-2/client/*`: client cu, giu lam fallback/debug
-- `src/gold-4-web/*`: frontend React chinh hien tai cua `gold-4`
-- `gold.sh`: script chay menu nhanh trong terminal
-- `gold-4.md`: tai lieu moc va ket qua `gold-4`
-- `archived/*`: tai lieu va huong cu duoc luu lai de tham chieu
+- DB local: `data/gold-4.sqlite`
+- Media local: `data/media/`
+- Log: `logs/app/`
 
 ## Deploy / Public
 
-Public app hien tai:
+- Public app: `https://zalo.camerangochoang.com`
+- Backend host local: `10.7.0.21:3399`
+- Proxy nginx: `root@svr12.creta.vn`
 
-- `https://zalo.camerangochoang.com`
+Public routing:
 
-Public routing hien tai:
+- `/` → frontend `dist/web/` được serve bởi backend `:3399`
+- `/api/*` → backend `:3399`
+- `/ws` → websocket `:3399`
 
-- `/` -> frontend `gold-4` duoc serve tu backend `:3399`
-- `/api/*` -> backend `gold-4` `:3399`
-- `/ws` -> websocket `:3399`
-
-Backend local phai chay tren may nay tai:
-
-- `10.7.0.21:3399`
-
-Proxy nginx dang chay tren:
-
-- `root@svr12.creta.vn`
-
-File config da sua tren proxy:
-
-- `/etc/nginx/sites-enabled/zalo.camerangochoang.com.conf`
-
-Deploy runbook lan sau:
-
-1. build frontend:
+Runbook deploy:
 
 ```bash
-npm run gold4:build
-```
+# 1. Build frontend
+npm run web:build
 
-2. build TypeScript backend:
-
-```bash
+# 2. Build TypeScript backend
 npm run build
-```
 
-3. restart backend local tren may app
+# 3. Restart backend local trên máy app (10.7.0.21)
+# Lưu ý: app hiện cần Node >= 22.15 để dùng node:sqlite
+# Ví dụ local runtime:
+# export PATH="/tmp/opencode/node-v22.15.0-linux-x64/bin:$PATH"
+# nohup npm run server:dev >/tmp/opencode/zalohub-server.log 2>&1 </dev/null &
 
-Lenh da duoc dung trong session nay:
-
-```bash
-/usr/lib/code-server/lib/node \
-  --require /home/leco/zalohub/node_modules/tsx/dist/preflight.cjs \
-  --import file:///home/leco/zalohub/node_modules/tsx/dist/loader.mjs \
-  /home/leco/zalohub/src/gold-2/server.ts
-```
-
-4. neu proxy can doi route, vao server proxy va `reload nginx`:
-
-```bash
+# 4. Từ proxy host, xác nhận nginx đang trỏ đúng upstream
 ssh root@svr12.creta.vn
+# kiểm tra site config:
+# nginx -T | grep -n 'zalo.camerangochoang.com\|10.7.0.21:3399'
+
+# thường không cần reload nginx nếu upstream không đổi,
+# chỉ reload khi chỉnh config:
 nginx -t && systemctl reload nginx
-```
 
-5. verify public:
-
-```bash
+# 5. Verify
 curl -sk https://zalo.camerangochoang.com/
-curl -sk https://zalo.camerangochoang.com/api/health
+curl -sk https://zalo.camerangochoang.com/api/status
+
+# 6. Nếu public 502, debug theo đúng hướng:
+# từ app host:
+# curl -sk http://127.0.0.1:3399/api/status
+# curl -sk http://10.7.0.21:3399/api/status
+# từ proxy host:
+# ssh root@svr12.creta.vn "curl -sv http://10.7.0.21:3399/api/status"
 ```
 
-## Ghi chu
+## Quy trình test public
 
-Repo van con `chat-server` va `zalo-service` trong `src/`, nhung hien tai khong phai mui nhon phat trien.
+1. Build + restart app server trên `10.7.0.21`
+2. Verify local backend trước:
+   - `curl -sk http://127.0.0.1:3399/api/status`
+3. Verify upstream IP listener:
+   - `curl -sk http://10.7.0.21:3399/api/status`
+4. Verify từ `svr12` tới upstream:
+   - `ssh root@svr12.creta.vn "curl -sv http://10.7.0.21:3399/api/status"`
+5. Sau đó mới verify public domain:
+   - `curl -sk https://zalo.camerangochoang.com/`
+   - `curl -sk https://zalo.camerangochoang.com/api/status`
+6. Với attachment/media cũ, có thể chạy backfill:
+   - `curl -sk -X POST https://zalo.camerangochoang.com/api/media/backfill`
 
-Moc tiep theo sau tai lieu nay la `gold-5`.
+## Archived
+
+Tài liệu và source cũ được lưu trong `archived/` để tham khảo.
+Xem `GOLD.md` để biết mô tả từng thư mục trong `archived/`.

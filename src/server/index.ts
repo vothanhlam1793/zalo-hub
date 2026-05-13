@@ -1,18 +1,20 @@
 import express from 'express';
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import multer from 'multer';
-import { GoldLogger } from '../gold-1/logger.js';
-import { GoldRuntime } from '../gold-1/runtime.js';
-import { GoldStore } from '../gold-1/store.js';
-import type { GoldConversationMessage } from '../gold-1/types.js';
+import { GoldLogger } from '../core/logger.js';
+import { mediaDir } from '../core/media-store.js';
+import { GoldRuntime } from '../core/runtime.js';
+import { GoldStore } from '../core/store.js';
+import type { GoldConversationMessage } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDir = path.resolve(__dirname, 'client');
-const gold4ClientDir = path.resolve(__dirname, '../../dist/gold-4-web');
+const gold4ClientDir = path.resolve(__dirname, '../../dist/web');
 
 const logger = new GoldLogger();
 const runtime = new GoldRuntime(new GoldStore(), logger);
@@ -43,7 +45,7 @@ function broadcastConversationMessage(message: GoldConversationMessage) {
       continue;
     }
 
-    if (wsSubscriptions.get(client) !== message.friendId) {
+    if (wsSubscriptions.get(client) !== message.conversationId) {
       continue;
     }
 
@@ -64,10 +66,10 @@ wsServer.on('connection', (socket: WebSocket) => {
 
   socket.on('message', (raw: string | Buffer) => {
     try {
-      const payload = JSON.parse(String(raw)) as { type?: string; friendId?: string };
-      if (payload.type === 'subscribe' && payload.friendId) {
-        wsSubscriptions.set(socket, String(payload.friendId));
-        socket.send(JSON.stringify({ type: 'subscribed', friendId: String(payload.friendId) }));
+      const payload = JSON.parse(String(raw)) as { type?: string; conversationId?: string };
+      if (payload.type === 'subscribe' && payload.conversationId) {
+        wsSubscriptions.set(socket, String(payload.conversationId));
+        socket.send(JSON.stringify({ type: 'subscribed', conversationId: String(payload.conversationId) }));
         return;
       }
 
@@ -92,6 +94,17 @@ app.use((_, res, next) => {
 });
 app.use(express.static(gold4ClientDir));
 app.use(express.static(clientDir));
+
+app.get('/media/*', (req, res) => {
+  const relativePath = req.path.slice('/media/'.length).trim();
+  const target = path.resolve(mediaDir, relativePath);
+  if (!target.startsWith(mediaDir) || !existsSync(target)) {
+    res.status(404).json({ error: 'Khong tim thay media' });
+    return;
+  }
+
+  res.sendFile(target);
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -191,9 +204,9 @@ app.get('/api/friends', (req, res) => {
       }
 
       const refresh = req.query.refresh === '1';
-      const friends = refresh || runtime.getFriendCache().length === 0
+      const friends = refresh || runtime.getContactCache().length === 0
         ? await runtime.listFriends()
-        : runtime.getFriendCache();
+        : runtime.getContactCache();
       if (!runtime.getCurrentAccount()) {
         await runtime.fetchAccountInfo().catch((error) => {
           logger.error('gold2_friends_account_fetch_failed', error);
@@ -206,22 +219,62 @@ app.get('/api/friends', (req, res) => {
   })();
 });
 
-app.get('/api/conversations/:friendId/messages', (req, res) => {
-  const friendId = String(req.params.friendId ?? '').trim();
+app.get('/api/contacts', (req, res) => {
+  void (async () => {
+    try {
+      if (!requireActiveSession(res)) {
+        return;
+      }
+
+      const refresh = req.query.refresh === '1';
+      const contacts = refresh || runtime.getContactCache().length === 0
+        ? await runtime.listFriends()
+        : runtime.getContactCache();
+      res.json({ contacts, count: contacts.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai contacts that bai' });
+    }
+  })();
+});
+
+app.get('/api/groups', (req, res) => {
+  void (async () => {
+    try {
+      if (!requireActiveSession(res)) {
+        return;
+      }
+
+      const refresh = req.query.refresh === '1';
+      const groups = refresh || runtime.getGroupCache().length === 0
+        ? await runtime.listGroups()
+        : runtime.getGroupCache();
+      res.json({ groups, count: groups.length });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Tai groups that bai' });
+    }
+  })();
+});
+
+app.get('/api/conversations/:conversationId/messages', (req, res) => {
+  const conversationId = String(req.params.conversationId ?? '').trim();
   const since = typeof req.query.since === 'string' ? req.query.since : undefined;
+  const before = typeof req.query.before === 'string' ? req.query.before : undefined;
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
 
   if (!requireActiveSession(res)) {
     return;
   }
 
-  if (!friendId) {
-    res.status(400).json({ error: 'friendId la bat buoc' });
+  if (!conversationId) {
+    res.status(400).json({ error: 'conversationId la bat buoc' });
     return;
   }
 
   try {
-    const messages = runtime.getConversationMessages(friendId, since);
-    res.json({ friendId, messages, count: messages.length });
+    const messages = runtime.getConversationMessages(conversationId, { since, before, limit });
+    const oldestTimestamp = messages[0]?.timestamp;
+    const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
+    res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversation that bai' });
   }
@@ -246,14 +299,14 @@ app.post('/api/send', (req, res) => {
       return;
     }
 
-    const friendId = String(req.body?.friendId ?? '').trim();
+    const conversationId = String(req.body?.conversationId ?? '').trim();
     const text = String(req.body?.text ?? '').trim();
     const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
     const imageFileName = typeof req.body?.imageFileName === 'string' ? req.body.imageFileName.trim() : '';
     const imageMimeType = typeof req.body?.imageMimeType === 'string' ? req.body.imageMimeType.trim() : '';
 
     logger.info('gold2_send_requested', {
-      friendId,
+      conversationId,
       textLength: text.length,
       hasImage: Boolean(imageBase64),
       imageFileName,
@@ -261,8 +314,8 @@ app.post('/api/send', (req, res) => {
       imageBase64Length: imageBase64.length,
     });
 
-    if (!friendId) {
-      res.status(400).json({ error: 'friendId la bat buoc' });
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
       return;
     }
 
@@ -275,7 +328,7 @@ app.post('/api/send', (req, res) => {
         }
 
         const imageBuffer = Buffer.from(imageBase64, 'base64');
-        result = await runtime.sendImage(friendId, {
+        result = await runtime.sendImage(conversationId, {
           imageBuffer,
           fileName: imageFileName,
           mimeType: imageMimeType,
@@ -287,7 +340,7 @@ app.post('/api/send', (req, res) => {
           return;
         }
 
-        result = await runtime.sendText(friendId, text);
+        result = await runtime.sendText(conversationId, text);
       }
 
       broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
@@ -303,11 +356,11 @@ app.post('/api/send-attachment', upload.single('file'), (req, res) => {
   void (async () => {
     if (!requireActiveSession(res)) return;
 
-    const friendId = String(req.body?.friendId ?? '').trim();
+    const conversationId = String(req.body?.conversationId ?? '').trim();
     const caption = String(req.body?.caption ?? '').trim();
 
-    if (!friendId) {
-      res.status(400).json({ error: 'friendId la bat buoc' });
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId la bat buoc' });
       return;
     }
 
@@ -317,14 +370,14 @@ app.post('/api/send-attachment', upload.single('file'), (req, res) => {
     }
 
     logger.info('gold2_send_attachment_requested', {
-      friendId,
+      conversationId,
       fileName: req.file.originalname,
       mimeType: req.file.mimetype,
       size: req.file.size,
     });
 
     try {
-      const result = await runtime.sendAttachment(friendId, {
+      const result = await runtime.sendAttachment(conversationId, {
         fileBuffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
@@ -336,6 +389,20 @@ app.post('/api/send-attachment', upload.single('file'), (req, res) => {
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
+    }
+  })();
+});
+
+app.post('/api/media/backfill', (_req, res) => {
+  void (async () => {
+    if (!requireActiveSession(res)) return;
+
+    try {
+      const result = await runtime.backfillMediaForStoredMessages();
+      broadcast({ type: 'conversation_summaries', conversations: runtime.getConversationSummaries() });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Backfill media that bai' });
     }
   })();
 });
