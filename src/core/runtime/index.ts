@@ -71,6 +71,7 @@ export class GoldRuntime {
       },
       historySyncState: undefined,
       pendingHistorySyncs: new Map(),
+      cipherKey: undefined,
     };
 
     this.auth = new GoldSessionAuth(this.state);
@@ -210,8 +211,9 @@ export class GoldRuntime {
 
     const remoteSourceUrl = attachment.sourceUrl ?? attachment.url;
     const localUrlNeedsRepair = localMediaUrlNeedsRepair(attachment.url);
+    const localFileUsable = this.state.mediaStore.isStoredFileUsable(attachment.localPath, attachment.url);
 
-    if (attachment.url?.startsWith('/media/') && !localUrlNeedsRepair) {
+    if (attachment.url?.startsWith('/media/') && !localUrlNeedsRepair && localFileUsable) {
       return attachment;
     }
 
@@ -434,6 +436,10 @@ export class GoldRuntime {
 
   async requestMobileSyncThread(threadId: string, threadType: 'direct' | 'group', options?: { timeoutMs?: number }) {
     return this.sync.requestMobileSyncThread(threadId, threadType, options);
+  }
+
+  async mobileSyncAllAccountConversations(options?: { perThreadTimeoutMs?: number; maxTotalTimeMs?: number }) {
+    return this.sync.mobileSyncAllAccountConversations(options);
   }
 
   async syncAllAccountConversations(options?: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number }) {

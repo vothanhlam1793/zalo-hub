@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,6 +52,24 @@ export class GoldMediaStore {
     return mediaDir;
   }
 
+  isStoredFileUsable(localPath?: string, publicUrl?: string) {
+    const candidatePath = localPath?.trim()
+      ? localPath.trim()
+      : publicUrl?.startsWith('/media/')
+        ? path.resolve(mediaDir, publicUrl.slice('/media/'.length))
+        : undefined;
+
+    if (!candidatePath || !existsSync(candidatePath)) {
+      return false;
+    }
+
+    try {
+      return statSync(candidatePath).size > 0;
+    } catch {
+      return false;
+    }
+  }
+
   saveBuffer(options: { accountId?: string; messageId: string; fileName?: string; mimeType?: string; buffer: Buffer }) : StoredMedia {
     ensureDir(mediaDir);
     const now = new Date();
@@ -83,6 +101,9 @@ export class GoldMediaStore {
 
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+    if (buffer.length === 0) {
+      throw new Error('Khong tai duoc file remote: empty response body');
+    }
     const mimeType = options.mimeType || response.headers.get('content-type') || undefined;
     return this.saveBuffer({
       accountId: options.accountId,

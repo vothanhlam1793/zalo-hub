@@ -13,8 +13,26 @@ export class AccountRuntimeManager {
   private readonly runtimes = new Map<string, GoldRuntime>();
   private readonly runtimeStartPromises = new Map<string, Promise<GoldRuntime>>();
   private readonly messageListeners = new Set<(event: AccountMessageEvent) => void>();
+  private readonly watchdogCooldownUntil = new Map<string, number>();
+  private readonly lastRecoveryState = new Map<string, {
+    at: string;
+    action: 'restart_listener' | 'relogin' | 'skip';
+    reason: string;
+    ok: boolean;
+    error?: string;
+  }>();
+  private broadcast: ((payload: Record<string, unknown>) => void) | undefined;
+  private watchdogRunning = false;
 
-  constructor(private readonly logger: GoldLogger) {}
+  constructor(private readonly logger: GoldLogger) {
+    setInterval(() => {
+      void this.watchRuntimes();
+    }, 30_000).unref();
+  }
+
+  setBroadcast(fn: (payload: Record<string, unknown>) => void) {
+    this.broadcast = fn;
+  }
 
   listAccounts(): GoldAccountRecord[] {
     return this.registryStore.listAccounts();
@@ -85,6 +103,9 @@ export class AccountRuntimeManager {
       await runtime.startBoundAccount();
       this.runtimes.set(normalizedAccountId, runtime);
       this.logger.info('account_runtime_ready', { accountId: normalizedAccountId });
+
+      void this.backgroundSyncAfterLogin(runtime, normalizedAccountId);
+
       return runtime;
     })();
 
@@ -111,6 +132,125 @@ export class AccountRuntimeManager {
     }));
   }
 
+  private async watchRuntimes() {
+    if (this.watchdogRunning) {
+      return;
+    }
+    this.watchdogRunning = true;
+    try {
+      const now = Date.now();
+      const accounts = this.listAccounts().filter((account) => this.registryStore.getCredentialForAccount(account.accountId));
+
+      for (const account of accounts) {
+        const accountId = account.accountId.trim();
+        const cooldownUntil = this.watchdogCooldownUntil.get(accountId) ?? 0;
+        if (cooldownUntil > now) {
+          continue;
+        }
+
+        const runtime = this.runtimes.get(accountId) ?? await this.ensureRuntime(accountId).catch((error) => {
+          this.logger.error('account_runtime_watchdog_ensure_failed', {
+            accountId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return undefined;
+        });
+        if (!runtime || !runtime.hasCredential()) {
+          continue;
+        }
+
+        const listener = runtime.getListenerState();
+        const disconnectedTooLong = listener.connected === false
+          && Boolean(listener.started)
+          && Boolean(listener.lastEventAt)
+          && (now - Date.parse(listener.lastEventAt as string)) > 60_000;
+        const shouldRestartListener = !listener.started || disconnectedTooLong;
+        const shouldRelogin = !runtime.isSessionActive();
+
+        if (!shouldRestartListener && !shouldRelogin) {
+          continue;
+        }
+
+        this.watchdogCooldownUntil.set(accountId, now + 120_000);
+        const reason = shouldRelogin
+          ? 'session_inactive'
+          : !listener.started
+            ? 'listener_not_started'
+            : 'listener_disconnected';
+
+        try {
+          if (shouldRelogin) {
+            await runtime.loginWithStoredCredential();
+            this.lastRecoveryState.set(accountId, { at: new Date().toISOString(), action: 'relogin', reason, ok: true });
+            this.logger.info('account_runtime_watchdog_relogin_ok', { accountId, reason });
+          } else {
+            runtime.restartListener();
+            this.lastRecoveryState.set(accountId, { at: new Date().toISOString(), action: 'restart_listener', reason, ok: true });
+            this.logger.info('account_runtime_watchdog_restart_listener_ok', { accountId, reason });
+          }
+        } catch (error) {
+          this.lastRecoveryState.set(accountId, {
+            at: new Date().toISOString(),
+            action: shouldRelogin ? 'relogin' : 'restart_listener',
+            reason,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.logger.error('account_runtime_watchdog_recover_failed', {
+            accountId,
+            reason,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } finally {
+      this.watchdogRunning = false;
+    }
+  }
+
+  async syncAccountAfterLogin(accountId: string) {
+    const runtime = this.runtimes.get(accountId.trim());
+    if (!runtime) {
+      this.logger.info('account_sync_no_runtime', { accountId });
+      return;
+    }
+    if (!runtime.isSessionActive()) {
+      this.logger.info('account_sync_no_session', { accountId });
+      return;
+    }
+    void this.backgroundSyncAfterLogin(runtime, accountId);
+  }
+
+  private async backgroundSyncAfterLogin(runtime: GoldRuntime, accountId: string) {
+    try {
+      this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'loading' });
+      this.logger.info('account_auto_sync_starting', { accountId });
+
+      await runtime.listFriends().catch(() => undefined);
+      await runtime.listGroups().catch(() => undefined);
+      this.logger.info('account_auto_sync_loaded_contacts', { accountId });
+
+      this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'syncing' });
+      const result = await runtime.mobileSyncAllAccountConversations({ perThreadTimeoutMs: 10_000, maxTotalTimeMs: 120_000 });
+
+      const totalHistoryMsgs = result.results?.reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0) ?? 0;
+      this.logger.info('account_auto_sync_completed', { accountId, requ18Received: result.requ18Received, historyMsgs: totalHistoryMsgs });
+
+      this.broadcast?.({
+        type: 'ws_sync_status',
+        accountId,
+        status: 'done',
+        requ18Received: result.requ18Received,
+        requ18Inserted: result.requ18Inserted,
+        historySynced: result.historySynced,
+        historyMsgs: totalHistoryMsgs,
+      });
+    } catch (error) {
+      this.logger.info('account_auto_sync_skipped', { accountId, reason: error instanceof Error ? error.message : String(error) });
+      this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'error', error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   async ensurePrimaryRuntime() {
     const accountId = this.getPrimaryAccountId();
     if (!accountId) {
@@ -130,6 +270,7 @@ export class AccountRuntimeManager {
       runtimeLoaded: Boolean(runtime),
       sessionActive: runtime?.isSessionActive() ?? false,
       listener: runtime?.getListenerState(),
+      watchdog: this.lastRecoveryState.get(accountId),
       account: runtime?.getCurrentAccount(),
       qrCodeAvailable: Boolean(runtime?.getCurrentQrCode()),
     };

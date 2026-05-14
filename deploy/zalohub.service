@@ -1,0 +1,19 @@
+[Unit]
+Description=ZaloHub server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=leco
+WorkingDirectory=/home/leco/zalohub
+Environment=NODE_ENV=production
+Environment=GOLD2_PORT=3399
+ExecStart=/home/leco/.nvm/versions/node/v22.22.2/bin/node --experimental-sqlite /home/leco/zalohub/dist/server/index.js
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

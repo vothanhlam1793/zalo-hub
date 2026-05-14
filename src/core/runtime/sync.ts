@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { createDecipheriv } from 'node:crypto';
+import { inflateSync } from 'node:zlib';
 import { normalizeFriendList, normalizeGroupList, normalizeGroupInfoMap, chunkArray, normalizeUserInfoMap, normalizeGroupMemberInfoMap, getConversationId, localMediaUrlNeedsRepair, normalizeMessageKind, normalizeMessageText, normalizeAttachments, normalizeImageUrl, mergeAttachmentMetadata } from './normalizer.js';
 import { getAllGroups as fetchAllGroups, getGroupInfo as fetchGroupInfo } from '../zalo-group-client.js';
+import { ZaloPcHandshake } from '../zalo-pc-handshake.js';
 import type { GoldConversationMessage, GoldConversationType, GoldGroupMemberRecord, GoldAttachment } from '../types.js';
 import type { SharedState, HistorySyncResult } from './types.js';
 
@@ -132,6 +135,7 @@ export class GoldSync {
     let finalOldestTimestamp: string | undefined;
     let finalOldestPmid: string | undefined;
     let finalTimedOut = false;
+    let finalHasMore = false;
 
     const promise = (async () => {
       while (true) {
@@ -152,6 +156,7 @@ export class GoldSync {
 
         if (result.oldestTimestamp) finalOldestTimestamp = result.oldestTimestamp;
         if (result.oldestProviderMessageId) finalOldestPmid = result.oldestProviderMessageId;
+        finalHasMore = result.hasMore;
 
         if (result.timedOut) {
           finalTimedOut = true;
@@ -176,14 +181,18 @@ export class GoldSync {
         dedupedCount: totalDeduped,
         oldestTimestamp: finalOldestTimestamp,
         oldestProviderMessageId: finalOldestPmid,
-        hasMore: false,
+        hasMore: finalHasMore,
         timedOut: finalTimedOut,
         batchCount,
       };
 
       this.state.logger.info('history_sync_complete_aggregate', aggregated);
       return aggregated;
-    })();
+    })().finally(() => {
+      if (this.state.pendingHistorySyncs.get(conversationId) === promise) {
+        this.state.pendingHistorySyncs.delete(conversationId);
+      }
+    });
 
     this.state.pendingHistorySyncs.set(conversationId, promise);
     return promise;
@@ -236,50 +245,156 @@ export class GoldSync {
     });
   }
 
-  async requestMobileSyncThread(threadId: string, threadType: 'direct' | 'group', options: { timeoutMs?: number } = {}): Promise<{ received: number; textFrames: string[]; syncResult?: HistorySyncResult }> {
+  async requestMobileSyncThread(threadId: string, threadType: 'direct' | 'group', options: { timeoutMs?: number } = {}): Promise<{ received: number; insertedCount: number; dedupedCount: number; oldestTimestamp?: string; timedOut?: boolean }> {
     const listener = this.state.session?.api?.listener as any;
     const ws = listener?.ws;
     if (!ws || ws.readyState !== 1) {
+      this.state.logger.info('mobile_sync_ws_not_ready', { threadId, readyState: ws?.readyState });
       throw new Error('WebSocket khong san sang');
     }
 
-    const textFrames: string[] = [];
-    const timeoutMs = options.timeoutMs ?? 30_000;
-
-    const onMessage = (event: { data: any }) => {
-      const raw = event.data;
-      try {
-        if (typeof raw === 'string') {
-          const parsed = JSON.parse(raw);
-          textFrames.push(JSON.stringify(parsed).slice(0, 300));
-          this.state.logger.info('mobile_sync_text_frame', { parsed: JSON.stringify(parsed).slice(0, 200) });
-        }
-      } catch {}
-    };
-
-    (ws as any).addEventListener?.('message', onMessage);
-
-    let syncResult: HistorySyncResult | undefined;
-    try {
-      ws.send(JSON.stringify({ data: [{ tId: threadId }], reqId: `mobilesync_${Date.now()}` }));
-      this.state.logger.info('mobile_sync_req18_sent', { threadId });
-
-      syncResult = await this.syncConversationHistory(
-        threadType === 'group' ? `group:${threadId}` : `direct:${threadId}`,
-        { timeoutMs, maxTotalTimeMs: timeoutMs },
-      );
-    } catch (err) {
-      this.state.logger.error('mobile_sync_error', { error: String(err) });
+    if (!this.state.cipherKey) {
+      this.state.logger.info('mobile_sync_no_cipher_key', { threadId });
+      throw new Error('Cipher key chua co');
     }
 
-    await new Promise<void>((resolve) => {
-      setTimeout(() => {
-        (ws as any).removeEventListener?.('message', onMessage);
-        resolve();
-      }, 2000);
+    const timeoutMs = Math.min(options.timeoutMs ?? 15_000, 30_000);
+
+    try {
+      const handshake = new ZaloPcHandshake(this.state);
+      await handshake.runHandshake();
+
+      const result = await handshake.requestMobileSync(threadId, threadType, timeoutMs);
+      this.state.logger.info('mobile_sync_req18_complete', {
+        threadId,
+        totalReceived: result.received,
+        totalInserted: result.insertedCount,
+        totalDeduped: result.dedupedCount,
+        wsReadyState: ws.readyState,
+      });
+
+      return {
+        received: result.received,
+        insertedCount: result.insertedCount,
+        dedupedCount: result.dedupedCount,
+        oldestTimestamp: result.oldestTimestamp,
+        timedOut: result.received === 0,
+      };
+    } catch (err) {
+      this.state.logger.error('mobile_sync_handshake_failed', { error: String(err) });
+      return {
+        received: 0,
+        insertedCount: 0,
+        dedupedCount: 0,
+        timedOut: true,
+      };
+    }
+  }
+
+  async mobileSyncAllAccountConversations(options: { perThreadTimeoutMs?: number; maxTotalTimeMs?: number } = {}): Promise<{
+    requ18Synced: number;
+    requ18Failed: number;
+    requ18Received: number;
+    requ18Inserted: number;
+    historySynced: number;
+    historyFailed: number;
+    results: Array<{
+      conversationId: string;
+      threadId: string;
+      type: string;
+      requ18Received: number;
+      requ18Inserted: number;
+      requ18TimedOut: boolean;
+      historyResult: HistorySyncResult | null;
+      error?: string;
+    }>;
+  }> {
+    const summaries = this.state.store.listConversationSummariesByAccount(this.state.boundAccountId);
+    this.state.logger.info('mobile_sync_all_start', {
+      accountId: this.state.boundAccountId,
+      conversationCount: summaries.length,
+      cipherKeyAvailable: !!this.state.cipherKey,
+      wsReady: (this.state.session?.api?.listener as any)?.ws?.readyState,
     });
 
-    return { received: syncResult?.remoteCount ?? 0, textFrames, syncResult };
+    const results: Array<any> = [];
+    let requ18Synced = 0;
+    let requ18Failed = 0;
+    let requ18Received = 0;
+    let requ18Inserted = 0;
+    let historySynced = 0;
+    let historyFailed = 0;
+    const perThreadTimeoutMs = options.perThreadTimeoutMs ?? 10_000;
+    const maxTotalTimeMs = options.maxTotalTimeMs ?? 120_000;
+    const startTime = Date.now();
+
+    for (const summary of summaries) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= maxTotalTimeMs) {
+        this.state.logger.info('mobile_sync_all_time_limit', { elapsedMs: elapsed, maxTotalTimeMs });
+        break;
+      }
+
+      const threadTimeout = Math.min(perThreadTimeoutMs, maxTotalTimeMs - elapsed);
+      const result: any = {
+        conversationId: summary.id,
+        threadId: summary.threadId ?? '',
+        type: summary.type ?? 'direct',
+        requ18Received: 0,
+        requ18Inserted: 0,
+        requ18TimedOut: false,
+        historyResult: null,
+      };
+
+      try {
+        const requ18Result = await this.requestMobileSyncThread(
+          result.threadId,
+          result.type as 'direct' | 'group',
+          { timeoutMs: threadTimeout },
+        );
+        result.requ18Received = requ18Result.received;
+        result.requ18Inserted = requ18Result.insertedCount;
+        result.requ18TimedOut = requ18Result.timedOut ?? false;
+        requ18Received += requ18Result.received;
+        requ18Inserted += requ18Result.insertedCount;
+        requ18Synced++;
+
+        const historyElapsed = Date.now() - startTime;
+        const historyTimeout = Math.min(perThreadTimeoutMs, maxTotalTimeMs - historyElapsed);
+        try {
+          const historyResult = await this.syncConversationHistory(summary.id, {
+            timeoutMs: historyTimeout,
+            maxTotalTimeMs: historyTimeout,
+          });
+          result.historyResult = historyResult;
+          historySynced++;
+        } catch (histErr) {
+          result.historyError = String(histErr);
+          historyFailed++;
+        }
+      } catch (err) {
+        result.error = String(err);
+        requ18Failed++;
+        this.state.logger.error('mobile_sync_all_thread_failed', { conversationId: summary.id, error: String(err) });
+      }
+
+      results.push(result);
+      this.state.logger.info('mobile_sync_all_thread_done', {
+        conversationId: summary.id,
+        requ18Received: result.requ18Received,
+        requ18Inserted: result.requ18Inserted,
+      });
+    }
+
+    return {
+      requ18Synced,
+      requ18Failed,
+      requ18Received,
+      requ18Inserted,
+      historySynced,
+      historyFailed,
+      results,
+    };
   }
 
   async syncAllAccountConversations(options: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number } = {}): Promise<{ synced: number; failed: number; results: HistorySyncResult[] }> {
