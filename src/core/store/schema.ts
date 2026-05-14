@@ -128,8 +128,35 @@ export class GoldStoreSchema {
         duration INTEGER,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS system_users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        avatar TEXT,
+        type TEXT NOT NULL DEFAULT 'human',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS system_sessions (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES system_users(id) ON DELETE CASCADE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS zalo_account_memberships (
+        user_id TEXT NOT NULL REFERENCES system_users(id) ON DELETE CASCADE,
+        account_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'agent',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, account_id)
+      );
     `);
 
+    this.addColumnIfMissing('system_users', 'role', "TEXT NOT NULL DEFAULT 'user'");
     this.addColumnIfMissing('conversations', 'thread_id', 'TEXT');
     this.addColumnIfMissing('conversations', 'type', "TEXT NOT NULL DEFAULT 'direct'");
     this.addColumnIfMissing('conversations', 'title', 'TEXT');

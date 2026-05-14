@@ -99,7 +99,7 @@ export class GoldSync {
     };
   }
 
-  async syncConversationHistory(conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number } = {}) {
+  async syncConversationHistory(conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number; maxTotalTimeMs?: number } = {}) {
     if (!this.state.session) {
       await this._loginWithStoredCredential?.();
     }
@@ -115,11 +115,88 @@ export class GoldSync {
     }
 
     const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
-    const oldestLocal = this.state.store.listConversationMessagesByAccount(this.state.boundAccountId, conversationId, { limit: 1 })[0];
-    const beforeMessageId = options.beforeMessageId?.trim() || oldestLocal?.providerMessageId;
-    const timeoutMs = Math.max(3_000, Math.min(options.timeoutMs ?? 12_000, 45_000));
+    const perBatchTimeout = Math.max(5_000, Math.min(options.timeoutMs ?? 45_000, 45_000));
+    const maxTotalTimeMs = options.maxTotalTimeMs ?? 240_000;
+    const startTime = Date.now();
 
-    const promise = new Promise<HistorySyncResult>((resolve, reject) => {
+    let beforeMessageId: string | null | undefined = options.beforeMessageId?.trim();
+    if (!beforeMessageId) {
+      const oldestLocal = this.state.store.listConversationMessagesByAccount(this.state.boundAccountId, conversationId, { limit: 1 })[0];
+      beforeMessageId = oldestLocal?.providerMessageId ?? null;
+    }
+
+    let totalRemote = 0;
+    let totalInserted = 0;
+    let totalDeduped = 0;
+    let batchCount = 0;
+    let finalOldestTimestamp: string | undefined;
+    let finalOldestPmid: string | undefined;
+    let finalTimedOut = false;
+
+    const promise = (async () => {
+      while (true) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed >= maxTotalTimeMs) break;
+
+        const batchTimeout = Math.min(perBatchTimeout, maxTotalTimeMs - elapsed);
+        const result = await this._requestHistoryBatch(conversationId, target, listener, beforeMessageId, batchTimeout);
+
+        totalRemote += result.remoteCount;
+        totalInserted += result.insertedCount;
+        totalDeduped += result.dedupedCount;
+        batchCount++;
+
+        if (!result.oldestTimestamp && !result.oldestProviderMessageId) {
+          // nothing produced at all
+        }
+
+        if (result.oldestTimestamp) finalOldestTimestamp = result.oldestTimestamp;
+        if (result.oldestProviderMessageId) finalOldestPmid = result.oldestProviderMessageId;
+
+        if (result.timedOut) {
+          finalTimedOut = true;
+          this.state.logger.info('history_sync_batch_timeout', { conversationId, batchCount });
+          break;
+        }
+
+        if (!result.hasMore || !result.oldestProviderMessageId) {
+          this.state.logger.info('history_sync_exhausted', { conversationId, batchCount, totalRemote });
+          break;
+        }
+
+        beforeMessageId = result.oldestProviderMessageId;
+      }
+
+      const aggregated: HistorySyncResult = {
+        conversationId,
+        threadId: target.threadId,
+        type: target.type,
+        remoteCount: totalRemote,
+        insertedCount: totalInserted,
+        dedupedCount: totalDeduped,
+        oldestTimestamp: finalOldestTimestamp,
+        oldestProviderMessageId: finalOldestPmid,
+        hasMore: false,
+        timedOut: finalTimedOut,
+        batchCount,
+      };
+
+      this.state.logger.info('history_sync_complete_aggregate', aggregated);
+      return aggregated;
+    })();
+
+    this.state.pendingHistorySyncs.set(conversationId, promise);
+    return promise;
+  }
+
+  private _requestHistoryBatch(
+    conversationId: string,
+    target: { threadId: string; type: string },
+    listener: { requestOldMessages?: (threadType: number, lastMsgId?: string | null) => void },
+    beforeMessageId: string | null | undefined,
+    timeoutMs: number,
+  ): Promise<HistorySyncResult> {
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.state.historySyncState?.conversationId !== conversationId) {
           return;
@@ -130,45 +207,101 @@ export class GoldSync {
         const result: HistorySyncResult = {
           conversationId,
           threadId: target.threadId,
-          type: target.type,
-          requestedBeforeMessageId: beforeMessageId,
+          type: target.type as HistorySyncResult['type'],
+          requestedBeforeMessageId: beforeMessageId ?? undefined,
           remoteCount: 0,
           insertedCount: 0,
           dedupedCount: 0,
           hasMore: false,
           timedOut: true,
         };
-        this.state.logger.info('history_sync_timeout', result);
         resolve(result);
       }, timeoutMs);
 
       this.state.historySyncState = {
         conversationId,
         threadId: target.threadId,
-        type: target.type,
-        beforeMessageId,
+        type: target.type as HistorySyncResult['type'],
+        beforeMessageId: beforeMessageId ?? undefined,
         requestedAt: Date.now(),
         resolve,
         reject,
         timer,
       };
 
-      this.state.logger.info('history_sync_requested', {
-        conversationId,
-        threadId: target.threadId,
-        type: target.type,
-        beforeMessageId,
-        timeoutMs,
-      });
-
       listener.requestOldMessages?.(
         target.type === 'group' ? ThreadType.Group : ThreadType.User,
         beforeMessageId ?? null,
       );
     });
+  }
 
-    this.state.pendingHistorySyncs.set(conversationId, promise);
-    return promise;
+  async requestMobileSyncThread(threadId: string, threadType: 'direct' | 'group', options: { timeoutMs?: number } = {}): Promise<{ received: number; textFrames: string[]; syncResult?: HistorySyncResult }> {
+    const listener = this.state.session?.api?.listener as any;
+    const ws = listener?.ws;
+    if (!ws || ws.readyState !== 1) {
+      throw new Error('WebSocket khong san sang');
+    }
+
+    const textFrames: string[] = [];
+    const timeoutMs = options.timeoutMs ?? 30_000;
+
+    const onMessage = (event: { data: any }) => {
+      const raw = event.data;
+      try {
+        if (typeof raw === 'string') {
+          const parsed = JSON.parse(raw);
+          textFrames.push(JSON.stringify(parsed).slice(0, 300));
+          this.state.logger.info('mobile_sync_text_frame', { parsed: JSON.stringify(parsed).slice(0, 200) });
+        }
+      } catch {}
+    };
+
+    (ws as any).addEventListener?.('message', onMessage);
+
+    let syncResult: HistorySyncResult | undefined;
+    try {
+      ws.send(JSON.stringify({ data: [{ tId: threadId }], reqId: `mobilesync_${Date.now()}` }));
+      this.state.logger.info('mobile_sync_req18_sent', { threadId });
+
+      syncResult = await this.syncConversationHistory(
+        threadType === 'group' ? `group:${threadId}` : `direct:${threadId}`,
+        { timeoutMs, maxTotalTimeMs: timeoutMs },
+      );
+    } catch (err) {
+      this.state.logger.error('mobile_sync_error', { error: String(err) });
+    }
+
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        (ws as any).removeEventListener?.('message', onMessage);
+        resolve();
+      }, 2000);
+    });
+
+    return { received: syncResult?.remoteCount ?? 0, textFrames, syncResult };
+  }
+
+  async syncAllAccountConversations(options: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number } = {}): Promise<{ synced: number; failed: number; results: HistorySyncResult[] }> {
+    const summaries = this.state.store.listConversationSummariesByAccount(this.state.boundAccountId);
+    const results: HistorySyncResult[] = [];
+    let failed = 0;
+
+    for (const summary of summaries) {
+      try {
+        const result = await this.syncConversationHistory(summary.id, {
+          timeoutMs: options.perConversationTimeoutMs ?? 15_000,
+          maxTotalTimeMs: Math.min(options.maxTotalTimeMs ?? 120_000, 120_000),
+        });
+        results.push(result);
+        this.state.logger.info('account_sync_conversation_done', { conversationId: summary.id, remoteCount: result.remoteCount });
+      } catch (error) {
+        failed++;
+        this.state.logger.error('account_sync_conversation_failed', { conversationId: summary.id, error: String(error) });
+      }
+    }
+
+    return { synced: results.length, failed, results };
   }
 
   async backfillMediaForStoredMessages() {

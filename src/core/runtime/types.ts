@@ -74,6 +74,7 @@ export type HistorySyncResult = {
   oldestProviderMessageId?: string;
   hasMore: boolean;
   timedOut?: boolean;
+  batchCount?: number;
 };
 
 export interface SharedState {

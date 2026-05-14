@@ -45,6 +45,11 @@ export class AccountRuntimeManager {
     this.registryStore.activateAccount(accountId);
   }
 
+  stopRuntime(accountId: string) {
+    this.runtimes.delete(accountId.trim());
+    this.runtimeStartPromises.delete(accountId.trim());
+  }
+
   getPrimaryRuntime() {
     const accountId = this.getPrimaryAccountId();
     if (!accountId) {

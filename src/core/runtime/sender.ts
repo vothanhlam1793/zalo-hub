@@ -208,4 +208,46 @@ export class GoldSender {
   async sendFile(conversationId: string, options: { fileBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
     return this.sendAttachment(conversationId, options);
   }
+
+  async sendSticker(conversationId: string, stickerId: string, catId: string) {
+    if (!this.state.session) await this._loginWithStoredCredential?.();
+    const api = this.state.session?.api;
+    if (typeof api?.sendSticker !== 'function') throw new Error('Session khong ho tro sendSticker');
+    const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
+    const result = await api.sendSticker(stickerId, catId, target.threadId, target.type === 'group' ? ThreadType.Group : ThreadType.User);
+    return { method: 'sendSticker', result };
+  }
+
+  async sendTypingEvent(conversationId: string, isTyping: boolean) {
+    if (!this.state.session) await this._loginWithStoredCredential?.();
+    const api = this.state.session?.api;
+    if (typeof api?.sendTypingEvent !== 'function') return;
+    const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
+    await api.sendTypingEvent(target.threadId, target.type === 'group' ? ThreadType.Group : ThreadType.User, isTyping);
+  }
+
+  async addReaction(conversationId: string, messageId: string, reactionType: number) {
+    if (!this.state.session) await this._loginWithStoredCredential?.();
+    const api = this.state.session?.api;
+    if (typeof api?.addReaction !== 'function') throw new Error('Session khong ho tro addReaction');
+    const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
+    const result = await api.addReaction(messageId, reactionType, target.threadId, target.type === 'group' ? ThreadType.Group : ThreadType.User);
+    return { method: 'addReaction', result };
+  }
+
+  async createPoll(groupId: string, question: string, options: string[]) {
+    if (!this.state.session) await this._loginWithStoredCredential?.();
+    const api = this.state.session?.api;
+    if (typeof api?.createPoll !== 'function') throw new Error('Session khong ho tro createPoll');
+    const result = await api.createPoll(groupId, question, options);
+    return { method: 'createPoll', result };
+  }
+
+  async forwardMessage(messageId: string, toThreadId: string, toType: GoldConversationType) {
+    if (!this.state.session) await this._loginWithStoredCredential?.();
+    const api = this.state.session?.api;
+    if (typeof api?.forwardMessage !== 'function') throw new Error('Session khong ho tro forwardMessage');
+    const result = await api.forwardMessage(messageId, toThreadId, toType === 'group' ? ThreadType.Group : ThreadType.User);
+    return { method: 'forwardMessage', result };
+  }
 }

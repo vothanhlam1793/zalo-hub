@@ -82,6 +82,36 @@ export class GoldListener {
     this.state.listenerState.startAttempts += 1;
     this.state.listenerState.lastEventAt = new Date().toISOString();
     this.state.logger.info('message_listener_started', { startAttempts: this.state.listenerState.startAttempts });
+
+    const rawWs: WebSocket | null = (listener as any).ws;
+    if (rawWs) {
+      const onRawText = (event: { data: any }) => {
+        const raw = event.data;
+        if (typeof raw !== 'string') return;
+        try {
+          const parsed = JSON.parse(raw);
+          const reqId = parsed.reqId || parsed.eventId || '';
+          if (reqId) {
+            this.state.logger.info('ws_text_frame', {
+              reqId,
+              hasData: !!parsed.data,
+              keys: parsed.data ? Object.keys(parsed.data).slice(0, 6) : [],
+            });
+            if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+              const msgs = parsed.data.msgs;
+              const actions = parsed.data.actions;
+              if (msgs && Array.isArray(msgs)) {
+                this.state.logger.info('ws_text_frame_messages', { count: msgs.length, reqId });
+              }
+              if (actions && Array.isArray(actions)) {
+                this.state.logger.info('ws_text_frame_actions', { count: actions.length, reqId });
+              }
+            }
+          }
+        } catch {}
+      };
+      (rawWs as any).addEventListener?.('message', onRawText);
+    }
   }
 
   private async normalizeListenerMessage(message: ListenerMessage, forcedType?: GoldConversationType): Promise<GoldConversationMessage | undefined> {
@@ -160,12 +190,11 @@ export class GoldListener {
       dedupedCount,
       oldestTimestamp: oldestMessage?.timestamp,
       oldestProviderMessageId: oldestMessage?.providerMessageId,
-      hasMore: normalized.length > 0 && insertedCount > 0,
+      hasMore: normalized.length > 0,
     };
 
     clearTimeout(sync.timer);
     this.state.historySyncState = undefined;
-    this.state.pendingHistorySyncs.delete(sync.conversationId);
     this.state.logger.info('history_sync_completed', result);
     sync.resolve(result);
   }

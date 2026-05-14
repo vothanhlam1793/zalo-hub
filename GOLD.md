@@ -77,7 +77,7 @@ archived/
 | gold-6 | Contacts + Groups + Conversations: 3 tab UI, group chat realtime, refactor conversation model, lazy history, local media mirror, legacy attachment repair | Done | `archived/GOLD-6-RESULT.md` |
 | gold-7 | Recent/history sync từ Zalo, chống duplicate theo provider message id, canonical direct/group conversation, sync metadata khi mở chat, enrich sender name group và persist local DB | Done | `archived/GOLD-7-RESULT.md` |
 | gold-8 | Foundation cho multi-account: runtime per account, AccountRuntimeManager, store explicit accountId, account-scoped API/WebSocket, frontend account switcher + QR overlay, warm-start nhiều account, data identity account-safe | Done | `archived/GOLD-8-RESULT.md` |
-| gold-9 | System users + authentication + authorization theo từng Zalo account: schema system_users, sessions, memberships, middleware auth, UI login user hệ thống, phân quyền | Planned | — |
+| gold-9 | System users + authentication + authorization theo từng Zalo account: schema system_users, sessions, memberships, middleware auth, UI login user hệ thống, phân quyền | Done | `archived/GOLD-9-RESULT.md` |
 | gold-10 | Shared inbox workflow: assignment, notes, labels, trạng thái conversation, audit log | Planned | — |
 | gold-11 | Advanced: presence, notification, analytics, multi-language, mobile PWA | Planned | — |
 

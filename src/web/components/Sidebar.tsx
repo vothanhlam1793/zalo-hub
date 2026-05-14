@@ -1,3 +1,8 @@
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { getContactDisplayName, getInitial, directConversationId, groupConversationId } from '../utils';
 import type { Contact, ConversationSummary, Group } from '../types';
 
@@ -21,6 +26,8 @@ interface SidebarProps {
   onSelectConversation: (id: string) => void;
   onOpenDirectConversation: (contact: Contact) => void;
   onOpenGroupConversation: (group: Group) => void;
+  onSyncAll: () => void;
+  syncingAll: boolean;
 }
 
 export function Sidebar({
@@ -41,55 +48,72 @@ export function Sidebar({
   onSelectConversation,
   onOpenDirectConversation,
   onOpenGroupConversation,
+  onSyncAll,
+  syncingAll,
 }: SidebarProps) {
+  const currentDisplayName = accounts.find((a) => a.accountId === workspaceAccountId)?.displayName ?? statusDisplayName ?? 'Đã đăng nhập';
+
   return (
-    <div className="sidebar">
-      <div className="sidebar-header">
+    <div className="w-[300px] min-w-[280px] border-r border-[var(--sidebar-border)] flex flex-col bg-[var(--sidebar)] overflow-hidden max-sm:w-[260px] max-sm:min-w-[240px]">
+      <div className="p-4 border-b border-[var(--sidebar-border)] flex items-center justify-between gap-2">
         <div>
-          <h2>Zalo Hub</h2>
-          <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
-            {accounts.find((a) => a.accountId === workspaceAccountId)?.displayName ?? statusDisplayName ?? 'Đã đăng nhập'}
-          </div>
+          <h2 className="m-0 text-base font-bold text-[#eee]">Zalo Hub</h2>
+          <div className="text-xs text-muted-foreground mt-0.5">{currentDisplayName}</div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-          <span className={`status-badge ${listenerConnected ? 'connected' : 'error'}`}>
+        <div className="flex flex-col gap-1.5 items-end">
+          <Badge variant={listenerConnected ? 'default' : 'destructive'} className="text-[11px]">
             {listenerConnected ? 'Live' : 'Offline'}
-          </span>
-          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={onRefresh}>
+          </Badge>
+          <Button variant="ghost" size="sm" onClick={onRefresh} className="h-auto py-1 px-2.5 text-xs">
             Làm mới
-          </button>
-          <button className="btn btn-danger" style={{ padding: '4px 10px', fontSize: 12 }} onClick={onLogout}>
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onSyncAll}
+            disabled={syncingAll}
+            className="h-auto py-1 px-2.5 text-xs bg-[rgba(79,122,255,0.15)] hover:bg-[rgba(79,122,255,0.25)] text-[#7fa8ff]"
+          >
+            {syncingAll ? '⏳ Đang đồng bộ...' : '📱 Đồng bộ từ ĐT'}
+          </Button>
+          <Button variant="destructive" size="sm" onClick={onLogout} className="h-auto py-1 px-2.5 text-xs">
             Đăng xuất
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, padding: '12px 14px 6px' }}>
-        <button className="btn btn-ghost" onClick={() => onTabChange('conversations')}>Cuộc trò chuyện</button>
-        <button className="btn btn-ghost" onClick={() => onTabChange('contacts')}>Bạn bè</button>
-        <button className="btn btn-ghost" onClick={() => onTabChange('groups')}>Nhóm</button>
-      </div>
+      <Tabs value={sidebarTab} onValueChange={(v) => onTabChange(v as SidebarTab)} className="px-3.5 pt-3 pb-1.5">
+        <TabsList className="w-full">
+          <TabsTrigger value="conversations" className="flex-1">Cuộc trò chuyện</TabsTrigger>
+          <TabsTrigger value="contacts" className="flex-1">Bạn bè</TabsTrigger>
+          <TabsTrigger value="groups" className="flex-1">Nhóm</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
-      <div style={{ padding: '0 14px 10px' }}>
-        <input
+      <div className="px-3.5 pb-2.5">
+        <Input
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={sidebarTab === 'conversations' ? 'Tìm cuộc trò chuyện...' : sidebarTab === 'contacts' ? 'Tìm bạn bè...' : 'Tìm nhóm...'}
-          style={{ width: '100%', padding: '10px 12px', borderRadius: 12, border: '1px solid #d7dce5' }}
+          className="h-10"
         />
       </div>
 
-      <div className="sidebar-body">
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {sidebarTab === 'conversations' && conversations.map((entry) => (
           <div
             key={entry.id}
-            className={`conversation-item ${activeConversationId === entry.id ? 'active' : ''}`}
             onClick={() => onSelectConversation(entry.id)}
+            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${activeConversationId === entry.id ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
           >
-            <div className="avatar">{getInitial(entry.title)}</div>
-            <div className="conversation-info">
-              <div className="conversation-name">{entry.title}{entry.type === 'group' ? ' (Nhóm)' : ''}</div>
-              <div className="conversation-last">
+            <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
+              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
+                {getInitial(entry.title)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-[#eee] truncate">{entry.title}{entry.type === 'group' ? ' (Nhóm)' : ''}</div>
+              <div className="text-xs text-[#666] mt-0.5 truncate">
                 {entry.lastDirection === 'outgoing' ? 'Bạn: ' : ''}
                 {entry.lastMessageKind !== 'text' ? `[${entry.lastMessageKind}] ` : ''}
                 {entry.lastMessageText}
@@ -101,13 +125,17 @@ export function Sidebar({
         {sidebarTab === 'contacts' && contacts.map((entry) => (
           <div
             key={entry.userId}
-            className={`conversation-item ${activeConversationId === directConversationId(entry.userId) ? 'active' : ''}`}
             onClick={() => onOpenDirectConversation(entry)}
+            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${activeConversationId === directConversationId(entry.userId) ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
           >
-            <div className="avatar">{getInitial(getContactDisplayName(entry))}</div>
-            <div className="conversation-info">
-              <div className="conversation-name">{getContactDisplayName(entry)}</div>
-              <div className="conversation-last">Nhấn để mở chat</div>
+            <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
+              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
+                {getInitial(getContactDisplayName(entry))}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-[#eee] truncate">{getContactDisplayName(entry)}</div>
+              <div className="text-xs text-[#666] mt-0.5 truncate">Nhấn để mở chat</div>
             </div>
           </div>
         ))}
@@ -115,13 +143,17 @@ export function Sidebar({
         {sidebarTab === 'groups' && groups.map((entry) => (
           <div
             key={entry.groupId}
-            className={`conversation-item ${activeConversationId === groupConversationId(entry.groupId) ? 'active' : ''}`}
             onClick={() => onOpenGroupConversation(entry)}
+            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${activeConversationId === groupConversationId(entry.groupId) ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
           >
-            <div className="avatar">{getInitial(entry.displayName)}</div>
-            <div className="conversation-info">
-              <div className="conversation-name">{entry.displayName}</div>
-              <div className="conversation-last">{entry.memberCount ? `${entry.memberCount} thành viên` : 'Nhấn để mở nhóm chat'}</div>
+            <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
+              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
+                {getInitial(entry.displayName)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-[#eee] truncate">{entry.displayName}</div>
+              <div className="text-xs text-[#666] mt-0.5 truncate">{entry.memberCount ? `${entry.memberCount} thành viên` : 'Nhấn để mở nhóm chat'}</div>
             </div>
           </div>
         ))}

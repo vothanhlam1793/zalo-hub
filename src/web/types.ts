@@ -1,4 +1,4 @@
-export type MessageKind = 'text' | 'image' | 'file' | 'video';
+export type MessageKind = 'text' | 'image' | 'file' | 'video' | 'sticker' | 'reaction' | 'poll' | 'voice' | 'gif';
 export type ConversationType = 'direct' | 'group';
 
 export interface Attachment {
@@ -47,6 +47,7 @@ export interface HistorySyncResult {
   oldestProviderMessageId?: string;
   hasMore: boolean;
   timedOut?: boolean;
+  batchCount?: number;
 }
 
 export interface ConversationSummary {

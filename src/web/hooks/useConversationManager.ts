@@ -3,13 +3,14 @@ import { api } from '../api';
 import type { ConversationSummary, HistorySyncResult, Message, Contact, Group } from '../types';
 
 function buildHistoryStatus(result: HistorySyncResult) {
-  if (result.timedOut) {
+  if (result.timedOut && result.remoteCount === 0) {
     return 'Đồng bộ lịch sử bị timeout. Có thể điện thoại hoặc nguồn sync của Zalo chưa phản hồi.';
   }
+  const batchInfo = (result.batchCount && result.batchCount > 1) ? ` (${result.batchCount} đợt)` : '';
   if (result.remoteCount === 0) {
     return 'Zalo không trả thêm lịch sử cũ cho cuộc trò chuyện này.';
   }
-  return `Đồng bộ lịch sử: nhận ${result.remoteCount} tin, thêm mới ${result.insertedCount}, bỏ trùng ${result.dedupedCount}.`;
+  return `Đồng bộ lịch sử: nhận ${result.remoteCount} tin, thêm mới ${result.insertedCount}, bỏ trùng ${result.dedupedCount}${batchInfo}.`;
 }
 
 export function useConversationManager() {
@@ -97,31 +98,50 @@ export function useConversationManager() {
     setLoadError('');
     setStatusMsg('');
     subscribe(accountId, conversationId);
-    try {
-      const synced = await api.accountSyncConversationMetadata(accountId, conversationId);
-      if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) {
-        return;
-      }
 
-      if (synced.conversationId !== conversationId) {
-        setActiveConversationId(synced.conversationId);
-        activeConversationIdRef.current = synced.conversationId;
-        subscribe(accountId, synced.conversationId);
-        conversationId = synced.conversationId;
-      }
+    void (async () => {
+      try {
+        const synced = await api.accountSyncConversationMetadata(accountId, conversationId);
+        if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) {
+          return;
+        }
 
-      mergeMessagesIntoConversation(accountId, conversationId, synced.messages, 'replace');
-      await loadData(accountId, undefined, { refresh: true });
-      const r = await refreshConversationMessages(accountId, conversationId);
-      if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) {
-        return;
+        if (synced.conversationId !== conversationId) {
+          setActiveConversationId(synced.conversationId);
+          activeConversationIdRef.current = synced.conversationId;
+          subscribe(accountId, synced.conversationId);
+          conversationId = synced.conversationId;
+        }
+
+        mergeMessagesIntoConversation(accountId, conversationId, synced.messages, 'replace');
+        loadData(accountId, undefined, { refresh: true });
+
+        const r = await refreshConversationMessages(accountId, conversationId);
+        if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) {
+          return;
+        }
+        setMessages(r.messages);
+        setHasMoreHistory(Boolean(r.hasMore && r.messages.length >= 40));
+
+        if (r.messages.length < 40) {
+          const historyResult = await syncConversationHistory(accountId, conversationId, r.messages[0]?.providerMessageId);
+          if (token === selectionTokenRef.current && activeConversationIdRef.current === conversationId) {
+            setStatusMsg(buildHistoryStatus(historyResult));
+            if (historyResult.insertedCount > 0) {
+              const next = await refreshConversationMessages(accountId, conversationId);
+              if (token === selectionTokenRef.current && activeConversationIdRef.current === conversationId) {
+                setMessages(next.messages);
+                setHasMoreHistory(Boolean(next.hasMore && next.messages.length >= 40));
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if (token === selectionTokenRef.current) {
+          setLoadError(error instanceof Error ? error.message : 'Không tải được history');
+        }
       }
-      if (r.messages.length < 40) {
-        await syncConversationHistory(accountId, conversationId, r.messages[0]?.providerMessageId);
-      }
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Không tải được history');
-    }
+    })();
   }, []);
 
   const loadOlderMessages = useCallback(async (

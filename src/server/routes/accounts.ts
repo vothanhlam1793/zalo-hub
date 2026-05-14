@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
@@ -10,9 +10,12 @@ export function createAccountsRouter(
   accountManager: AccountRuntimeManager,
   broadcast: (payload: Record<string, unknown>) => void,
   upload: multer.Multer,
+  requireAuth?: (req: Request, res: Response, next: NextFunction) => void,
+  requireAccountAccess?: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
 ) {
 
   const router = Router();
+  const needsAgent = requireAccountAccess?.('agent');
 
   router.get('/', (_req, res) => {
     res.json({
@@ -212,6 +215,49 @@ export function createAccountsRouter(
     })();
   });
 
+  router.post('/:accountId/mobile-sync-thread', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const threadId = String(req.body?.threadId ?? '').trim();
+      const threadType = String(req.body?.threadType ?? 'direct').trim() as 'direct' | 'group';
+      const timeoutMs = typeof req.body?.timeoutMs === 'number' ? req.body.timeoutMs : undefined;
+      if (!threadId) {
+        res.status(400).json({ error: 'threadId la bat buoc' });
+        return;
+      }
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        if (!targetRuntime.isSessionActive()) {
+          res.status(401).json({ error: 'Account chua active session' });
+          return;
+        }
+        const result = await targetRuntime.requestMobileSyncThread(threadId, threadType, { timeoutMs });
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Mobile sync that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/sync-all', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        if (!targetRuntime.isSessionActive()) {
+          res.status(401).json({ error: 'Account chua active session' });
+          return;
+        }
+        const result = await targetRuntime.syncAllAccountConversations();
+        broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+        broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Sync all that bai' });
+      }
+    })();
+  });
+
   router.post('/:accountId/send', (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
@@ -288,6 +334,86 @@ export function createAccountsRouter(
         res.json(result);
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/:conversationId/sticker', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const stickerId = String(req.body?.stickerId ?? '').trim();
+      const catId = String(req.body?.catId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const result = await targetRuntime.sendSticker(conversationId, stickerId, catId);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Gui sticker that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/:conversationId/typing', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const isTyping = Boolean(req.body?.isTyping);
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        await targetRuntime.sendTypingEvent(conversationId, isTyping);
+        res.json({ ok: true });
+      } catch {
+        res.status(500).json({ error: 'Gui typing event that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/:conversationId/reaction', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const messageId = String(req.body?.messageId ?? '').trim();
+      const reactionType = Number(req.body?.type ?? 0);
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const result = await targetRuntime.addReaction(conversationId, messageId, reactionType);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Gui reaction that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/groups/:groupId/poll', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const groupId = String(req.params.groupId ?? '').trim();
+      const question = String(req.body?.question ?? '').trim();
+      const options = Array.isArray(req.body?.options) ? req.body.options.map(String) : [];
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const result = await targetRuntime.createPoll(groupId, question, options);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Tao poll that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/:conversationId/forward', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const messageId = String(req.body?.messageId ?? '').trim();
+      const toThreadId = String(req.body?.toThreadId ?? '').trim();
+      const toType = String(req.body?.toType ?? 'direct').trim() as 'direct' | 'group';
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const result = await targetRuntime.forwardMessage(messageId, toThreadId, toType);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Forward that bai' });
       }
     })();
   });

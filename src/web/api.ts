@@ -1,8 +1,14 @@
 import type { AccountSummary, Contact, ConversationSummary, Group, HistorySyncResult, Message, SessionStatus } from './types';
 
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem('auth_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function req<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const extraHeaders = (options.headers as Record<string, string>) ?? {};
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...((options.headers as Record<string, string>) ?? {}) },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders(), ...extraHeaders },
     ...options,
   });
   const body = await res.json().catch(() => ({}));
@@ -125,4 +131,86 @@ export const api = {
     if (caption) fd.append('caption', caption);
     return upload(`/api/accounts/${encodeURIComponent(accountId)}/send-attachment`, fd);
   },
+
+  authLogin: (email: string, password: string) =>
+    req<{ token: string; user: { id: string; email: string; displayName: string; type: string } }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+
+  authMe: (token: string) =>
+    req<{ token: string; user: { id: string; email: string; displayName: string; type: string } }>('/api/auth/me', {
+      headers: { Authorization: `Bearer ${token}` } as Record<string, string>,
+    }),
+
+  accountSendSticker: (accountId: string, conversationId: string, stickerId: string, catId: string) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/sticker`, {
+      method: 'POST',
+      body: JSON.stringify({ stickerId, catId }),
+    }),
+
+  accountSendTyping: (accountId: string, conversationId: string, isTyping: boolean) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/typing`, {
+      method: 'POST',
+      body: JSON.stringify({ isTyping }),
+    }),
+
+  accountAddReaction: (accountId: string, conversationId: string, messageId: string, type: number) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/reaction`, {
+      method: 'POST',
+      body: JSON.stringify({ messageId, type }),
+    }),
+
+  accountCreatePoll: (accountId: string, groupId: string, question: string, options: string[]) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/groups/${encodeURIComponent(groupId)}/poll`, {
+      method: 'POST',
+      body: JSON.stringify({ question, options }),
+    }),
+
+  accountForwardMessage: (accountId: string, conversationId: string, messageId: string, toThreadId: string, toType: string) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/forward`, {
+      method: 'POST',
+      body: JSON.stringify({ messageId, toThreadId, toType }),
+    }),
+
+  accountMobileSyncThread: (accountId: string, threadId: string, threadType: string, timeoutMs?: number) =>
+    req<{ received: number; textFrames: string[] }>(`/api/accounts/${encodeURIComponent(accountId)}/mobile-sync-thread`, {
+      method: 'POST',
+      body: JSON.stringify({ threadId, threadType, timeoutMs }),
+    }),
+
+  accountSyncAll: (accountId: string) =>
+    req<{ synced: number; failed: number; results: Array<{ conversationId: string; remoteCount: number; insertedCount: number; dedupedCount: number; batchCount?: number }> }>(`/api/accounts/${encodeURIComponent(accountId)}/sync-all`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  adminUsers: () => req<{ users: Array<{ id: string; email: string; displayName: string; type: string; memberships: Array<{ account_id: string; role: string }> }> }>('/api/admin/users'),
+
+  adminCreateUser: (email: string, password: string, displayName: string) =>
+    req('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, displayName }),
+    }),
+
+  adminDeleteUser: (userId: string) =>
+    req(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+
+  adminUpdateMembership: (userId: string, accountId: string, role: string) =>
+    req(`/api/admin/memberships`, {
+      method: 'PUT',
+      body: JSON.stringify({ userId, accountId, role }),
+    }),
+
+  adminUpdateUser: (userId: string, updates: { displayName?: string; role?: string; type?: string; password?: string }) =>
+    req<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    }),
+
+  adminDeleteAccount: (accountId: string) =>
+    req<{ ok: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),
+
+  adminLogoutAccount: (accountId: string) =>
+    req<{ ok: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/logout`, { method: 'POST', body: '{}' }),
 };

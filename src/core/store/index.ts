@@ -91,6 +91,10 @@ export class GoldStore {
     this.schema.backfillConversationColumns(this.accountRepo.activeAccountId);
   }
 
+  getDb(): DatabaseSync {
+    return this.db;
+  }
+
   // --- Account methods ---
 
   getCredential() {

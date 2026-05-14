@@ -87,41 +87,43 @@ export function useAccountManager() {
     activeConversationIdRef: React.MutableRefObject<string>,
     selectionTokenRef: React.MutableRefObject<number>,
   ) => {
-    setSelectedAccountId(accountId);
-    const curStatus = (await api.status().catch(() => null)) as SessionStatus | null;
-    if (accountId === curStatus?.account?.userId) {
-      setStatusMsg('');
-      return;
-    }
+    const prevSelected = setSelectedAccountId;
+    prevSelected(accountId);
+    setStatusMsg('Đang chuyển tài khoản...');
+    setLoadError('');
+    selectionTokenRef.current += 1;
+    activeConversationIdRef.current = '';
+    setActiveConversationId('');
+    setMessages([]);
+    clearComposer();
+    setConversations([]);
+    setContacts([]);
+    setGroups([]);
+    clearCache();
+    unsubscribe();
 
     try {
-      setStatusMsg('Đang chuyển tài khoản...');
-      setLoadError('');
-      selectionTokenRef.current += 1;
-      activeConversationIdRef.current = '';
-      setActiveConversationId('');
-      setMessages([]);
-      clearComposer();
-      setConversations([]);
-      setContacts([]);
-      setGroups([]);
-      clearCache();
-      unsubscribe();
-
       const result = await api.activateAccount(accountId);
       setStatus(result.status);
       const accountsResult = await api.accounts();
       setKnownAccounts(accountsResult.accounts);
-      setSelectedAccountId(accountsResult.activeAccountId ?? accountId);
-      await loadData(accountId, result.status, { refresh: true });
-      setStatusMsg('Đã chuyển tài khoản.');
+      prevSelected(accountsResult.activeAccountId ?? accountId);
+
+      if (result.status?.sessionActive) {
+        await loadData(accountId, result.status, { refresh: true });
+        setStatusMsg('Đã chuyển tài khoản.');
+      } else {
+        setStatusMsg('Tài khoản chưa active. Nhấn để đăng nhập lại bằng QR.');
+      }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Không chuyển được tài khoản');
       setStatusMsg('');
-      api.status().then(setStatus).catch(() => {});
+      api.status().then((s) => {
+        setStatus(s);
+        prevSelected(s?.account?.userId ?? accountId);
+      }).catch(() => {});
       api.accounts().then((result) => {
         setKnownAccounts(result.accounts);
-        setSelectedAccountId(result.activeAccountId ?? curStatus?.account?.userId ?? '');
       }).catch(() => {});
     }
   }, []);

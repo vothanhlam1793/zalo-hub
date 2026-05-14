@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Routes, Route } from 'react-router-dom';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from './api';
 import { useWebSocket } from './useWebSocket';
 import { directConversationId, getContactDisplayName, groupConversationId } from './utils';
@@ -7,13 +9,11 @@ import type {
   Contact,
   ConversationSummary,
   Group,
-  Message,
   SessionStatus,
   WsConversationMessagePayload,
   WsConversationSummariesPayload,
   WsSessionStatusPayload,
 } from './types';
-import { LoginScreen } from './components/LoginScreen';
 import { QrOverlay } from './components/QrOverlay';
 import { MiniSidebar } from './components/MiniSidebar';
 import { Sidebar } from './components/Sidebar';
@@ -23,40 +23,29 @@ import { useLogin } from './hooks/useLogin';
 import { useAccountManager } from './hooks/useAccountManager';
 import { useConversationManager } from './hooks/useConversationManager';
 import { useComposer } from './hooks/useComposer';
+import { useWorkspaceStore } from './stores/workspace-store';
+import { useChatStore } from './stores/chat-store';
+import { useComposerStore } from './stores/composer-store';
+import LoginPage from './pages/LoginPage';
+import AdminPage from './pages/AdminPage';
+import { AuthGuard } from './components/AuthGuard';
 
-type SidebarTab = 'conversations' | 'contacts' | 'groups';
-
-export default function App() {
+function DashboardPage() {
   const [status, setStatus] = useState<SessionStatus | null>(null);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('conversations');
-  const [query, setQuery] = useState('');
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState('');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [hasMoreHistory, setHasMoreHistory] = useState(false);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [syncingHistory, setSyncingHistory] = useState(false);
-  const [text, setText] = useState('');
-  const [attachFile, setAttachFile] = useState<File | null>(null);
-  const [sending, setSending] = useState(false);
-  const [statusMsg, setStatusMsg] = useState('');
-  const [loadError, setLoadError] = useState('');
-  const [knownAccounts, setKnownAccounts] = useState<AccountSummary[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [syncingAll, setSyncingAll] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeConversationIdRef = useRef('');
   const selectionTokenRef = useRef(0);
+  const loadedAccountRef = useRef('');
+
+  const workspace = useWorkspaceStore();
+  const chat = useChatStore();
+  const composer = useComposerStore();
 
   useEffect(() => {
-    activeConversationIdRef.current = activeConversationId;
-  }, [activeConversationId]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    activeConversationIdRef.current = chat.activeConversationId;
+  }, [chat.activeConversationId]);
 
   const messageCache = useMessageCache();
   const login = useLogin();
@@ -64,46 +53,32 @@ export default function App() {
   const { selectConversation, loadOlderMessages, refreshConversationMessages, syncConversationHistory } = useConversationManager();
   const { handleSend, handleKeyDown } = useComposer();
 
-  const resolveWorkspaceId = useCallback((s?: SessionStatus | null) => {
-    return selectedAccountId || s?.account?.userId || status?.account?.userId || '';
-  }, [selectedAccountId, status]);
+  const resolveWorkspaceId = useCallback(() => {
+    return workspace.selectedAccountId || status?.account?.userId || '';
+  }, [workspace.selectedAccountId, status]);
 
   const clearComposer = useCallback(() => {
-    setText('');
-    setAttachFile(null);
+    composer.clearComposer();
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, []);
+  }, [composer]);
 
   const { subscribe, unsubscribe } = useWebSocket({
     onStatus: ({ accountId, status: nextStatus }: WsSessionStatusPayload) => {
-      if (!accountId || accountId === resolveWorkspaceId(nextStatus)) {
+      if (!accountId || accountId === resolveWorkspaceId()) {
         setStatus(nextStatus);
       }
     },
     onConversations: ({ accountId, conversations: nextConversations }: WsConversationSummariesPayload) => {
       if (!accountId || accountId === resolveWorkspaceId()) {
-        setConversations(nextConversations);
+        chat.setConversations(nextConversations);
       }
     },
     onMessage: ({ accountId, message }: WsConversationMessagePayload) => {
       if (accountId !== resolveWorkspaceId()) return;
-      setConversations((prev) => {
-        const next = [...prev];
-        const index = next.findIndex((entry) => entry.id === message.conversationId);
-        if (index >= 0) {
-          next[index] = {
-            ...next[index],
-            lastMessageText: message.text,
-            lastMessageKind: message.kind,
-            lastMessageTimestamp: message.timestamp,
-            lastDirection: message.direction,
-          };
-        }
-        return next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
-      });
+      chat.updateConversationFromWs(message);
       const { next } = messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
       if (activeConversationIdRef.current === message.conversationId) {
-        setMessages(next);
+        chat.setMessages(next);
       }
     },
   });
@@ -111,8 +86,8 @@ export default function App() {
   useEffect(() => {
     api.status().then(setStatus).catch(() => {});
     api.accounts().then((result) => {
-      setKnownAccounts(result.accounts);
-      if (result.activeAccountId) setSelectedAccountId(result.activeAccountId);
+      workspace.setKnownAccounts(result.accounts);
+      if (result.activeAccountId) workspace.setSelectedAccountId(result.activeAccountId);
     }).catch(() => {});
   }, []);
 
@@ -120,133 +95,145 @@ export default function App() {
     const userId = status?.account?.userId?.trim();
     const displayName = status?.account?.displayName?.trim();
     if (!userId) return;
-    setKnownAccounts((prev) => {
-      const nextItem = { accountId: userId, displayName: displayName || userId, phoneNumber: status?.account?.phoneNumber, isActive: true } satisfies AccountSummary;
-      const existingIndex = prev.findIndex((e) => e.accountId === userId);
-      return existingIndex >= 0
-        ? prev.map((e, i) => i === existingIndex ? { ...e, ...nextItem } : e)
-        : [...prev, nextItem];
+    workspace.addOrUpdateAccount({
+      accountId: userId,
+      displayName: displayName || userId,
+      phoneNumber: status?.account?.phoneNumber,
+      isActive: true,
     });
-    setSelectedAccountId((prev) => prev || userId);
+    if (!workspace.selectedAccountId) {
+      workspace.setSelectedAccountId(userId);
+    }
   }, [status?.account?.displayName, status?.account?.phoneNumber, status?.account?.userId]);
 
   useEffect(() => {
     const accountId = resolveWorkspaceId();
-    if (!status?.sessionActive || !accountId) return;
-    void loadData(accountId, status, {}, setContacts, setGroups, setConversations, setLoadError);
-  }, [selectedAccountId, status?.sessionActive]);
+    if (!status?.sessionActive || !accountId || accountId === loadedAccountRef.current) return;
+    loadedAccountRef.current = accountId;
+    chat.resetChat();
+    void loadData(accountId, status, {}, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+  }, [workspace.selectedAccountId, status?.sessionActive]);
 
   const onStartLogin = useCallback(() => {
     void login.startLogin(
-      undefined, knownAccounts,
-      (accountId, s) => { loadData(accountId, s, {}, setContacts, setGroups, setConversations, setLoadError); },
-      setStatusMsg, setLoadError, setStatus, setKnownAccounts, setSelectedAccountId, undefined!,
+      undefined, workspace.knownAccounts,
+      (accountId, s) => { loadData(accountId, s, {}, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError); },
+      composer.setStatusMsg, composer.setLoadError, setStatus, workspace.setKnownAccounts, workspace.setSelectedAccountId, undefined!,
     );
-  }, [login, knownAccounts]);
+  }, [login, workspace.knownAccounts, loadData, chat, composer]);
 
   const onReLogin = useCallback((accountId: string, label: string) => {
-    setStatusMsg(`Đang mở QR đăng nhập lại cho ${label}...`);
-    setLoadError('');
+    composer.setStatusMsg(`Đang mở QR đăng nhập lại cho ${label}...`);
+    composer.setLoadError('');
     void login.startLogin(
-      accountId, knownAccounts,
-      (readyId, s) => { loadData(readyId, s, {}, setContacts, setGroups, setConversations, setLoadError); },
-      setStatusMsg, setLoadError, setStatus, setKnownAccounts, setSelectedAccountId, undefined!,
+      accountId, workspace.knownAccounts,
+      (readyId, s) => { loadData(readyId, s, {}, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError); },
+      composer.setStatusMsg, composer.setLoadError, setStatus, workspace.setKnownAccounts, workspace.setSelectedAccountId, undefined!,
     );
-  }, [login, knownAccounts]);
+  }, [login, workspace.knownAccounts, loadData, chat, composer]);
 
   const onLogout = useCallback(() => {
     void handleLogout(
-      setStatus, setConversations, setContacts, setGroups, setActiveConversationId, setMessages,
-      clearComposer, messageCache.clearCache, setLoadError, setStatusMsg, unsubscribe,
-      setKnownAccounts, setSelectedAccountId, activeConversationIdRef, selectionTokenRef,
+      setStatus, chat.setConversations, chat.setContacts, chat.setGroups, chat.setActiveConversationId, chat.setMessages,
+      clearComposer, messageCache.clearCache, composer.setLoadError, composer.setStatusMsg, unsubscribe,
+      workspace.setKnownAccounts, workspace.setSelectedAccountId, activeConversationIdRef, selectionTokenRef,
     );
-  }, [handleLogout, clearComposer, messageCache, unsubscribe]);
+  }, [handleLogout, clearComposer, messageCache, unsubscribe, chat, workspace, composer]);
 
   const onSelectAccount = useCallback((accountId: string) => {
-    if (accountId === status?.account?.userId) {
-      setSelectedAccountId(accountId);
-      setStatusMsg('');
-      return;
-    }
+    loadedAccountRef.current = '';
     const innerLoad = (aid: string, s?: SessionStatus | null, opts?: { refresh?: boolean }) =>
-      loadData(aid, s, opts, setContacts, setGroups, setConversations, setLoadError);
+      loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
     void handleSelectAccount(
-      accountId, setSelectedAccountId, setStatus, setStatusMsg, setLoadError,
-      setActiveConversationId, setMessages, setConversations, setContacts, setGroups,
-      clearComposer, messageCache.clearCache, unsubscribe, setKnownAccounts,
+      accountId, workspace.setSelectedAccountId, setStatus, composer.setStatusMsg, composer.setLoadError,
+      chat.setActiveConversationId, chat.setMessages, chat.setConversations, chat.setContacts, chat.setGroups,
+      clearComposer, messageCache.clearCache, unsubscribe, workspace.setKnownAccounts,
       innerLoad, activeConversationIdRef, selectionTokenRef,
     );
-  }, [status, handleSelectAccount, loadData, clearComposer, messageCache, unsubscribe]);
+  }, [handleSelectAccount, loadData, clearComposer, messageCache, unsubscribe, chat, workspace, composer]);
 
   const onSelectConversation = useCallback((conversationId: string) => {
     const accountId = resolveWorkspaceId();
-    if (!accountId) { setLoadError('Chưa có tài khoản workspace được chọn'); return; }
+    if (!accountId) { composer.setLoadError('Chưa có tài khoản workspace được chọn'); return; }
     void selectConversation(
       conversationId, accountId, subscribe, messageCache.getCachedMessages,
-      messageCache.mergeMessagesIntoConversation, setMessages, setActiveConversationId,
-      setHasMoreHistory, setLoadError, setStatusMsg,
-      (aid, s, opts) => loadData(aid, s, opts, setContacts, setGroups, setConversations, setLoadError),
-      (aid, cid) => refreshConversationMessages(aid, cid, messageCache.mergeMessagesIntoConversation, setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
-      (aid, cid, bmid) => syncConversationHistory(aid, cid, bmid, (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef), setSyncingHistory, setStatusMsg, setHasMoreHistory, setConversations, selectionTokenRef, activeConversationIdRef),
+      messageCache.mergeMessagesIntoConversation, chat.setMessages, chat.setActiveConversationId,
+      chat.setHasMoreHistory, composer.setLoadError, composer.setStatusMsg,
+      (aid, s, opts) => loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError),
+      (aid, cid) => refreshConversationMessages(aid, cid, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
+      (aid, cid, bmid) => syncConversationHistory(aid, cid, bmid, (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef), chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.setConversations, selectionTokenRef, activeConversationIdRef),
       selectionTokenRef, activeConversationIdRef,
     );
-  }, [resolveWorkspaceId, selectConversation, subscribe, messageCache, refreshConversationMessages, syncConversationHistory, loadData]);
+  }, [resolveWorkspaceId, selectConversation, subscribe, messageCache, refreshConversationMessages, syncConversationHistory, loadData, chat, composer]);
 
   const onOpenDirectConversation = useCallback((contact: Contact) => {
     const conversationId = directConversationId(contact.userId);
     const displayName = getContactDisplayName(contact);
-    if (!conversations.find((e) => e.id === conversationId)) {
-      setConversations((prev) => [{
+    const convs = chat.conversations;
+    if (!convs.find((e) => e.id === conversationId)) {
+      chat.setConversations([{
         id: conversationId, threadId: contact.userId, type: 'direct', title: displayName,
         avatar: contact.avatar, lastMessageText: 'Nhấn để mở chat', lastMessageKind: 'text',
         lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0,
-      }, ...prev]);
+      }, ...convs]);
     }
     void onSelectConversation(conversationId);
-  }, [conversations, onSelectConversation]);
+  }, [chat.conversations, onSelectConversation]);
 
   const onOpenGroupConversation = useCallback((group: Group) => {
     const conversationId = groupConversationId(group.groupId);
-    if (!conversations.find((e) => e.id === conversationId)) {
-      setConversations((prev) => [{
+    const convs = chat.conversations;
+    if (!convs.find((e) => e.id === conversationId)) {
+      chat.setConversations([{
         id: conversationId, threadId: group.groupId, type: 'group', title: group.displayName,
         avatar: group.avatar, lastMessageText: 'Nhấn để mở nhóm chat', lastMessageKind: 'text',
         lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0,
-      }, ...prev]);
+      }, ...convs]);
     }
     void onSelectConversation(conversationId);
-  }, [conversations, onSelectConversation]);
+  }, [chat.conversations, onSelectConversation]);
 
   const onLoadOlder = useCallback(() => {
     const accountId = resolveWorkspaceId();
     if (!accountId) return;
     void loadOlderMessages(
-      accountId, activeConversationId, messages, hasMoreHistory, loadingOlder,
-      setLoadingOlder, setHasMoreHistory, setLoadError,
+      accountId, chat.activeConversationId, chat.messages, chat.hasMoreHistory, chat.loadingOlder,
+      chat.setLoadingOlder, chat.setHasMoreHistory, composer.setLoadError,
       (aid, cid, incoming) => {
         const { next } = messageCache.prependMessages(aid, cid, incoming);
-        if (activeConversationIdRef.current === cid) setMessages(next);
+        if (activeConversationIdRef.current === cid) chat.setMessages(next);
         return { next };
       },
       (aid, cid, bmid) => syncConversationHistory(aid, cid, bmid,
-        (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
-        setSyncingHistory, setStatusMsg, setHasMoreHistory, setConversations, selectionTokenRef, activeConversationIdRef),
+        (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
+        chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.setConversations, selectionTokenRef, activeConversationIdRef),
       { current: null } as any,
     );
-  }, [resolveWorkspaceId, loadOlderMessages, activeConversationId, messages, hasMoreHistory, loadingOlder, messageCache, syncConversationHistory, refreshConversationMessages]);
+  }, [resolveWorkspaceId, loadOlderMessages, chat.activeConversationId, chat.messages, chat.hasMoreHistory, chat.loadingOlder, messageCache, syncConversationHistory, refreshConversationMessages, chat, composer]);
 
   const onMessagesScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (e.currentTarget.scrollTop <= 32) onLoadOlder();
   }, [onLoadOlder]);
 
+  const onSyncHistoryClick = useCallback(() => {
+    const accountId = resolveWorkspaceId();
+    const conversationId = chat.activeConversationId;
+    if (!accountId || !conversationId) return;
+    void syncConversationHistory(
+      accountId, conversationId, undefined,
+      (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
+      chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.setConversations, selectionTokenRef, activeConversationIdRef,
+    );
+  }, [resolveWorkspaceId, chat.activeConversationId, syncConversationHistory, refreshConversationMessages, messageCache, chat, composer]);
+
   const onSend = useCallback((e: React.FormEvent) => {
     const accountId = resolveWorkspaceId();
     void handleSend(
-      e, activeConversationId, text, attachFile, accountId,
-      setText, setAttachFile, setSending, setStatusMsg, setLoadError, setConversations,
+      e, chat.activeConversationId, composer.text, composer.attachFile, accountId,
+      composer.setText, composer.setAttachFile, composer.setSending, composer.setStatusMsg, composer.setLoadError, chat.setConversations,
       messageCache.mergeMessagesIntoConversation, fileInputRef,
     );
-  }, [resolveWorkspaceId, handleSend, activeConversationId, text, attachFile, messageCache]);
+  }, [resolveWorkspaceId, handleSend, chat.activeConversationId, composer.text, composer.attachFile, messageCache, chat, composer]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     handleKeyDown(e, onSend);
@@ -254,103 +241,123 @@ export default function App() {
 
   const onRefresh = useCallback(() => {
     const id = resolveWorkspaceId();
-    if (id) loadData(id, status, { refresh: true }, setContacts, setGroups, setConversations, setLoadError);
-  }, [resolveWorkspaceId, status, loadData]);
+    if (id) loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+  }, [resolveWorkspaceId, status, loadData, chat, composer]);
 
-  const activeConversation = conversations.find((e) => e.id === activeConversationId);
-  const activeName = activeConversation?.title ?? activeConversationId;
+  const onSyncAll = useCallback(() => {
+    const accountId = resolveWorkspaceId();
+    if (!accountId || syncingAll) return;
+    setSyncingAll(true);
+    composer.setStatusMsg('Đang đồng bộ toàn bộ cuộc trò chuyện từ điện thoại...');
+    api.accountSyncAll(accountId).then((result) => {
+      composer.setStatusMsg(`Đồng bộ xong: ${result.synced} cuộc trò chuyện (lỗi ${result.failed}). Đang làm mới...`);
+      return loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+    }).catch((err) => {
+      composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ thất bại');
+    }).finally(() => {
+      setSyncingAll(false);
+    });
+  }, [resolveWorkspaceId, syncingAll, composer, chat, loadData, status]);
+
+  const activeConversation = useMemo(() => chat.conversations.find((e) => e.id === chat.activeConversationId), [chat.conversations, chat.activeConversationId]);
+  const activeName = activeConversation?.title ?? chat.activeConversationId;
   const isGroupConversation = activeConversation?.type === 'group';
   const currentAccountId = status?.account?.userId ?? '';
 
   const sidebarAccounts = useMemo(() => {
-    if (currentAccountId && !knownAccounts.some((e) => e.accountId === currentAccountId)) {
-      return [...knownAccounts, { accountId: currentAccountId, displayName: status?.account?.displayName ?? currentAccountId, phoneNumber: status?.account?.phoneNumber, isActive: true } satisfies AccountSummary];
+    if (currentAccountId && !workspace.knownAccounts.some((e) => e.accountId === currentAccountId)) {
+      return [...workspace.knownAccounts, { accountId: currentAccountId, displayName: status?.account?.displayName ?? currentAccountId, phoneNumber: status?.account?.phoneNumber, isActive: true } satisfies AccountSummary];
     }
-    return knownAccounts;
-  }, [currentAccountId, knownAccounts, status?.account?.displayName, status?.account?.phoneNumber]);
+    return workspace.knownAccounts;
+  }, [currentAccountId, workspace.knownAccounts, status?.account?.displayName, status?.account?.phoneNumber]);
 
   const filteredConversations = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return conversations;
-    return conversations.filter((e) => e.title.toLowerCase().includes(q));
-  }, [conversations, query]);
+    const q = workspace.query.trim().toLowerCase();
+    if (!q) return chat.conversations;
+    return chat.conversations.filter((e) => e.title.toLowerCase().includes(q));
+  }, [chat.conversations, workspace.query]);
 
   const filteredContacts = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter((e) => getContactDisplayName(e).toLowerCase().includes(q));
-  }, [contacts, query]);
+    const q = workspace.query.trim().toLowerCase();
+    if (!q) return chat.contacts;
+    return chat.contacts.filter((e) => getContactDisplayName(e).toLowerCase().includes(q));
+  }, [chat.contacts, workspace.query]);
 
   const filteredGroups = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return groups;
-    return groups.filter((e) => e.displayName.toLowerCase().includes(q));
-  }, [groups, query]);
-
-  if (!status?.loggedIn) {
-    return (
-      <LoginScreen
-        loginPolling={login.loginPolling}
-        qrCode={login.qrCode}
-        statusMsg={statusMsg}
-        onStartLogin={onStartLogin}
-      />
-    );
-  }
+    const q = workspace.query.trim().toLowerCase();
+    if (!q) return chat.groups;
+    return chat.groups.filter((e) => e.displayName.toLowerCase().includes(q));
+  }, [chat.groups, workspace.query]);
 
   return (
-    <div className="app-shell">
-      {login.loginPolling && (
-        <QrOverlay qrCode={login.qrCode} statusMsg={statusMsg} onCancel={login.cancelLogin} />
-      )}
-      <MiniSidebar
-        accounts={sidebarAccounts}
-        selectedAccountId={selectedAccountId}
-        currentAccountId={currentAccountId}
-        onAddAccount={onStartLogin}
-        onSelectAccount={onSelectAccount}
-        onReLogin={onReLogin}
-      />
-      <Sidebar
-        sidebarTab={sidebarTab}
-        onTabChange={setSidebarTab}
-        query={query}
-        onQueryChange={setQuery}
-        conversations={filteredConversations}
-        contacts={filteredContacts}
-        groups={filteredGroups}
-        activeConversationId={activeConversationId}
-        workspaceAccountId={resolveWorkspaceId()}
-        accounts={sidebarAccounts}
-        statusDisplayName={status?.account?.displayName ?? 'Đã đăng nhập'}
-        listenerConnected={status?.listener?.connected ?? false}
-        onRefresh={onRefresh}
-        onLogout={onLogout}
-        onSelectConversation={onSelectConversation}
-        onOpenDirectConversation={onOpenDirectConversation}
-        onOpenGroupConversation={onOpenGroupConversation}
-      />
-      <ChatPanel
-        activeConversationId={activeConversationId}
-        activeConversation={activeConversation}
-        activeName={activeName}
-        isGroupConversation={isGroupConversation}
-        messages={messages}
-        hasMoreHistory={hasMoreHistory}
-        loadingOlder={loadingOlder}
-        syncingHistory={syncingHistory}
-        statusMsg={statusMsg}
-        loadError={loadError}
-        text={text}
-        attachFile={attachFile}
-        sending={sending}
-        onScroll={onMessagesScroll}
-        onTextChange={setText}
-        onKeyDown={onKeyDown}
-        onSend={onSend}
-        onAttachFile={setAttachFile}
-        onClearFile={() => { setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
-      />
-    </div>
+    <TooltipProvider delayDuration={300}>
+      <div className="flex w-full h-screen overflow-hidden">
+        {login.loginPolling && (
+          <QrOverlay qrCode={login.qrCode} statusMsg={composer.statusMsg} onCancel={login.cancelLogin} />
+        )}
+        <MiniSidebar
+          accounts={sidebarAccounts}
+          selectedAccountId={workspace.selectedAccountId}
+          currentAccountId={currentAccountId}
+          onAddAccount={onStartLogin}
+          onSelectAccount={onSelectAccount}
+          onReLogin={onReLogin}
+        />
+        <Sidebar
+          sidebarTab={workspace.sidebarTab}
+          onTabChange={workspace.setSidebarTab}
+          query={workspace.query}
+          onQueryChange={workspace.setQuery}
+          conversations={filteredConversations}
+          contacts={filteredContacts}
+          groups={filteredGroups}
+          activeConversationId={chat.activeConversationId}
+          workspaceAccountId={resolveWorkspaceId()}
+          accounts={sidebarAccounts}
+          statusDisplayName={status?.account?.displayName ?? 'Đã đăng nhập'}
+          listenerConnected={status?.listener?.connected ?? false}
+          onRefresh={onRefresh}
+          onLogout={onLogout}
+          onSelectConversation={onSelectConversation}
+          onOpenDirectConversation={onOpenDirectConversation}
+          onOpenGroupConversation={onOpenGroupConversation}
+          onSyncAll={onSyncAll}
+          syncingAll={syncingAll}
+        />
+        <ChatPanel
+          activeConversationId={chat.activeConversationId}
+          activeConversation={activeConversation}
+          activeName={activeName}
+          isGroupConversation={isGroupConversation}
+          messages={chat.messages}
+          hasMoreHistory={chat.hasMoreHistory}
+          loadingOlder={chat.loadingOlder}
+          syncingHistory={chat.syncingHistory}
+          statusMsg={composer.statusMsg}
+          loadError={composer.loadError}
+          text={composer.text}
+          attachFile={composer.attachFile}
+          sending={composer.sending}
+          onScroll={onMessagesScroll}
+          onTextChange={composer.setText}
+          onKeyDown={onKeyDown}
+          onSend={onSend}
+          onAttachFile={composer.setAttachFile}
+          onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
+          onSyncHistory={onSyncHistoryClick}
+          typingUsers={[]}
+        />
+      </div>
+    </TooltipProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/" element={<AuthGuard><DashboardPage /></AuthGuard>} />
+      <Route path="/admin" element={<AuthGuard><AdminPage /></AuthGuard>} />
+    </Routes>
   );
 }

@@ -432,6 +432,14 @@ export class GoldRuntime {
     return this.sync.syncConversationHistory(conversationId, options);
   }
 
+  async requestMobileSyncThread(threadId: string, threadType: 'direct' | 'group', options?: { timeoutMs?: number }) {
+    return this.sync.requestMobileSyncThread(threadId, threadType, options);
+  }
+
+  async syncAllAccountConversations(options?: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number }) {
+    return this.sync.syncAllAccountConversations(options);
+  }
+
   async backfillMediaForStoredMessages() {
     return this.sync.backfillMediaForStoredMessages();
   }
@@ -463,6 +471,26 @@ export class GoldRuntime {
 
   async sendFile(conversationId: string, options: { fileBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
     return this.sender.sendFile(conversationId, options);
+  }
+
+  async sendSticker(conversationId: string, stickerId: string, catId: string) {
+    return this.sender.sendSticker(conversationId, stickerId, catId);
+  }
+
+  async sendTypingEvent(conversationId: string, isTyping: boolean) {
+    return this.sender.sendTypingEvent(conversationId, isTyping);
+  }
+
+  async addReaction(conversationId: string, messageId: string, reactionType: number) {
+    return this.sender.addReaction(conversationId, messageId, reactionType);
+  }
+
+  async createPoll(groupId: string, question: string, options: string[]) {
+    return this.sender.createPoll(groupId, question, options);
+  }
+
+  async forwardMessage(messageId: string, toThreadId: string, toType: 'direct' | 'group') {
+    return this.sender.forwardMessage(messageId, toThreadId, toType);
   }
 
   async renderQrToTerminal(qrCode: string) {
