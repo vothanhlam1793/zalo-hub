@@ -174,9 +174,15 @@ export const api = {
     }),
 
   accountMobileSyncThread: (accountId: string, threadId: string, threadType: string, timeoutMs?: number) =>
-    req<{ received: number; textFrames: string[] }>(`/api/accounts/${encodeURIComponent(accountId)}/mobile-sync-thread`, {
+    req<{ received: number; insertedCount: number; dedupedCount: number; oldestTimestamp?: string; timedOut?: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/mobile-sync-thread`, {
       method: 'POST',
       body: JSON.stringify({ threadId, threadType, timeoutMs }),
+    }),
+
+  accountMobileSync: (accountId: string) =>
+    req<{ requ18Synced: number; requ18Failed: number; requ18Received: number; requ18Inserted: number; historySynced: number; historyFailed: number; results: Array<any> }>(`/api/accounts/${encodeURIComponent(accountId)}/mobile-sync`, {
+      method: 'POST',
+      body: '{}',
     }),
 
   accountSyncAll: (accountId: string) =>

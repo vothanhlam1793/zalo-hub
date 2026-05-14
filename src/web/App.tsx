@@ -4,6 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from './api';
 import { useWebSocket } from './useWebSocket';
 import { directConversationId, getContactDisplayName, groupConversationId } from './utils';
+import { useAuthStore } from './stores/auth-store';
 import type {
   AccountSummary,
   Contact,
@@ -42,6 +43,7 @@ function DashboardPage() {
   const workspace = useWorkspaceStore();
   const chat = useChatStore();
   const composer = useComposerStore();
+  const { user } = useAuthStore();
 
   useEffect(() => {
     activeConversationIdRef.current = chat.activeConversationId;
@@ -79,6 +81,17 @@ function DashboardPage() {
       const { next } = messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
       if (activeConversationIdRef.current === message.conversationId) {
         chat.setMessages(next);
+      }
+    },
+    onSyncStatus: ({ accountId, status: syncStatus, requ18Received, historySynced, historyMsgs }) => {
+      if (accountId !== resolveWorkspaceId()) return;
+      if (syncStatus === 'loading') composer.setStatusMsg('Đang tự động đồng bộ contacts & groups...');
+      else if (syncStatus === 'syncing') composer.setStatusMsg('Đang tự động đồng bộ lịch sử chat...');
+      else if (syncStatus === 'done') {
+        composer.setStatusMsg(`Tự động đồng bộ xong: ${requ18Received ?? 0} tin req_18 + ${historySynced ?? 0} cuộc trò chuyện (${historyMsgs ?? 0} tin)`);
+        loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+      } else if (syncStatus === 'error') {
+        composer.setLoadError('Tự động đồng bộ thất bại');
       }
     },
   });
@@ -248,9 +261,10 @@ function DashboardPage() {
     const accountId = resolveWorkspaceId();
     if (!accountId || syncingAll) return;
     setSyncingAll(true);
-    composer.setStatusMsg('Đang đồng bộ toàn bộ cuộc trò chuyện từ điện thoại...');
-    api.accountSyncAll(accountId).then((result) => {
-      composer.setStatusMsg(`Đồng bộ xong: ${result.synced} cuộc trò chuyện (lỗi ${result.failed}). Đang làm mới...`);
+    composer.setStatusMsg('Đang đồng bộ Mobile (req_18 + history)...');
+    api.accountMobileSync(accountId).then((result) => {
+      const totalHistoryMsgs = (result.results ?? []).reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0);
+      composer.setStatusMsg(`Mobile sync xong: ${result.requ18Received} tin req_18 + ${result.historySynced} cuộc trò chuyện (${totalHistoryMsgs} tin history). Đang làm mới...`);
       return loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
     }).catch((err) => {
       composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ thất bại');
@@ -323,6 +337,7 @@ function DashboardPage() {
           onOpenGroupConversation={onOpenGroupConversation}
           onSyncAll={onSyncAll}
           syncingAll={syncingAll}
+          userDisplayName={user?.displayName}
         />
         <ChatPanel
           activeConversationId={chat.activeConversationId}

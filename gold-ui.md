@@ -20,7 +20,7 @@ giao diện hiện đại, đầy đủ tính năng chat, phân quyền rõ ràn
 
 ---
 
-## Gold-8.5: Hạ Tầng UI (1 session)
+## Gold-8.5: Hạ Tầng UI ✅ Done
 
 ### Zustand Stores (thay 15+ useState)
 
@@ -55,7 +55,7 @@ Select, DropdownMenu, Table, Sonner (toast), Skeleton, Label, Switch, Separator
 
 ---
 
-## Gold-9A: Auth Cơ Bản (1 session)
+## Gold-9A: Auth Cơ Bản ✅ Done
 
 ### DB Schema
 
@@ -112,7 +112,7 @@ requireRole('admin')          — check system role
 
 ---
 
-## Gold-9B: Zalo Rich Features (1-2 session)
+## Gold-9B: Zalo Rich Features ✅ Done
 
 ### Mở rộng GoldMessageKind (4 → 9)
 
@@ -145,7 +145,7 @@ POST /api/accounts/:accountId/conversations/:id/forward
 
 ---
 
-## Gold-9C: Roles + Admin UI (1 session)
+## Gold-9C: Roles + Admin UI ✅ Done
 
 ### API Admin
 
@@ -307,12 +307,12 @@ POST /api/conversations/:id/handoff
 ## Thứ tự triển khai
 
 ```
-Gold-8.5  ████░░░░░░░░░░░░░░░░░░ Hạ tầng (Zustand + Router + shadcn)
-Gold-9A   ░░░░████░░░░░░░░░░░░░░ Auth cơ bản (login, JWT, middleware)
-Gold-9B   ░░░░░░░░████████░░░░░░ Zalo Rich Features (sticker, reaction, typing, poll, pin, forward)
-Gold-9C   ░░░░░░░░░░░░░░████░░░░ Roles + Admin UI
-Gold-10A  ░░░░░░░░░░░░░░░░░░████ Shared Inbox (assignment, notes, labels)
-Gold-10B  ░░░░░░░░░░░░░░░░░░░░░░ AI Interface
+Gold-8.5  ████████████████████████ Done — Hạ tầng (Zustand + Router + shadcn)
+Gold-9A   ████████████████████████ Done — Auth cơ bản (login, JWT, middleware)
+Gold-9B   ████████████████████████ Done — Zalo Rich Features (sticker, reaction, typing, poll, forward)
+Gold-9C   ████████████████████████ Done — Roles + Admin UI
+Gold-10A  ░░░░░░░░░░░░░░░░░░░░░░ Planned — Shared Inbox (assignment, notes, labels)
+Gold-10B  ░░░░░░░░░░░░░░░░░░░░░░ Planned — AI Interface
 ```
 
 ## Nguyên tắc

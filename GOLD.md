@@ -72,7 +72,7 @@ archived/
 | gold-1 | CLI runtime Zalo: login QR, friends, send text | Done | `archived/GOLD-1-RESULT.md` |
 | gold-2 | Web UI cơ bản: login, friends, send | Done | `archived/GOLD-2-RESULT.md` |
 | gold-3 | Chat 1-1 realtime: websocket, timeline, incoming | Done | `archived/GOLD-3-RESULT.md` |
-| gold-4 | App hoàn chỉnh 1 user: SQLite, React UI, image/file, public domain | Done | `gold-4.md` |
+| gold-4 | App hoàn chỉnh 1 user: SQLite, React UI, image/file, public domain | Done | `archived/gold-4.md` |
 | gold-5 | Refactor cấu trúc src + tài liệu convention gold | Done | `archived/GOLD-5-RESULT.md` |
 | gold-6 | Contacts + Groups + Conversations: 3 tab UI, group chat realtime, refactor conversation model, lazy history, local media mirror, legacy attachment repair | Done | `archived/GOLD-6-RESULT.md` |
 | gold-7 | Recent/history sync từ Zalo, chống duplicate theo provider message id, canonical direct/group conversation, sync metadata khi mở chat, enrich sender name group và persist local DB | Done | `archived/GOLD-7-RESULT.md` |

@@ -47,6 +47,7 @@ const upload = multer({
 let loginPromise: Promise<void> | undefined;
 
 const { broadcast } = createWsHandler(server, accountManager);
+accountManager.setBroadcast(broadcast);
 
 // Global middleware
 app.use(express.json({ limit: '12mb' }));

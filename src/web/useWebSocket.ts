@@ -11,12 +11,14 @@ type WsPayload =
   | ({ type: 'conversation_summaries' } & WsConversationSummariesPayload)
   | ({ type: 'conversation_message' } & WsConversationMessagePayload)
   | { type: 'subscribed'; accountId?: string; conversationId: string }
-  | { type: 'error'; error: string };
+  | { type: 'error'; error: string }
+  | { type: 'ws_sync_status'; accountId: string; status: string; requ18Received?: number; requ18Inserted?: number; historySynced?: number; historyMsgs?: number; error?: string };
 
 interface WsHandlers {
   onStatus?: (payload: WsSessionStatusPayload) => void;
   onConversations?: (payload: WsConversationSummariesPayload) => void;
   onMessage?: (payload: WsConversationMessagePayload) => void;
+  onSyncStatus?: (payload: { accountId: string; status: string; requ18Received?: number; historySynced?: number; historyMsgs?: number; error?: string }) => void;
 }
 
 export function useWebSocket(handlers: WsHandlers) {
@@ -47,6 +49,7 @@ export function useWebSocket(handlers: WsHandlers) {
         if (payload.type === 'session_state') handlersRef.current.onStatus?.({ accountId: payload.accountId, status: payload.status });
         if (payload.type === 'conversation_summaries') handlersRef.current.onConversations?.({ accountId: payload.accountId, conversations: payload.conversations });
         if (payload.type === 'conversation_message') handlersRef.current.onMessage?.({ accountId: payload.accountId, message: payload.message });
+        if (payload.type === 'ws_sync_status') handlersRef.current.onSyncStatus?.(payload);
       } catch { /* ignore */ }
     });
 

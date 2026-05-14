@@ -136,23 +136,16 @@ Ghi chú trạng thái:
 - `GoldStore` còn `activeAccountId` làm wrapper cho compatibility
 - Full profile field mở rộng và `system_users` schema sẽ vào gold-9
 
-## Gold-9 — Planned
+## Gold-9 — Done ✅
 
-Mục tiêu: System users + authentication + authorization theo Zalo account + full profile storage
+Mục tiêu: System users + auth + phân quyền + Zalo rich features + admin UI
 
-Scope dự kiến:
+Đã hoàn tất (xem `archived/GOLD-9-RESULT.md`):
 
-1. Mở rộng schema DB cho full profile:
-   - `accounts` thêm `profile_json`, `last_profile_sync_at`, `bio`, `gender`, `birth_date`, `cover_url`, `avatar`
-   - `friends` thêm `profile_json`, `last_profile_sync_at`
-   - `groups` thêm `profile_json`, `last_profile_sync_at`
-2. Thêm schema `system_users`, `system_user_sessions`, `zalo_account_memberships`
-3. Auth flow: login/logout cho user hệ thống, session management
-4. Role per account: `owner`, `manager`, `agent`, `viewer`
-5. Middleware authorization cho toàn bộ API và WebSocket
-6. UI chỉ hiện các account mà user hiện tại được cấp quyền
-7. Dọn sạch `primary account` concept, chuyển `loginRuntime` sang manager-native
-8. Dọn sạch `activeAccountId` trong store, bỏ compatibility wrapper
+- **Gold-8.5**: Zustand stores, React Router, Tailwind CSS v4, shadcn/ui 18 components
+- **Gold-9A**: DB schema `system_users/sessions/memberships`, JWT auth, login/logout/me API, middleware `requireAuth`, seed admin
+- **Gold-9B**: 9 MessageKind (sticker, reaction, poll, voice, gif), backend sender methods + REST endpoints, typing indicator, history sync continuous loop, per-conversation + account-level sync buttons
+- **Gold-9C**: AdminPage v2 (users/Zalo accounts/phân quyền matrix), admin API, `requireSystemRole('admin')`, `requireAccountAccess(minRole?)`, auto-assign admin owner
 
 ## Gold-10 — Planned
 

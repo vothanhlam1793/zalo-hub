@@ -28,6 +28,7 @@ interface SidebarProps {
   onOpenGroupConversation: (group: Group) => void;
   onSyncAll: () => void;
   syncingAll: boolean;
+  userDisplayName?: string;
 }
 
 export function Sidebar({
@@ -50,6 +51,7 @@ export function Sidebar({
   onOpenGroupConversation,
   onSyncAll,
   syncingAll,
+  userDisplayName,
 }: SidebarProps) {
   const currentDisplayName = accounts.find((a) => a.accountId === workspaceAccountId)?.displayName ?? statusDisplayName ?? 'Đã đăng nhập';
 
@@ -58,7 +60,8 @@ export function Sidebar({
       <div className="p-4 border-b border-[var(--sidebar-border)] flex items-center justify-between gap-2">
         <div>
           <h2 className="m-0 text-base font-bold text-[#eee]">Zalo Hub</h2>
-          <div className="text-xs text-muted-foreground mt-0.5">{currentDisplayName}</div>
+          <div className="text-xs text-muted-foreground mt-0.5">{userDisplayName || currentDisplayName}</div>
+          {userDisplayName && <div className="text-[10px] text-muted-foreground/60">{currentDisplayName}</div>}
         </div>
         <div className="flex flex-col gap-1.5 items-end">
           <Badge variant={listenerConnected ? 'default' : 'destructive'} className="text-[11px]">

@@ -24,6 +24,14 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
     catch (err) { setError(err instanceof Error ? err.message : 'Xoa that bai'); }
   };
 
+  const handleMobileSync = async (accountId: string) => {
+    setStatus('Dang dong bo Mobile (req_18)...');
+    try {
+      const r = await api.accountMobileSync(accountId);
+      setStatus(`Mobile sync xong: ${r.requ18Received} tin tu req_18 + ${r.historySynced} cuoc tro chuyen qua history (tong ${r.requ18Inserted + (r.results?.reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0) || 0)} tin)`);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Mobile sync that bai'); }
+  };
+
   const handleSync = async (accountId: string) => {
     setStatus('Dang dong bo...');
     try {
@@ -40,7 +48,7 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
           <Card key={a.accountId} className="p-4 bg-[#13181f] border-[var(--border)] flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <div className="min-w-0">
-                <div className="text-sm font-medium text-[#eee] truncate">{a.displayName || a.accountId}</div>
+                <div className="text-sm font-medium text-[#eee] truncate">{a.displayName || (a as any).account?.displayName || a.accountId}</div>
                 <div className="text-[11px] text-muted-foreground truncate">{(a.accountId || '').slice(0, 20)}...</div>
               </div>
               <Badge variant={a.isActive ? 'default' : 'destructive'} className="text-[10px] shrink-0">
@@ -48,6 +56,9 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
               </Badge>
             </div>
             <div className="flex flex-wrap gap-1.5">
+              <Button variant="secondary" size="sm" className="h-7 text-[11px]" onClick={() => handleMobileSync(a.accountId)}>
+                📱 Mobile
+              </Button>
               <Button variant="secondary" size="sm" className="h-7 text-[11px]" onClick={() => handleSync(a.accountId)}>
                 🔄 Đồng bộ
               </Button>

@@ -232,9 +232,32 @@ export function createAccountsRouter(
           return;
         }
         const result = await targetRuntime.requestMobileSyncThread(threadId, threadType, { timeoutMs });
+        broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+        broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
         res.json(result);
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Mobile sync that bai' });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Mobile sync thread that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/mobile-sync', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const perThreadTimeoutMs = typeof req.body?.perThreadTimeoutMs === 'number' ? req.body.perThreadTimeoutMs : undefined;
+      const maxTotalTimeMs = typeof req.body?.maxTotalTimeMs === 'number' ? req.body.maxTotalTimeMs : undefined;
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        if (!targetRuntime.isSessionActive()) {
+          res.status(401).json({ error: 'Account chua active session' });
+          return;
+        }
+        const result = await targetRuntime.mobileSyncAllAccountConversations({ perThreadTimeoutMs, maxTotalTimeMs });
+        broadcast({ type: 'conversation_summaries', accountId, conversations: targetRuntime.getConversationSummaries() });
+        broadcast({ type: 'session_state', accountId, status: getStatusForRuntime(targetRuntime) });
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Mobile sync all that bai' });
       }
     })();
   });

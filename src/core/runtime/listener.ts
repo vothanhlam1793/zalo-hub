@@ -42,7 +42,8 @@ export class GoldListener {
         this.state.listenerState.lastError = undefined;
         this.state.logger.info('message_listener_connected');
       });
-      listener.on('cipher_key', () => {
+      listener.on('cipher_key', (key: unknown) => {
+        this.state.cipherKey = typeof key === 'string' ? key : undefined;
         this.state.listenerState.lastEventAt = new Date().toISOString();
         this.state.logger.info('message_listener_cipher_key_received');
       });

@@ -37,6 +37,7 @@ export function createAuthRouter(
                 error: error instanceof Error ? error.message : String(error),
               });
             });
+            void accountManager.syncAccountAfterLogin(accountId);
           }
           logger.info('gold2_login_completed');
         })
