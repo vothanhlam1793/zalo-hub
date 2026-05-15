@@ -282,14 +282,15 @@ export class GoldSender {
     const api = this.state.session?.api;
     if (typeof api?.getUnreadMark !== 'function') throw new Error('Session khong ho tro getUnreadMark');
     const result = await api.getUnreadMark();
+
     return {
-      direct: (result.data?.convsUser ?? []).map((item: { id: number; cliMsgId: number; fromUid: number; ts: number }) => ({
+      direct: (result.data?.convsUser ?? []).map((item: any) => ({
         threadId: String(item.id),
-        count: 1,
+        count: (item.unreadCount || item.msgCount || item.count || item.totalUnread || 1),
       })),
-      group: (result.data?.convsGroup ?? []).map((item: { id: number; cliMsgId: number; fromUid: number; ts: number }) => ({
+      group: (result.data?.convsGroup ?? []).map((item: any) => ({
         threadId: String(item.id),
-        count: 1,
+        count: (item.unreadCount || item.msgCount || item.count || item.totalUnread || 1),
       })),
     };
   }

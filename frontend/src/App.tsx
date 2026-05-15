@@ -104,7 +104,9 @@ function DashboardPage() {
       }
     },
     onConversations: ({ accountId, conversations: nextConversations }: WsConversationSummariesPayload) => {
-      if (!accountId || accountId === resolveWorkspaceId()) {
+      if (!accountId) return;
+      chat.setConversationsForAccount(accountId, nextConversations);
+      if (accountId === resolveWorkspaceId()) {
         chat.setConversations(nextConversations);
       }
     },
@@ -122,7 +124,7 @@ function DashboardPage() {
       else if (syncStatus === 'syncing') composer.setStatusMsg('Đang tự động đồng bộ lịch sử chat...');
       else if (syncStatus === 'done') {
         composer.setStatusMsg(`Tự động đồng bộ xong: ${requ18Received ?? 0} tin req_18 + ${historySynced ?? 0} cuộc trò chuyện (${historyMsgs ?? 0} tin)`);
-        loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+        loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
       } else if (syncStatus === 'error') {
         composer.setLoadError('Tự động đồng bộ thất bại');
       }
@@ -166,16 +168,16 @@ function DashboardPage() {
     if (!status?.sessionActive || !accountId || accountId === loadedAccountRef.current) return;
     loadedAccountRef.current = accountId;
     chat.resetChat();
-    void loadData(accountId, status, {}, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+    void loadData(accountId, status, {}, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
   }, [workspace.selectedAccountId, status?.sessionActive]);
 
   const onSelectAccount = useCallback((accountId: string) => {
     loadedAccountRef.current = '';
     const innerLoad = (aid: string, s?: SessionStatus | null, opts?: { refresh?: boolean }) =>
-      loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+      loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
     void handleSelectAccount(
       accountId, workspace.setSelectedAccountId, setStatus, composer.setStatusMsg, composer.setLoadError,
-      chat.setActiveConversationId, chat.setMessages, chat.setConversations, chat.setContacts, chat.setGroups,
+      chat.setActiveConversationId, chat.setMessages, chat.setConversations, chat.setConversationsForAccount, chat.setContacts, chat.setGroups,
       clearComposer, messageCache.clearCache, unsubscribe, workspace.setKnownAccounts,
       innerLoad, activeConversationIdRef, selectionTokenRef,
     );
@@ -189,7 +191,7 @@ function DashboardPage() {
       conversationId, accountId, subscribe, messageCache.getCachedMessages,
       messageCache.mergeMessagesIntoConversation, chat.setMessages, chat.setActiveConversationId,
       chat.setHasMoreHistory, composer.setLoadError, composer.setStatusMsg,
-      (aid, s, opts) => loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError),
+      (aid, s, opts) => loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError),
       (aid, cid) => refreshConversationMessages(aid, cid, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
       (aid, cid, bmid) => syncConversationHistory(aid, cid, bmid, (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef), chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.setConversations, selectionTokenRef, activeConversationIdRef),
       selectionTokenRef, activeConversationIdRef,
@@ -202,9 +204,9 @@ function DashboardPage() {
     const convs = chat.conversations;
     if (!convs.find((e) => e.id === conversationId)) {
       chat.setConversations([{
-        id: conversationId, threadId: contact.userId, type: 'direct', title: displayName,
+        id: conversationId, accountId: resolveWorkspaceId(), threadId: contact.userId, type: 'direct', title: displayName,
         avatar: contact.avatar, lastMessageText: 'Nhấn để mở chat', lastMessageKind: 'text',
-        lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0,
+        lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0, unreadCount: 0,
       }, ...convs]);
     }
     void onSelectConversation(conversationId);
@@ -215,9 +217,9 @@ function DashboardPage() {
     const convs = chat.conversations;
     if (!convs.find((e) => e.id === conversationId)) {
       chat.setConversations([{
-        id: conversationId, threadId: group.groupId, type: 'group', title: group.displayName,
+        id: conversationId, accountId: resolveWorkspaceId(), threadId: group.groupId, type: 'group', title: group.displayName,
         avatar: group.avatar, lastMessageText: 'Nhấn để mở nhóm chat', lastMessageKind: 'text',
-        lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0,
+        lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0, unreadCount: 0,
       }, ...convs]);
     }
     void onSelectConversation(conversationId);
@@ -309,7 +311,7 @@ function DashboardPage() {
 
   const onRefresh = useCallback(() => {
     const id = resolveWorkspaceId();
-    if (id) loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+    if (id) loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
   }, [resolveWorkspaceId, status, loadData, chat, composer]);
 
   const onRenameAccount = useCallback(async (nextDisplayName: string) => {
@@ -334,7 +336,7 @@ function DashboardPage() {
     api.accountMobileSync(accountId).then((result) => {
       const totalHistoryMsgs = (result.results ?? []).reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0);
       composer.setStatusMsg(`Mobile sync xong: ${result.requ18Received} tin req_18 + ${result.historySynced} cuộc trò chuyện (${totalHistoryMsgs} tin history). Đang làm mới...`);
-      return loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, composer.setLoadError);
+      return loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
     }).catch((err) => {
       composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ thất bại');
     }).finally(() => {
@@ -385,6 +387,22 @@ function DashboardPage() {
     return sidebarAccounts.find((account) => account.accountId === workspaceId);
   }, [resolveWorkspaceId, sidebarAccounts]);
 
+  useEffect(() => {
+    const visibleAccountIds = sidebarAccounts
+      .filter((account) => account.visible !== false && account.sessionActive === true)
+      .map((account) => account.accountId)
+      .filter(Boolean);
+    if (visibleAccountIds.length === 0) return;
+    void Promise.all(visibleAccountIds.map(async (accountId) => {
+      try {
+        const result = await api.accountConversations(accountId);
+        chat.setConversationsForAccount(accountId, result.conversations);
+      } catch {
+        // Ignore per-account sidebar unread preload failures.
+      }
+    }));
+  }, [sidebarAccounts, chat.setConversationsForAccount]);
+
   const filteredConversations = useMemo(() => {
     const q = workspace.query.trim().toLowerCase();
     const conversations = resolveConversationSummaries(chat.conversations);
@@ -411,6 +429,7 @@ function DashboardPage() {
           accounts={sidebarAccounts}
           selectedAccountId={workspace.selectedAccountId}
           currentAccountId={currentAccountId}
+          conversations={Object.values(chat.conversationsByAccount).flat()}
           onSelectAccount={onSelectAccount}
           onOpenAdmin={() => navigate('/admin')}
         />

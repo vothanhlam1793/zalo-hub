@@ -108,7 +108,7 @@ async function main() {
   app.use('/api', createAuthRouter(logger, loginRuntime, knex, accountManager, broadcast, () => loginPromise, (p) => { loginPromise = p; }, getEmptyStatus));
   const systemAuth = createSystemAuthRouter(logger, knex);
   app.use('/api', systemAuth.router);
-  app.use('/api/accounts', createAccountsRouter(logger, accountManager, broadcast, upload, systemAuth.requireAuth, systemAuth.requireAccountAccess));
+  app.use('/api/accounts', createAccountsRouter(logger, accountManager, broadcast, upload, knex, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
 

@@ -73,6 +73,7 @@ export interface HistorySyncResult {
 
 export interface ConversationSummary {
   id: string;
+  accountId: string;
   threadId: string;
   type: ConversationType;
   title: string;

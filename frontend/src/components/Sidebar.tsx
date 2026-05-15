@@ -201,24 +201,39 @@ export function Sidebar({
           })()
         ))}
 
-        {sidebarTab === 'contacts' && contacts.map((entry) => (
-          <div
-            key={entry.userId}
-            onClick={() => onOpenDirectConversation(entry)}
-            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${activeConversationId === directConversationId(entry.userId) ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
-          >
-            <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
-              {entry.avatar ? <img src={entry.avatar} alt={getContactDisplayName(entry)} className="w-full h-full object-cover rounded-full" /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
-                {getInitial(getContactDisplayName(entry))}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-[#eee] truncate">{getContactDisplayName(entry)}</div>
-              <div className="text-xs text-[#666] mt-0.5 truncate">Nhấn để mở chat</div>
+        {sidebarTab === 'contacts' && contacts.map((entry) => {
+          const contactConvId = directConversationId(entry.userId);
+          const contactUnread = conversations.find(c => c.id === contactConvId)?.unreadCount || 0;
+          const isActive = activeConversationId === contactConvId;
+          
+          return (
+            <div
+              key={entry.userId}
+              onClick={() => onOpenDirectConversation(entry)}
+              className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${isActive ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+            >
+              <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
+                {entry.avatar ? <img src={entry.avatar} alt={getContactDisplayName(entry)} className="w-full h-full object-cover rounded-full" /> : null}
+                <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
+                  {getInitial(getContactDisplayName(entry))}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`text-sm truncate ${contactUnread > 0 && !isActive ? 'font-bold text-white' : 'font-semibold text-[#eee]'}`}>
+                    {getContactDisplayName(entry)}
+                  </span>
+                  {contactUnread > 0 && !isActive && (
+                    <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-[#4f7aff] rounded-full leading-none">
+                      {contactUnread > 99 ? '99+' : contactUnread}
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-[#666] mt-0.5 truncate">Nhấn để mở chat</div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {sidebarTab === 'groups' && groups.map((entry) => (
           <div

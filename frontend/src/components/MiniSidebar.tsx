@@ -3,18 +3,26 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { getAccountDisplayName, getInitial } from '../utils';
-import type { AccountSummary } from '../types';
+import type { AccountSummary, ConversationSummary } from '../types';
 
 interface MiniSidebarProps {
   accounts: Array<AccountSummary & { isActive?: boolean; sessionActive?: boolean; phoneNumber?: string; visible?: boolean }>;
   selectedAccountId: string;
   currentAccountId: string;
+  conversations: ConversationSummary[];
   onSelectAccount: (accountId: string) => void;
   onOpenAdmin: () => void;
 }
 
-export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, onSelectAccount, onOpenAdmin }: MiniSidebarProps) {
+export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, conversations, onSelectAccount, onOpenAdmin }: MiniSidebarProps) {
   const visibleAccounts = accounts.filter(a => a.visible !== false);
+
+  // Tính tổng unread per account
+  const getAccountUnreadCount = (accountId: string) => {
+    return conversations
+      .filter(c => c.accountId === accountId)
+      .reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+  };
 
   return (
     <div className="w-[72px] min-w-[72px] border-r border-[var(--border)] bg-[#0d1219] flex flex-col items-center gap-[14px] p-[14px_10px]">
@@ -35,8 +43,11 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, onS
         {visibleAccounts.map((account) => {
           const isCurrent = account.sessionActive === true;
           const isSelected = account.accountId === (selectedAccountId || currentAccountId);
+          const isInactive = account.hasCredential === true && account.sessionActive !== true;
+          const needsLogin = account.hasCredential === false;
           const label = getAccountDisplayName(account);
           const subtitle = account.phoneNumber;
+          const unreadCount = getAccountUnreadCount(account.accountId);
 
           return (
             <Tooltip key={account.accountId}>
@@ -58,12 +69,27 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, onS
                   {isCurrent && (
                     <span className="absolute right-1 bottom-1 w-2 h-2 rounded-full bg-[#54da88] shadow-[0_0_0_2px_#0d1219]" />
                   )}
+                  {isInactive && (
+                    <span className="absolute right-1 bottom-1 w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_0_2px_#0d1219]" />
+                  )}
+                  {needsLogin && (
+                    <span className="absolute right-1 bottom-1 w-2 h-2 rounded-full bg-slate-500 shadow-[0_0_0_2px_#0d1219]" />
+                  )}
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-red-500 rounded-full flex items-center justify-center shadow-[0_0_0_2px_#0d1219]">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  )}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right">
                 <div className="text-xs">
                   <div className="font-medium">{label}</div>
                   {subtitle && <div className="text-muted-foreground">{subtitle}</div>}
+                  {isCurrent && <div className="text-emerald-400 font-medium mt-1">Đang hoạt động</div>}
+                  {isInactive && <div className="text-amber-400 font-medium mt-1">Có credential nhưng chưa active</div>}
+                  {needsLogin && <div className="text-slate-400 font-medium mt-1">Chưa đăng nhập</div>}
+                  {unreadCount > 0 && <div className="text-red-400 font-bold mt-1">{unreadCount} tin chưa đọc</div>}
                 </div>
               </TooltipContent>
             </Tooltip>

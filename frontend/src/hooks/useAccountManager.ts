@@ -24,6 +24,7 @@ export function useAccountManager() {
     setContacts: (c: Contact[]) => void,
     setGroups: (g: Group[]) => void,
     setConversations: (c: ConversationSummary[]) => void,
+    setConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void,
     setLoadError: (e: string) => void,
   ) => {
     if (!accountId) return;
@@ -38,6 +39,7 @@ export function useAccountManager() {
       setContacts(ct.contacts);
       setGroups(gp.groups);
       setConversations(cv.conversations);
+      setConversationsForAccount(accountId, cv.conversations);
       setLoadError('');
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Không tải được dữ liệu');
@@ -47,6 +49,7 @@ export function useAccountManager() {
   const handleLogout = useCallback(async (
     setStatus: (s: SessionStatus | null) => void,
     setConversations: (c: ConversationSummary[]) => void,
+    setConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void,
     setContacts: (c: Contact[]) => void,
     setGroups: (g: Group[]) => void,
     setActiveConversationId: (id: string) => void,
@@ -91,6 +94,7 @@ export function useAccountManager() {
     setActiveConversationId: (id: string) => void,
     setMessages: (m: any[]) => void,
     setConversations: (c: ConversationSummary[]) => void,
+    setConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void,
     setContacts: (c: Contact[]) => void,
     setGroups: (g: Group[]) => void,
     clearComposer: () => void,

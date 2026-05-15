@@ -435,18 +435,7 @@ export class GoldRuntime {
   }
 
   async getConversationSummaries() {
-    const summaries = await this.sync.getConversationSummaries();
-    try {
-      const marks = await this.sender.getUnreadMark();
-      const directMap = new Map(marks.direct.map((m: { threadId: string; count: number }) => [m.threadId, m.count] as const));
-      const groupMap = new Map(marks.group.map((m: { threadId: string; count: number }) => [m.threadId, m.count] as const));
-      return summaries.map((s) => ({
-        ...s,
-        unreadCount: s.type === 'group' ? (groupMap.get(s.threadId) ?? 0) : (directMap.get(s.threadId) ?? 0),
-      }));
-    } catch {
-      return summaries;
-    }
+    return this.sync.getConversationSummaries();
   }
 
   async getUnreadMark() {

@@ -145,6 +145,7 @@ export class GoldConversationRepo {
       const threadOrFriend = row.thread_id ?? row.friend_id;
       summaries.push({
         id: `${resolvedType}:${threadOrFriend}`,
+        accountId: resolvedAccountId,
         threadId: threadOrFriend,
         type: resolvedType,
         title: row.title

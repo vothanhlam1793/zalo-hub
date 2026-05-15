@@ -1,5 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
+import type { Knex } from 'knex';
 import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
 import { getStatusForRuntime } from '../helpers/status.js';
@@ -10,6 +11,7 @@ export function createAccountsRouter(
   accountManager: AccountRuntimeManager,
   broadcast: (payload: Record<string, unknown>) => void,
   upload: multer.Multer,
+  knex: Knex,
   requireAuth?: (req: Request, res: Response, next: NextFunction) => void,
   requireAccountAccess?: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
 ) {
@@ -463,6 +465,15 @@ export function createAccountsRouter(
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
         const target = targetRuntime.resolveConversationTarget(conversationId);
         await targetRuntime.markConversationRead(target.threadId, target.type === 'group');
+
+        await knex.raw(
+          `UPDATE conversations SET unread_count = 0, updated_at = NOW()
+           WHERE account_id = ? AND id = ?`,
+          [accountId, conversationId],
+        );
+
+        broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
+
         res.json({ ok: true });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Mark read that bai' });

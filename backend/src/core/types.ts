@@ -100,6 +100,7 @@ export interface GoldConversationMessage {
 
 export interface GoldConversationSummary {
   id: string;
+  accountId: string;
   threadId: string;
   type: GoldConversationType;
   title: string;
