@@ -109,6 +109,7 @@ export interface GoldConversationSummary {
   lastMessageTimestamp: string;
   lastDirection: 'incoming' | 'outgoing';
   messageCount: number;
+  unreadCount: number;
 }
 
 export interface GoldState {

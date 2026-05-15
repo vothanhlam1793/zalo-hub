@@ -242,7 +242,17 @@ deploy_backend() {
     sleep 2
   fi
 
-  nohup ./start-server.sh > /tmp/zalohub-backend-prod.log 2>&1 & disown
+  nohup env \
+    NODE_ENV=production \
+    DATABASE_URL="postgresql://zalohub:zalohub@localhost:5433/zalohub" \
+    MINIO_ENDPOINT=localhost \
+    MINIO_PORT=9000 \
+    MINIO_ACCESS_KEY=zalohub \
+    MINIO_SECRET_KEY=zalohub-minio-secret \
+    MINIO_BUCKET=zalohub-media \
+    JWT_SECRET=zalohub-prod-jwt-secret-2026 \
+    node "$BACKEND_DIR/dist/server/index.js" \
+    > /tmp/zalohub-backend-prod.log 2>&1 & disown
 
   blue "[backend] Waiting for :3399"
   for _ in $(seq 1 20); do

@@ -1,197 +1,237 @@
-# Kiến trúc Zalo Hub
-
-## Tổng quan
+# ZaloHub — Sơ đồ luồng dữ liệu
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                        Nginx (:443)                            │
-│                                                                │
-│  /              → frontend static build                        │
-│  /api/*  /ws    → backend :3399                                │
-│  /admin         → backend :3399/admin (admin SPA)              │
-│  /media/*       → MinIO :9000                                  │
-└────────────────────────────────────────────────────────────────┘
-         │                          │
-         ▼                          ▼
-┌─────────────────────┐   ┌─────────────────────┐
-│  frontend/          │   │  backend/            │
-│  Chat React app     │   │                      │
-│                     │   │  ┌─────────────────┐ │
-│  ┌───────────────┐  │   │  │ Express :3399   │ │
-│  │ App.tsx       │  │   │  │  /api/* REST    │ │
-│  │  Dashboard    │──┼───┼─▶│  /ws WebSocket  │ │
-│  │  AdminPage    │  │   │  │  /admin static  │ │
-│  └───────────────┘  │   │  └───────┬─────────┘ │
-│                     │   │          │            │
-│  ┌───────────────┐  │   │  ┌───────▼─────────┐ │
-│  │ useWebSocket  │──┼───┼─▶│ AccountManager  │ │
-│  │   + token     │  │   │  │  multi-runtime   │ │
-│  └───────────────┘  │   │  └───────┬─────────┘ │
-│                     │   │          │            │
-│  ┌───────────────┐  │   │  ┌───────▼─────────┐ │
-│  │ api.ts        │──┼───┼─▶│ src/core/       │ │
-│  │  auth + chat  │  │   │  │  GoldRuntime    │ │
-│  │  + admin      │  │   │  │  GoldStore(Knex)│ │
-│  └───────────────┘  │   │  │  GoldMediaStore │ │
-│                     │   │  └───┬───┬─────────┘ │
-│  Port: 3400 (dev)   │   │      │   │           │
-└─────────────────────┘   │      │   │           │
-                          │  ┌───▼───┴─────────┐ │
-                          │  │ PostgreSQL :5432│ │
-                          │  │ MinIO :9000     │ │
-                          │  └─────────────────┘ │
-                          │                      │
-                          │  Port: 3399          │
-                          └─────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                              ZALO API (External)                             ║
+║  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     ║
+║  │  Messages    │  │  Reactions   │  │  Old Msgs    │  │  Group Info  │     ║
+║  │  (real-time) │  │  (real-time) │  │  (history)   │  │  (metadata)  │     ║
+║  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     ║
+╚═════════╪═════════════════╪═════════════════╪═════════════════╪═══════════════╝
+          │                 │                 │                 │
+          ▼                 ▼                 ▼                 ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          BACKEND (Express :3399)                             ║
+║                                                                              ║
+║  ┌─────────────────────────────────┐                                        ║
+║  │         ZaloListener            │  ← WebSocket tới Zalo                  ║
+║  │  selfListen: true               │  ← Echo cả tin mình gửi                ║
+║  │                                 │                                        ║
+║  │  on('message') → handleMessage  │─────────────────────┐                  ║
+║  │  on('reaction') → handleReact.  │                     │                  ║
+║  │  on('old_messages') → handleOld │                     │                  ║
+║  └─────────────────────────────────┘                     │                  ║
+║                                                          ▼                  ║
+║  ┌─────────────────────────────────┐  ┌─────────────────────────────────┐   ║
+║  │         Normalizer              │  │       GoldMediaStore             │   ║
+║  │                                 │  │                                 │   ║
+║  │  normalizeMessageKind()         │  │  mirrorRemoteUrl()              │   ║
+║  │  normalizeMessageText()         │  │    fetch Zalo CDN → MinIO       │   ║
+║  │  normalizeAttachments()         │  │    url = /media/{path}          │   ║
+║  │  normalizeImageUrl()            │  │  saveBuffer() → MinIO           │   ║
+║  │  normalizeReactionEvent()       │  │                                 │   ║
+║  │  getConversationType()          │  │  ┌─────────────┐                │   ║
+║  └─────────────────────────────────┘  │  │   MinIO     │                │   ║
+║                                       │  │ (S3 object) │                │   ║
+║  ┌─────────────────────────────────┐  │  └──────┬──────┘                │   ║
+║  │         GoldRuntime             │  │         │ GET /media/*          │   ║
+║  │                                 │  │         │  stream pipe → res    │   ║
+║  │  appendConversationMessage()    │  └─────────┼───────────────────────┘   ║
+║  │    → cache (Map) → replace()    │            │                           ║
+║  │    → DB + WebSocket broadcast   │            │                           ║
+║  │                                 │            │                           ║
+║  │  handleReactionUpdate()         │            │                           ║
+║  │  getConversationSummaries()     │            │                           ║
+║  │    + merge unread from Zalo     │            │                           ║
+║  │  markConversationRead()         │            │                           ║
+║  └─────────────────────────────────┘            │                           ║
+║                                 │               │                           ║
+║  ┌──────────────────────────────┼───────────────┼───────────────────────┐   ║
+║  │           GoldStore           │               │                       │   ║
+║  │                               ▼               ▼                       │   ║
+║  │  ┌──────────────────────────────────┐  ┌──────────────────────────┐  │   ║
+║  │  │  PostgreSQL                      │  │  MinIO (S3)              │  │   ║
+║  │  │                                  │  │                          │  │   ║
+║  │  │  accounts       messages         │  │  zalohub-media/          │  │   ║
+║  │  │  conversations  attachments      │  │    {acc}/{year}/{month}/ │  │   ║
+║  │  │  contacts       groups           │  │    {msg}-{uuid}-{file}   │  │   ║
+║  │  │  system_users   zalo_account_*   │  │                          │  │   ║
+║  │  │                                  │  │                          │  │   ║
+║  │  │  → replaceConversationMessages() │  │                          │  │   ║
+║  │  │    GUARD: skip DELETE if         │  │                          │  │   ║
+║  │  │    incoming ≤ 10 & DB > 10       │  │                          │  │   ║
+║  │  └──────────────────────────────────┘  └──────────────────────────┘  │   ║
+║  └──────────────────────────────────────────────────────────────────────┘   ║
+║                                                                              ║
+║  ┌─ API Routes ──────────────────────────────────────────────────────────┐  ║
+║  │  GET  /api/status                    POST /api/accounts/:id/activate   │  ║
+║  │  GET  /api/accounts                  POST /api/accounts/.../send       │  ║
+║  │  GET  /api/accounts/.../conversations POST /api/accounts/.../reaction  │  ║
+║  │  GET  /api/accounts/.../messages     POST /api/accounts/.../mark-read  │  ║
+║  │  POST /api/accounts/.../sync-history POST /api/accounts/.../sync-all   │  ║
+║  │  POST /api/conversations/sync-metadata                                 │  ║
+║  │  GET  /media/*   ← stream từ MinIO                                    │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+║  ┌─ WebSocket /ws ───────────────────────────────────────────────────────┐  ║
+║  │  Client subscribe(accountId, conversationId)                          │  ║
+║  │  Server broadcast:                                                     │  ║
+║  │    conversation_message  ← khi appendConversationMessage()             │  ║
+║  │    conversation_summaries ← sau mỗi message mới                        │  ║
+║  │    session_state         ← khi trạng thái listener thay đổi            │  ║
+║  │    ws_sync_status       ← tiến độ mobile sync (req_18)                 │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+          │
+          │ HTTP/WS
+          ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                         FRONTEND (Vite React, svr12)                         ║
+║                                                                              ║
+║  ┌─ Stores (zustand) ────────────────────────────────────────────────────┐  ║
+║  │  useWorkspaceStore  → selectedAccountId (localStorage)                │  ║
+║  │  useChatStore       → conversations, messages, contacts, groups       │  ║
+║  │  useComposerStore   → text, attachFile, statusMsg, loadError          │  ║
+║  │  useAuthStore       → user, token, login/logout                       │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+║  ┌─ Hooks ───────────────────────────────────────────────────────────────┐  ║
+║  │  useWebSocket          → connect ws://host/ws, subscribe, onMessage   │  ║
+║  │  useConversationManager → selectConversation, loadOlder, auto-sync    │  ║
+║  │  useMessageCache       → Map<acc::conv, Message[]>                    │  ║
+║  │  useAccountManager     → activate, deactivate, loadData               │  ║
+║  │  useComposer           → handleSend, handleKeyDown                    │  ║
+║  │  useLogin              → QR login flow                                │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+║  ┌─ Components ──────────────────────────────────────────────────────────┐  ║
+║  │  App.tsx          → Router + WebSocket + onReactMessage                │  ║
+║  │  MiniSidebar      → Account switcher (avatar list)                    │  ║
+║  │  Sidebar          → Conversation list + unread badge                  │  ║
+║  │  ChatPanel        → Message list + load older on scroll               │  ║
+║  │  MessageBubble    → text, image, sticker, video, reaction             │  ║
+║  │  ConversationDetailsPanel → metadata + sync history button            │  ║
+║  │  QrOverlay        → QR code for login                                 │  ║
+║  │  AdminPage        → users, accounts, memberships management           │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+║  ┌─ API (fetch wrapper) ─────────────────────────────────────────────────┐  ║
+║  │  status(), accounts(), accountMessages(), accountAddReaction(),        │  ║
+║  │  accountMarkRead(), accountSyncHistory(), accountSyncMetadata(), etc   │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 ```
 
-## Luồng dữ liệu
+---
 
-### 1. Đăng nhập hệ thống
-```
-User → POST /api/auth/login (email, password)
-     → system_users (verify password)
-     → system_sessions (tạo session)
-     → JWT token trả về client
-```
-
-### 2. Thêm tài khoản Zalo (QR)
-```
-Master → POST /api/login/start (có auth)
-       → Playwright mở chat.zalo.me
-       → QR code hiển thị cho user quét
-       → Zalo xác thực → lấy cookie/imei
-       → accounts + account_sessions (lưu credential)
-       → zalo_account_memberships (auto-assign master)
-       → AccountRuntimeManager warm start
-```
-
-### 3. Nhận tin nhắn realtime
-```
-Zalo server → WebSocket listener (src/core/runtime/listener.ts)
-            → normalize message (normalizer.ts)
-            → appendConversationMessage → GoldStore (PostgreSQL)
-            → broadcastConversationMessage → chỉ client subscribed
-```
-
-### 4. Gửi tin nhắn
-```
-User → POST /api/accounts/:id/send (có auth + quyền editor)
-     → requireAccountAccess('editor')
-     → GoldRuntime.sendText()
-     → Zalo API send message
-     → appendConversationMessage → GoldStore
-```
-
-### 5. WebSocket auth flow
-```
-Client → ws://host/ws
-       → on open: nhận connected, conversation_summaries, session_state
-       → subscribe { accountId, conversationId, token }
-       → backend verify JWT → check zalo_account_memberships
-       → nếu có quyền → subscribed
-       → nếu không → error
-```
-
-### 6. Phân quyền
-```
-Middleware chain:
-  requireAuth          → verify JWT, set req.systemUserId
-  requireSystemRole    → check system_users.role (super_admin/admin)
-  requireAccountAccess → check zalo_account_memberships (master/admin/editor/viewer)
-  requireAccountMaster → check role === 'master' trên account cụ thể
-```
-
-## Cây thư mục backend/src/
+## Luồng tin nhắn đến
 
 ```
-src/
-├── core/                  Zalo runtime core
-│   ├── index.ts           CLI entry point
-│   ├── logger.ts          GoldLogger (file logger)
-│   ├── media-store.ts     MinIO object storage wrapper
-│   ├── types.ts           Core data types
-│   ├── runtime/           Runtime services
-│   │   ├── index.ts       GoldRuntime orchestrator
-│   │   ├── session-auth.ts  Login + credential
-│   │   ├── listener.ts    WebSocket message listener
-│   │   ├── sender.ts      Send messages/attachments
-│   │   ├── sync.ts        Data sync (friends, groups, history)
-│   │   ├── normalizer.ts  Data normalization
-│   │   └── qr.ts          QR code rendering
-│   └── store/             Database layer (Knex + PostgreSQL)
-│       ├── index.ts       GoldStore (top-level)
-│       ├── account-repo.ts
-│       ├── contact-repo.ts
-│       ├── group-repo.ts
-│       ├── conversation-repo.ts
-│       ├── message-repo.ts
-│       └── helpers.ts
-│
-├── server/                Express backend
-│   ├── index.ts           Server entry point
-│   ├── account-manager.ts Multi-account runtime manager
-│   ├── helpers/
-│   │   ├── auth-middleware.ts  JWT + role middleware
-│   │   ├── context.ts     Runtime context helpers
-│   │   └── status.ts      Status builders
-│   ├── routes/
-│   │   ├── system.ts      Health/status endpoints
-│   │   ├── auth.ts        QR login/logout
-│   │   ├── system-auth.ts System user auth (login/me/logout)
-│   │   ├── accounts.ts    Per-account REST API
-│   │   ├── admin.ts       Admin CRUD + membership
-│   │   └── legacy.ts      Legacy compatibility
-│   └── ws/
-│       └── handler.ts     WebSocket handler (auth + subscribe)
-│
-└── admin/                 Admin SPA (React)
-    ├── App.tsx
-    ├── pages/AdminPage.tsx
-    ├── components/
-    │   ├── MyAccountsTab.tsx
-    │   ├── QrLoginDialog.tsx
-    │   └── ui/            (Radix/shadcn components)
-    ├── stores/auth-store.ts
-    └── api.ts
+Zalo WebSocket
+     │
+     ▼
+Listener.on('message')
+     │
+     ▼
+Normalizer (msgType → kind, content → text, attachs → url)
+     │
+     ▼
+persistMessageAttachmentsLocally()
+  → fetch Zalo CDN → lưu MinIO → url = /media/...
+     │
+     ▼
+appendConversationMessage()
+  ├─ cache.set(convId, messages + newMsg)
+  ├─ store.replaceConversationMessagesByAccount(convId, cache)
+  │   └─ GUARD: nếu incoming quá ít → skip DELETE, return DB
+  └─ broadcastConversationMessage() → WebSocket tới frontend
 ```
 
-## Database Schema (PostgreSQL)
+## Luồng reaction
 
-11 bảng:
+```
+Frontend click reaction
+     │
+     ▼
+api.accountAddReaction() → POST /api/accounts/.../reaction
+     │
+     ▼
+Backend: sender.addReaction() → Zalo API
+     │
+     ▼
+Zalo echo (selfListen: true)
+     │
+     ▼
+Listener.on('reaction')
+     │
+     ▼
+handleReaction() → handleReactionUpdate() → DB + broadcast WS
+     │
+     ▼
+Frontend nhận WS conversation_message → cập nhật reactions
+```
 
-| Table | Vai trò |
-|-------|---------|
-| `accounts` | Tài khoản Zalo |
-| `account_sessions` | Cookie/credential session |
-| `friends` | Danh sách bạn bè |
-| `conversations` | Tổng hợp cuộc trò chuyện |
-| `messages` | Tin nhắn (raw_message_json JSONB) |
-| `groups` | Nhóm (members_json JSONB) |
-| `attachments` | File đính kèm |
-| `system_users` | User hệ thống |
-| `system_sessions` | Session JWT |
-| `zalo_account_memberships` | Phân quyền user↔account |
+## Luồng sync lịch sử
 
-Xem migrations tại `backend/db/migrations/`.
+```
+Frontend mở conversation (auto nếu < 10 tin + hasMore)
+     │
+     ▼
+POST /api/accounts/.../sync-history
+     │
+     ▼
+syncConversationHistory()
+  ├─ (1) requestOldMessages(threadType, beforeMessageId)
+  │      → Listener gửi cmd 510/511 qua Zalo WS
+  │      → Zalo trả 'old_messages' → handleOldMessages → appendConversationMessage
+  │
+  └─ (2) Fallback nếu group + remoteCount=0:
+         requestMobileSyncThread(threadId, 'group', timeout)
+            → ZaloPcHandshake binary WS → req_18 → giải mã frame
+            → merge DB + insert messages mới
+```
 
-## Các file quan trọng cần biết khi sửa
+## Luồng media (ảnh/sticker)
 
-| Muốn sửa gì | File |
-|---|---|
-| Thêm API endpoint | `backend/src/server/routes/*.ts` |
-| Sửa middleware auth | `backend/src/server/helpers/auth-middleware.ts` |
-| Sửa WebSocket logic | `backend/src/server/ws/handler.ts` |
-| Sửa database schema | `backend/db/migrations/` + `backend/src/core/store/*.ts` |
-| Sửa Zalo login/receive | `backend/src/core/runtime/session-auth.ts` hoặc `listener.ts` |
-| Sửa gửi tin nhắn | `backend/src/core/runtime/sender.ts` |
-| Sửa media storage | `backend/src/core/media-store.ts` |
-| Sửa cấu trúc DB query | `backend/src/core/store/*-repo.ts` |
-| Sửa admin page UI | `backend/src/admin/` |
-| Sửa chat UI | `frontend/src/components/` |
-| Sửa admin page (user view) | `frontend/src/pages/AdminPage.tsx` + `MyAccountsTab.tsx` |
-| Sửa WebSocket client | `frontend/src/useWebSocket.ts` |
-| Sửa API client calls | `frontend/src/api.ts` |
-| Thêm Docker service | `backend/docker-compose.yml` |
-| Sửa Nginx route | `backend/deploy/nginx-zalohub.conf` |
-| Migrate dữ liệu cũ | `backend/scripts/migrate-sqlite-to-pg.ts` |
+```
+Tin nhắn đến có attachment (image/sticker)
+     │
+     ▼
+normalizeAttachments() → { url: "https://zalo-xxx.zdn.vn/..." }
+     │
+     ▼
+persistMessageAttachmentsLocally()
+  → persistAttachmentLocally()
+    → fetch(url) → buffer
+    → mediaStore.saveBuffer(buffer) → MinIO
+    → publicUrl = "/media/acc/2026/05/msg-uuid-file.jpg"
+    → ghi vào attachment.url
+     │
+     ▼
+Frontend render <img src="/media/...">
+     │
+     ▼
+Browser GET /media/acc/2026/05/msg-uuid-file.jpg
+     │
+     ▼
+Express route GET /media/* → MinIO getObject() → stream.pipe(res)
+```
+
+## Deploy flow
+
+```
+./deploy.sh                     auto-detect thay đổi từ git
+./deploy.sh --backend           build tsc + restart :3399
+./deploy.sh --frontend          build vite + scp lên svr12
+
+deploy_backend():
+  npm run build --prefix backend/
+  kill $(ss -ltnp | awk /:3399/)
+  env NODE_ENV=production DATABASE_URL=... node dist/server/index.js &
+
+deploy_frontend():
+  npm run build --prefix frontend/
+  tar dist/ → scp → svr12:/var/www/zalohub-frontend/
+```

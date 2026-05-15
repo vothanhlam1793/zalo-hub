@@ -449,14 +449,23 @@ export function createAccountsRouter(
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
         const result = await targetRuntime.addReaction(conversationId, messageId, cliMsgId, reactionIcon);
         res.json(result);
-
-        const iconEmojiMap: Record<string, string> = {
-          '/-heart': '❤️', '/-strong': '👍', ':>': '😆', ':o': '😮', ':-((': '😢', ':-h': '😡',
-        };
-        const emoji = iconEmojiMap[reactionIcon] ?? reactionIcon;
-        await targetRuntime.handleReactionUpdate(conversationId, messageId, emoji, 1, [accountId]);
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Gui reaction that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/:conversationId/mark-read', (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const target = targetRuntime.resolveConversationTarget(conversationId);
+        await targetRuntime.markConversationRead(target.threadId, target.type === 'group');
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Mark read that bai' });
       }
     })();
   });

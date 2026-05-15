@@ -318,6 +318,7 @@ export class GoldRuntime {
     existing.push(message);
     existing.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.state.conversations.set(message.conversationId, existing);
+
     await this.state.store.replaceConversationMessagesByAccount(this.state.boundAccountId, message.conversationId, existing);
     for (const listener of this.state.conversationListeners) {
       listener(message);
@@ -325,7 +326,7 @@ export class GoldRuntime {
     return true;
   }
 
-  private resolveConversationTarget(conversationId: string) {
+  resolveConversationTarget(conversationId: string) {
     if (conversationId.startsWith('group:')) {
       return { threadId: conversationId.slice('group:'.length), type: 'group' as const };
     }
@@ -434,7 +435,26 @@ export class GoldRuntime {
   }
 
   async getConversationSummaries() {
-    return this.sync.getConversationSummaries();
+    const summaries = await this.sync.getConversationSummaries();
+    try {
+      const marks = await this.sender.getUnreadMark();
+      const directMap = new Map(marks.direct.map((m: { threadId: string; count: number }) => [m.threadId, m.count] as const));
+      const groupMap = new Map(marks.group.map((m: { threadId: string; count: number }) => [m.threadId, m.count] as const));
+      return summaries.map((s) => ({
+        ...s,
+        unreadCount: s.type === 'group' ? (groupMap.get(s.threadId) ?? 0) : (directMap.get(s.threadId) ?? 0),
+      }));
+    } catch {
+      return summaries;
+    }
+  }
+
+  async getUnreadMark() {
+    return this.sender.getUnreadMark();
+  }
+
+  async markConversationRead(threadId: string, isGroup: boolean) {
+    await this.sender.markConversationRead(threadId, isGroup);
   }
 
   async syncConversationMetadata(conversationId: string) {
@@ -502,7 +522,7 @@ export class GoldRuntime {
     return this.sender.addReaction(conversationId, messageId, cliMsgId, reactionIcon);
   }
 
-  async handleReactionUpdate(conversationId: string, targetGlobalMsgId: string, emoji: string, count: number, userIds: string[]) {
+  private async handleReactionUpdate(conversationId: string, targetGlobalMsgId: string, emoji: string, count: number, userIds: string[]) {
     const messages = this.state.conversations.get(conversationId);
     if (!messages) return false;
     const idx = messages.findIndex((msg) => msg.providerMessageId === targetGlobalMsgId);

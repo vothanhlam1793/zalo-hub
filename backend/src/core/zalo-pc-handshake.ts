@@ -250,6 +250,9 @@ export class ZaloPcHandshake {
 
     const conversationId = getConversationId(threadId, threadType);
 
+    const dbMessages = await this.state.store.listConversationMessagesByAccount(this.state.boundAccountId, conversationId) ?? [];
+    const messageListMap = new Map(dbMessages.map((m: GoldConversationMessage) => [m.providerMessageId, m]));
+
     for (const msg of collectedMessages) {
       const text = msg.text;
       const kind = msg.kind;
@@ -275,22 +278,24 @@ export class ZaloPcHandshake {
         rawMessageJson: JSON.stringify(msg.data),
       };
 
-      totalReceived++;
-      if (await this.state.store.hasMessageByProviderIdForAccount(this.state.boundAccountId!, conversationId, (normalized.providerMessageId ?? normalized.id).trim())) {
+      const pKey = (normalized.providerMessageId ?? normalized.id).trim();
+      if (messageListMap.has(pKey)) {
         totalDeduped++;
-      } else {
-        const messageList = this.state.conversations.get(conversationId) ?? [];
-        messageList.push(normalized);
-        messageList.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
-        this.state.conversations.set(conversationId, messageList);
-        this.state.store.replaceConversationMessagesByAccount(this.state.boundAccountId!, conversationId, messageList);
-        totalInserted++;
+        continue;
       }
+
+      totalReceived++;
+      messageListMap.set(pKey, normalized);
+      totalInserted++;
 
       if (!oldestTimestamp || normalized.timestamp < oldestTimestamp) {
         oldestTimestamp = normalized.timestamp;
       }
     }
+
+    const messageList = [...messageListMap.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    this.state.conversations.set(conversationId, messageList);
+    this.state.store.replaceConversationMessagesByAccount(this.state.boundAccountId!, conversationId, messageList);
 
     this.state.logger.info('pc_handshake_req18_complete', {
       threadId,

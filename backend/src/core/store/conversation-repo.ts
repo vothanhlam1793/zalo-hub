@@ -132,7 +132,7 @@ export class GoldConversationRepo {
     }
 
     const rows = (await this.knex.raw(`
-      SELECT friend_id, display_name_snapshot, last_message_text, last_message_kind, last_direction, last_message_timestamp, message_count
+      SELECT friend_id, display_name_snapshot, last_message_text, last_message_kind, last_direction, last_message_timestamp, message_count, unread_count
            , id, thread_id, type, title, avatar
       FROM conversations
       WHERE account_id = ?
@@ -162,6 +162,7 @@ export class GoldConversationRepo {
         lastMessageTimestamp: row.last_message_timestamp,
         lastDirection: row.last_direction,
         messageCount: row.message_count,
+        unreadCount: row.unread_count ?? 0,
       } satisfies GoldConversationSummary);
     }
     return summaries;

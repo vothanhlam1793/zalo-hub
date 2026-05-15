@@ -184,6 +184,7 @@ function DashboardPage() {
   const onSelectConversation = useCallback((conversationId: string) => {
     const accountId = resolveWorkspaceId();
     if (!accountId) { composer.setLoadError('Chưa có tài khoản workspace được chọn'); return; }
+    api.accountMarkRead(accountId, conversationId);
     void selectConversation(
       conversationId, accountId, subscribe, messageCache.getCachedMessages,
       messageCache.mergeMessagesIntoConversation, chat.setMessages, chat.setActiveConversationId,
@@ -303,22 +304,8 @@ function DashboardPage() {
       await api.accountAddReaction(accountId, message.conversationId, message.providerMessageId, cliMsgId, reaction.icon);
     } catch (err) {
       composer.setLoadError(err instanceof Error ? err.message : 'Gửi reaction thất bại');
-      return;
     }
-
-    chat.setMessages(useChatStore.getState().messages.map((entry) => {
-      if (entry.id !== message.id) return entry;
-      const existing = entry.reactions ?? [];
-      const existingIndex = existing.findIndex((item) => item.emoji === reaction.emoji);
-      const nextReactions = existingIndex >= 0
-        ? existing.map((item, index) => index === existingIndex ? { ...item, count: item.count + 1 } : item)
-        : [...existing, { emoji: reaction.emoji, count: 1 }];
-      return {
-        ...entry,
-        reactions: nextReactions,
-      };
-    }));
-  }, [resolveWorkspaceId, chat, composer]);
+  }, [resolveWorkspaceId, composer]);
 
   const onRefresh = useCallback(() => {
     const id = resolveWorkspaceId();

@@ -17,6 +17,7 @@ process.on('uncaughtException', (error) => {
 import { GoldLogger } from '../core/logger.js';
 import { GoldRuntime } from '../core/runtime.js';
 import { GoldStore } from '../core/store.js';
+import { Client as MinioClient } from 'minio';
 import { AccountRuntimeManager } from './account-manager.js';
 import { createWsHandler } from './ws/handler.js';
 import { createSystemRouter } from './routes/system.js';
@@ -77,6 +78,30 @@ async function main() {
   app.use('/admin', express.static(adminDir));
   app.get('/admin', (_req, res) => {
     res.sendFile(path.join(adminDir, 'index.html'));
+  });
+
+  const mediaBucket = process.env.MINIO_BUCKET || 'zalohub-media';
+  const mediaClient = new MinioClient({
+    endPoint: process.env.MINIO_ENDPOINT || 'localhost',
+    port: Number(process.env.MINIO_PORT || 9000),
+    useSSL: false,
+    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
+    secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+  });
+
+  app.get('/media/*', async (req, res) => {
+    try {
+      const objPath = req.path.slice('/media/'.length);
+      if (!objPath) { res.status(400).send('Missing file path'); return; }
+      const stat = await mediaClient.statObject(mediaBucket, objPath);
+      res.setHeader('Content-Type', (stat.metaData as Record<string, string>)?.['content-type'] || 'application/octet-stream');
+      res.setHeader('Content-Length', String(stat.size));
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      const stream = await mediaClient.getObject(mediaBucket, objPath);
+      stream.pipe(res);
+    } catch {
+      res.status(404).send('Not found');
+    }
   });
 
   app.use('/api', createSystemRouter(logger, accountManager, () => loginPromise));

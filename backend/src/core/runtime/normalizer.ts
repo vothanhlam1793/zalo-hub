@@ -36,7 +36,7 @@ export function normalizeMessageText(data: Record<string, unknown>) {
 export function normalizeMessageKind(data: Record<string, unknown>): GoldMessageKind {
   const msgType = String(data.msgType ?? '');
   if (msgType === 'chat.photo') return 'image';
-  if (msgType === 'chat.sticker' || msgType === 'sticker') return 'sticker';
+  if (msgType.includes('sticker') || msgType === 'chat.sticker' || msgType === 'sticker') return 'sticker';
   if (msgType === 'chat.reaction' || msgType === 'reaction') return 'reaction';
   if (msgType === 'chat.vote' || msgType === 'poll') return 'poll';
   if (msgType === 'chat.voice') return 'voice';
@@ -184,16 +184,18 @@ export function normalizeAttachments(data: Record<string, unknown>): GoldAttachm
   const content = data.content;
   const contentObj = content && typeof content === 'object' ? content as Record<string, unknown> : null;
 
-   if (msgType === 'chat.sticker' || msgType === 'sticker') {
+   if (msgType.includes('sticker') || msgType === 'chat.sticker' || msgType === 'sticker') {
     const url = typeof contentObj?.href === 'string'
       ? contentObj.href.trim()
       : typeof contentObj?.src === 'string'
         ? contentObj.src.trim()
-        : typeof contentObj?.thumbnail === 'string'
-          ? contentObj.thumbnail.trim()
-          : typeof data.url === 'string'
-            ? data.url.trim()
-            : undefined;
+        : typeof contentObj?.url === 'string'
+          ? contentObj.url.trim()
+          : typeof contentObj?.thumbnail === 'string'
+            ? contentObj.thumbnail.trim()
+            : typeof data.url === 'string'
+              ? data.url.trim()
+              : undefined;
     if (!url) return [];
     return [{
       id: String(data.msgId ?? data.cliMsgId ?? Math.random()),

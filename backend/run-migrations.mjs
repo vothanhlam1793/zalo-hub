@@ -40,10 +40,11 @@ async function main() {
     friend_id TEXT NOT NULL, display_name_snapshot TEXT,
     last_message_text TEXT NOT NULL DEFAULT '', last_message_kind TEXT NOT NULL DEFAULT 'text',
     last_direction TEXT NOT NULL DEFAULT 'incoming', last_message_timestamp TEXT NOT NULL DEFAULT '',
-    message_count INTEGER NOT NULL DEFAULT 0,
+    message_count INTEGER NOT NULL DEFAULT 0, unread_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(account_id, friend_id)
   )`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS unread_count INTEGER NOT NULL DEFAULT 0`);
   console.log("OK conversations");
 
   await knex.raw(`CREATE TABLE IF NOT EXISTS messages (

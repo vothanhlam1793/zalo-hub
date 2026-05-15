@@ -17,13 +17,33 @@ interface WorkspaceState {
   resetWorkspace: () => void;
 }
 
+const LS_KEY = 'zalohub_selected_account';
+
+function loadSelectedAccountId(): string {
+  try {
+    return localStorage.getItem(LS_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveSelectedAccountId(id: string) {
+  try {
+    if (id) localStorage.setItem(LS_KEY, id);
+    else localStorage.removeItem(LS_KEY);
+  } catch { /* ignore */ }
+}
+
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
-  selectedAccountId: '',
+  selectedAccountId: loadSelectedAccountId(),
   knownAccounts: [],
   sidebarTab: 'conversations' as SidebarTab,
   query: '',
 
-  setSelectedAccountId: (id) => set({ selectedAccountId: id }),
+  setSelectedAccountId: (id) => {
+    saveSelectedAccountId(id);
+    set({ selectedAccountId: id });
+  },
 
   setKnownAccounts: (accounts) => set({ knownAccounts: accounts }),
 
@@ -44,9 +64,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setQuery: (q) => set({ query: q }),
 
-  resetWorkspace: () => set({
-    selectedAccountId: '',
-    sidebarTab: 'conversations',
-    query: '',
-  }),
+  resetWorkspace: () => {
+    saveSelectedAccountId('');
+    set({
+      selectedAccountId: '',
+      sidebarTab: 'conversations',
+      query: '',
+    });
+  },
 }));

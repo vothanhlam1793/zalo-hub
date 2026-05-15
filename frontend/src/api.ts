@@ -172,6 +172,12 @@ export const api = {
       body: JSON.stringify({ messageId, cliMsgId, icon }),
     }),
 
+  accountMarkRead: (accountId: string, conversationId: string) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/mark-read`, {
+      method: 'POST',
+      body: '{}',
+    }).catch(() => {}),
+
   accountCreatePoll: (accountId: string, groupId: string, question: string, options: string[]) =>
     req(`/api/accounts/${encodeURIComponent(accountId)}/groups/${encodeURIComponent(groupId)}/poll`, {
       method: 'POST',

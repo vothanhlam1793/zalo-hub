@@ -202,6 +202,37 @@ export class GoldSync {
         beforeMessageId = result.oldestProviderMessageId;
       }
 
+      // Group history via requestOldMessages is unreliable because the SDK API only
+      // takes thread type + lastMsgId, not the target threadId. When the active
+      // Zalo thread is different, the listener may return 0 old messages even
+      // though the group has history. Fall back to mobile req_18 sync for groups.
+      if (target.type === 'group' && totalRemote === 0 && totalInserted === 0 && !finalTimedOut) {
+        try {
+          const mobileResult = await this.requestMobileSyncThread(target.threadId, 'group', {
+            timeoutMs: Math.min(options.timeoutMs ?? 15_000, 30_000),
+          });
+          totalRemote += mobileResult.received;
+          totalInserted += mobileResult.insertedCount;
+          totalDeduped += mobileResult.dedupedCount;
+          finalOldestTimestamp = mobileResult.oldestTimestamp ?? finalOldestTimestamp;
+          finalHasMore = false;
+          this.state.logger.info('history_sync_mobile_fallback_complete', {
+            conversationId,
+            threadId: target.threadId,
+            received: mobileResult.received,
+            inserted: mobileResult.insertedCount,
+            deduped: mobileResult.dedupedCount,
+            timedOut: mobileResult.timedOut,
+          });
+        } catch (error) {
+          this.state.logger.error('history_sync_mobile_fallback_failed', {
+            conversationId,
+            threadId: target.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       const aggregated: HistorySyncResult = {
         conversationId,
         threadId: target.threadId,
@@ -453,7 +484,7 @@ export class GoldSync {
     let updatedMessages = 0;
     let repairedMessages = 0;
     for (const summary of await this.state.store.listConversationSummariesByAccount(this.state.boundAccountId)) {
-      const messages = await this.state.store.listConversationMessagesByAccount(this.state.boundAccountId, summary.id);
+      const messages = await this.state.store.listConversationMessagesByAccount(this.state.boundAccountId, summary.id, { limit: 10000 });
       let changed = false;
       const nextMessages: GoldConversationMessage[] = [];
       for (const message of messages) {

@@ -252,6 +252,7 @@ export class GoldListener {
         isSelf: Boolean(message.isSelf),
         kind,
         summary: summarizeListenerData(data),
+        rawMsgType: String(data.msgType ?? ''),
       });
       return;
     }

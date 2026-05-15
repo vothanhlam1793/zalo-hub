@@ -276,4 +276,32 @@ export class GoldSender {
     const result = await api.forwardMessage(messageId, toThreadId, toType === 'group' ? ThreadType.Group : ThreadType.User);
     return { method: 'forwardMessage', result };
   }
+
+  async getUnreadMark() {
+    if (!this.state.session) await this._loginWithStoredCredential?.();
+    const api = this.state.session?.api;
+    if (typeof api?.getUnreadMark !== 'function') throw new Error('Session khong ho tro getUnreadMark');
+    const result = await api.getUnreadMark();
+    return {
+      direct: (result.data?.convsUser ?? []).map((item: { id: number; cliMsgId: number; fromUid: number; ts: number }) => ({
+        threadId: String(item.id),
+        count: 1,
+      })),
+      group: (result.data?.convsGroup ?? []).map((item: { id: number; cliMsgId: number; fromUid: number; ts: number }) => ({
+        threadId: String(item.id),
+        count: 1,
+      })),
+    };
+  }
+
+  async markConversationRead(threadId: string, isGroup: boolean) {
+    if (!this.state.session) await this._loginWithStoredCredential?.();
+    const api = this.state.session?.api;
+    if (typeof api?.removeUnreadMark !== 'function') return;
+    try {
+      await api.removeUnreadMark(threadId, isGroup ? ThreadType.Group : ThreadType.User);
+    } catch {
+      // non-blocking
+    }
+  }
 }

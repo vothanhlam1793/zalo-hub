@@ -28,7 +28,7 @@ export function useConversationManager() {
     const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
     mergeMessagesIntoConversation(accountId, conversationId, r.messages, 'replace');
     if (stillActive) {
-      setHasMoreHistory(Boolean(r.hasMore && r.messages.length >= 40));
+      setHasMoreHistory(Boolean(r.hasMore));
     }
     if (stillActive) {
       requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
@@ -122,7 +122,26 @@ export function useConversationManager() {
         if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
         if (r) {
           setMessages(r.messages);
-          setHasMoreHistory(true);
+          const hasMore = Boolean(r.hasMore);
+          setHasMoreHistory(hasMore);
+
+          // Nếu ít tin trong DB (< 10) và Zalo còn lịch sử → auto sync ngay, không cần scroll
+          if (hasMore && r.messages.length < 10) {
+            setStatusMsg('Đang tải lịch sử...');
+            try {
+              const syncResult = await syncConversationHistory(accountId, conversationId, r.messages[0]?.providerMessageId);
+              if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
+              if (syncResult.insertedCount > 0) {
+                const next = await refreshConversationMessages(accountId, conversationId);
+                if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
+                if (next) setMessages(next.messages);
+                setHasMoreHistory(Boolean(syncResult.hasMore || (next?.messages.length ?? 0) >= 40));
+              }
+              setStatusMsg('');
+            } catch {
+              setStatusMsg('');
+            }
+          }
         }
       } catch (error) {
         if (token === selectionTokenRef.current) {

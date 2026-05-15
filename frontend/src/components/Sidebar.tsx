@@ -166,12 +166,14 @@ export function Sidebar({
               ? getContactDisplayName(resolvedContact)
               : resolvedGroup?.displayName ?? entry.title;
             const resolvedAvatar = resolvedContact?.avatar ?? resolvedGroup?.avatar ?? entry.avatar;
+            const isActive = activeConversationId === entry.id;
+            const showUnread = !isActive && (entry.unreadCount ?? 0) > 0;
 
             return (
               <div
                 key={entry.id}
                 onClick={() => onSelectConversation(entry.id)}
-                className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${activeConversationId === entry.id ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+                className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${isActive ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
               >
                 <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
                   {resolvedAvatar ? <img src={resolvedAvatar} alt={resolvedTitle} className="w-full h-full object-cover rounded-full" /> : null}
@@ -180,7 +182,14 @@ export function Sidebar({
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-[#eee] truncate">{resolvedTitle}{entry.type === 'group' ? ' (Nhóm)' : ''}</div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm truncate ${showUnread ? 'font-bold text-white' : 'font-semibold text-[#eee]'}`}>{resolvedTitle}{entry.type === 'group' ? ' (Nhóm)' : ''}</span>
+                    {showUnread && (
+                      <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-[#4f7aff] rounded-full leading-none">
+                        {entry.unreadCount > 99 ? '99+' : entry.unreadCount}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-[#666] mt-0.5 truncate">
                     {entry.lastDirection === 'outgoing' ? 'Bạn: ' : ''}
                     {entry.lastMessageKind !== 'text' ? `[${entry.lastMessageKind}] ` : ''}

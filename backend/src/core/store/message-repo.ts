@@ -109,7 +109,7 @@ export class GoldMessageRepo {
     const canonicalType = await this.resolveCanonicalConversationType(resolvedAccountId, threadId, type);
     const canonicalConversationId = `${canonicalType}:${threadId}`;
     const directLegacyKey = canonicalType === 'direct' ? threadId : null;
-    const limit = Math.max(1, Math.min(options.limit ?? 40, 200));
+    const limit = Math.max(1, Math.min(options.limit ?? 10000, 100000));
     const before = options.before?.trim();
 
     const query = before
@@ -259,8 +259,9 @@ export class GoldMessageRepo {
     conversationId: string,
     messages: GoldConversationMessage[],
     upsertConversation: (accountId: string, conversationId: string, messages: GoldConversationMessage[], trx?: Knex.Transaction) => Promise<void>,
+    options?: { purge?: boolean },
   ): Promise<GoldConversationMessage[]> {
-    return this.replaceConversationMessagesByAccount(activeAccountId, conversationId, messages, upsertConversation);
+    return this.replaceConversationMessagesByAccount(activeAccountId, conversationId, messages, upsertConversation, options);
   }
 
   async replaceConversationMessagesByAccount(
@@ -268,6 +269,7 @@ export class GoldMessageRepo {
     conversationId: string,
     messages: GoldConversationMessage[],
     upsertConversation: (accountId: string, conversationId: string, messages: GoldConversationMessage[], trx?: Knex.Transaction) => Promise<void>,
+    options?: { purge?: boolean },
   ): Promise<GoldConversationMessage[]> {
     const resolvedAccountId = this.requireAccountId(accountId);
     const parsedConversation = parseConversationId(conversationId);
@@ -285,6 +287,18 @@ export class GoldMessageRepo {
 
     const dedupedMessages = deduplicateMessagesByPreferredPayload(sortedMessages);
 
+    const shouldPurge = options?.purge === true;
+    if (!shouldPurge) {
+      const dbCount = await this.knex.raw(`
+        SELECT COUNT(*)::int AS cnt FROM messages
+        WHERE account_id = ? AND conversation_id = ?`,
+        [resolvedAccountId, canonicalConversationId],
+      ).then((r: any) => Number(r.rows?.[0]?.cnt ?? 0));
+      if (dbCount > 0 && dedupedMessages.length < dbCount && dedupedMessages.length <= 10) {
+        console.warn(`[zalohub] replace_conversation_messages_skip_purge conv=${canonicalConversationId} db=${dbCount} incoming=${dedupedMessages.length}`);
+        return this.listConversationMessagesByAccount(resolvedAccountId, canonicalConversationId);
+      }
+    }
     await this.knex.transaction(async (trx) => {
       await trx.raw(`
         DELETE FROM messages
