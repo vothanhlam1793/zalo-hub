@@ -11,5 +11,13 @@ data/media/
 data/uploads/
 logs/
 
+# Docker volumes
+backend/docker-data/
+
 # OS files
 .DS_Store
+
+# Env
+.env
+backend/.env
+.deploy-state
