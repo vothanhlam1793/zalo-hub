@@ -23,8 +23,7 @@ export function useAccountManager() {
     options: { refresh?: boolean } = {},
     setContacts: (c: Contact[]) => void,
     setGroups: (g: Group[]) => void,
-    setConversations: (c: ConversationSummary[]) => void,
-    setConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void,
+    replaceAccountConversations: (accountId: string, c: ConversationSummary[]) => void,
     setLoadError: (e: string) => void,
   ) => {
     if (!accountId) return;
@@ -38,8 +37,7 @@ export function useAccountManager() {
       ]);
       setContacts(ct.contacts);
       setGroups(gp.groups);
-      setConversations(cv.conversations);
-      setConversationsForAccount(accountId, cv.conversations);
+      replaceAccountConversations(accountId, cv.conversations);
       setLoadError('');
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Không tải được dữ liệu');
@@ -48,12 +46,7 @@ export function useAccountManager() {
 
   const handleLogout = useCallback(async (
     setStatus: (s: SessionStatus | null) => void,
-    setConversations: (c: ConversationSummary[]) => void,
-    setConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void,
-    setContacts: (c: Contact[]) => void,
-    setGroups: (g: Group[]) => void,
-    setActiveConversationId: (id: string) => void,
-    setMessages: (m: any[]) => void,
+    resetAll: () => void,
     clearComposer: () => void,
     clearCache: () => void,
     setLoadError: (e: string) => void,
@@ -66,11 +59,7 @@ export function useAccountManager() {
   ) => {
     await api.logout().catch(() => {});
     setStatus(null);
-    setConversations([]);
-    setContacts([]);
-    setGroups([]);
-    setActiveConversationId('');
-    setMessages([]);
+    resetAll();
     clearComposer();
     activeConversationIdRef.current = '';
     selectionTokenRef.current += 1;
@@ -93,20 +82,16 @@ export function useAccountManager() {
     setLoadError: (e: string) => void,
     setActiveConversationId: (id: string) => void,
     setMessages: (m: any[]) => void,
-    setConversations: (c: ConversationSummary[]) => void,
-    setConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void,
-    setContacts: (c: Contact[]) => void,
-    setGroups: (g: Group[]) => void,
+    clearActivePane: () => void,
     clearComposer: () => void,
     clearCache: () => void,
     unsubscribe: () => void,
     setKnownAccounts: (a: AccountSummary[]) => void,
-    loadData: (accountId: string, status: SessionStatus | null | undefined, options?: { refresh?: boolean }) => void,
+    loadData: (accountId: string, status: SessionStatus | null | undefined, options?: { refresh?: boolean }) => Promise<void>,
     activeConversationIdRef: React.MutableRefObject<string>,
     selectionTokenRef: React.MutableRefObject<number>,
   ) => {
-    const prevSelected = setSelectedAccountId;
-    prevSelected(accountId);
+    setSelectedAccountId(accountId);
     setStatusMsg('Đang chuyển tài khoản...');
     setLoadError('');
     selectionTokenRef.current += 1;
@@ -114,9 +99,7 @@ export function useAccountManager() {
     setActiveConversationId('');
     setMessages([]);
     clearComposer();
-    setConversations([]);
-    setContacts([]);
-    setGroups([]);
+    clearActivePane();
     clearCache();
     unsubscribe();
 
@@ -125,7 +108,7 @@ export function useAccountManager() {
       setStatus(result.status);
       const accountsResult = await api.accounts();
       setKnownAccounts(accountsResult.accounts.map(toAccountSummary));
-      prevSelected(accountsResult.activeAccountId ?? accountId);
+      setSelectedAccountId(accountsResult.activeAccountId ?? accountId);
 
       if (result.status?.sessionActive) {
         await loadData(accountId, result.status, { refresh: true });
@@ -138,7 +121,7 @@ export function useAccountManager() {
       setStatusMsg('');
       api.status().then((s) => {
         setStatus(s);
-        prevSelected(s?.account?.userId ?? accountId);
+        setSelectedAccountId(s?.account?.userId ?? accountId);
       }).catch(() => {});
       api.accounts().then((result) => {
         setKnownAccounts(result.accounts.map(toAccountSummary));

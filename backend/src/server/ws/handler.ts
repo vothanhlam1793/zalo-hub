@@ -43,23 +43,6 @@ export function createWsHandler(
     void (async () => {
       broadcastConversationMessage(accountId, message);
 
-      if (message.direction === 'incoming') {
-        const isBeingViewed = Array.from(wsSubscriptions.values()).some(
-          (s) => s.accountId === accountId && s.conversationId === message.conversationId,
-        );
-        if (!isBeingViewed) {
-          try {
-            await knex.raw(
-              `UPDATE conversations SET unread_count = unread_count + 1, updated_at = NOW()
-               WHERE account_id = ? AND id = ?`,
-              [accountId, message.conversationId],
-            );
-          } catch {
-            // non-blocking
-          }
-        }
-      }
-
       const accountRuntime = accountManager.getRuntime(accountId);
       if (!accountRuntime) return;
       broadcast({ type: 'conversation_summaries', accountId, conversations: await accountRuntime.getConversationSummaries() });

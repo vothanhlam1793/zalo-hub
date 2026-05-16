@@ -41,10 +41,12 @@ async function main() {
     last_message_text TEXT NOT NULL DEFAULT '', last_message_kind TEXT NOT NULL DEFAULT 'text',
     last_direction TEXT NOT NULL DEFAULT 'incoming', last_message_timestamp TEXT NOT NULL DEFAULT '',
     message_count INTEGER NOT NULL DEFAULT 0, unread_count INTEGER NOT NULL DEFAULT 0,
+    last_read_at TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(account_id, friend_id)
   )`);
   await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS unread_count INTEGER NOT NULL DEFAULT 0`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at TEXT NULL`);
   console.log("OK conversations");
 
   await knex.raw(`CREATE TABLE IF NOT EXISTS messages (
@@ -61,6 +63,7 @@ async function main() {
   await knex.raw("CREATE INDEX IF NOT EXISTS idx_messages_account_time ON messages(account_id, timestamp)");
   await knex.raw("CREATE INDEX IF NOT EXISTS idx_messages_provider_id ON messages(provider_message_id)");
   await knex.raw("CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(account_id, conversation_id)");
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_messages_account_conversation_direction_time ON messages(account_id, conversation_id, direction, timestamp)");
   await knex.raw("CREATE INDEX IF NOT EXISTS idx_messages_raw_json_gin ON messages USING GIN (raw_message_json)");
   console.log("OK messages");
 

@@ -14,7 +14,7 @@ export function useComposer() {
     setSending: (v: boolean) => void,
     setStatusMsg: (m: string) => void,
     setLoadError: (e: string) => void,
-    setConversations: (c: ConversationSummary[] | ((prev: ConversationSummary[]) => ConversationSummary[])) => void,
+    replaceAccountConversations: (accountId: string, c: ConversationSummary[]) => void,
     setMessages: (m: Message[]) => void,
     mergeMessagesIntoConversation: (accountId: string, conversationId: string, incoming: Message[], mode?: 'append' | 'replace') => { next: Message[] },
     fileInputRef: React.MutableRefObject<HTMLInputElement | null>,
@@ -40,7 +40,7 @@ export function useComposer() {
       const { next } = mergeMessagesIntoConversation(accountId, activeConversationId, r.messages, 'replace');
       setMessages(next);
       const cv = await api.accountConversations(accountId);
-      setConversations(cv.conversations);
+      replaceAccountConversations(accountId, cv.conversations);
       setStatusMsg('Đã gửi.');
       setLoadError('');
     } catch (err) {

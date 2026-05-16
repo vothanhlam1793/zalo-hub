@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import type { Contact, ConversationSummary, Group, Message } from '../types';
 
 interface ChatState {
-  conversations: ConversationSummary[];
   conversationsByAccount: Record<string, ConversationSummary[]>;
+  pendingReadAtByConversation: Record<string, string>;
   contacts: Contact[];
   groups: Group[];
   activeConversationId: string;
@@ -12,8 +12,14 @@ interface ChatState {
   loadingOlder: boolean;
   syncingHistory: boolean;
 
-  setConversations: (c: ConversationSummary[]) => void;
-  setConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void;
+  replaceAccountConversations: (accountId: string, c: ConversationSummary[]) => void;
+  setSidebarConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void;
+  markConversationReadLocal: (accountId: string, conversationId: string, readAt?: string) => void;
+  clearPendingReadAt: (accountId: string, conversationId: string, persistedReadAt?: string) => void;
+  prependConversation: (entry: ConversationSummary) => void;
+  updateConversationFromWs: (accountId: string, message: { conversationId: string; text: string; kind: string; timestamp: string; direction: string }) => void;
+
+  getAccountConversations: (accountId: string) => ConversationSummary[];
   setContacts: (c: Contact[]) => void;
   setGroups: (g: Group[]) => void;
   setActiveConversationId: (id: string) => void;
@@ -21,15 +27,13 @@ interface ChatState {
   setHasMoreHistory: (v: boolean) => void;
   setLoadingOlder: (v: boolean) => void;
   setSyncingHistory: (v: boolean) => void;
-
-  updateConversationFromWs: (message: { conversationId: string; text: string; kind: string; timestamp: string; direction: string }) => void;
-  prependConversation: (entry: ConversationSummary) => void;
-  resetChat: () => void;
+  clearActivePane: () => void;
+  resetAll: () => void;
 }
 
-export const useChatStore = create<ChatState>((set) => ({
-  conversations: [],
+export const useChatStore = create<ChatState>((set, get) => ({
   conversationsByAccount: {},
+  pendingReadAtByConversation: {},
   contacts: [],
   groups: [],
   activeConversationId: '',
@@ -38,14 +42,92 @@ export const useChatStore = create<ChatState>((set) => ({
   loadingOlder: false,
   syncingHistory: false,
 
-  setConversations: (c) => set({ conversations: c }),
-  setConversationsForAccount: (accountId, c) => set((state) => ({
-    conversations: state.conversations.length > 0 && state.conversations[0]?.accountId === accountId ? c : state.conversations,
-    conversationsByAccount: {
-      ...state.conversationsByAccount,
-      [accountId]: c,
-    },
-  })),
+  replaceAccountConversations: (accountId, c) => set((state) => {
+    const nextPending = { ...state.pendingReadAtByConversation };
+    const merged = c.map((entry) => {
+      const pendingKey = `${accountId}::${entry.id}`;
+      const pendingReadAt = nextPending[pendingKey];
+      const backendReadAt = entry.lastReadAt ?? new Date(0).toISOString();
+      if (!pendingReadAt) {
+        return { ...entry, lastReadAt: backendReadAt };
+      }
+      if (Date.parse(backendReadAt) >= Date.parse(pendingReadAt)) {
+        delete nextPending[pendingKey];
+        return { ...entry, lastReadAt: backendReadAt };
+      }
+      return { ...entry, unreadCount: 0, lastReadAt: pendingReadAt };
+    });
+    return {
+      pendingReadAtByConversation: nextPending,
+      conversationsByAccount: {
+        ...state.conversationsByAccount,
+        [accountId]: merged,
+      },
+    };
+  }),
+
+  setSidebarConversationsForAccount: (accountId, c) => get().replaceAccountConversations(accountId, c),
+
+  markConversationReadLocal: (accountId, conversationId, readAt) => {
+    const resolvedReadAt = readAt ?? new Date().toISOString();
+    const key = `${accountId}::${conversationId}`;
+    set((state) => ({
+      pendingReadAtByConversation: {
+        ...state.pendingReadAtByConversation,
+        [key]: resolvedReadAt,
+      },
+      conversationsByAccount: {
+        ...state.conversationsByAccount,
+        [accountId]: (state.conversationsByAccount[accountId] ?? []).map((entry) =>
+          entry.id === conversationId ? { ...entry, unreadCount: 0, lastReadAt: resolvedReadAt } : entry,
+        ),
+      },
+    }));
+  },
+
+  clearPendingReadAt: (accountId, conversationId, persistedReadAt) => set((state) => {
+    const key = `${accountId}::${conversationId}`;
+    const pendingReadAt = state.pendingReadAtByConversation[key];
+    if (!pendingReadAt) return state;
+    if (persistedReadAt && Date.parse(persistedReadAt) < Date.parse(pendingReadAt)) return state;
+    const nextPending = { ...state.pendingReadAtByConversation };
+    delete nextPending[key];
+    return { pendingReadAtByConversation: nextPending };
+  }),
+
+  prependConversation: (entry) => set((state) => {
+    const accountEntries = state.conversationsByAccount[entry.accountId] ?? [];
+    if (accountEntries.find((e) => e.id === entry.id)) return state;
+    return {
+      conversationsByAccount: {
+        ...state.conversationsByAccount,
+        [entry.accountId]: [entry, ...accountEntries],
+      },
+    };
+  }),
+
+  updateConversationFromWs: (accountId, msg) => set((state) => {
+    const current = state.conversationsByAccount[accountId] ?? [];
+    const idx = current.findIndex((e) => e.id === msg.conversationId);
+    if (idx < 0) return state;
+    const next = [...current];
+    next[idx] = {
+      ...next[idx],
+      lastMessageText: msg.text,
+      lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
+      lastMessageTimestamp: msg.timestamp,
+      lastDirection: msg.direction as 'incoming' | 'outgoing',
+    };
+    next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
+    return {
+      conversationsByAccount: {
+        ...state.conversationsByAccount,
+        [accountId]: next,
+      },
+    };
+  }),
+
+  getAccountConversations: (accountId) => get().conversationsByAccount[accountId] ?? [],
   setContacts: (c) => set({ contacts: c }),
   setGroups: (g) => set({ groups: g }),
   setActiveConversationId: (id) => set({ activeConversationId: id }),
@@ -54,48 +136,20 @@ export const useChatStore = create<ChatState>((set) => ({
   setLoadingOlder: (v) => set({ loadingOlder: v }),
   setSyncingHistory: (v) => set({ syncingHistory: v }),
 
-  updateConversationFromWs: (msg) => set((state) => {
-    const currentAccountId = state.conversations.find((entry) => entry.id === msg.conversationId)?.accountId
-      ?? Object.entries(state.conversationsByAccount).find(([, entries]) => entries.some((entry) => entry.id === msg.conversationId))?.[0]
-      ?? '';
-    if (!currentAccountId) return state;
-    const nextByAccount = [...(state.conversationsByAccount[currentAccountId] ?? [])];
-    const idx = nextByAccount.findIndex((e) => e.id === msg.conversationId);
-    if (idx >= 0) {
-      nextByAccount[idx] = {
-        ...nextByAccount[idx],
-        lastMessageText: msg.text,
-        lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
-        lastMessageTimestamp: msg.timestamp,
-        lastDirection: msg.direction as 'incoming' | 'outgoing',
-      };
-    }
-    nextByAccount.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
-    const currentVisibleAccountId = state.conversations[0]?.accountId ?? '';
-    return {
-      conversations: currentVisibleAccountId === currentAccountId ? nextByAccount : state.conversations,
-      conversationsByAccount: {
-        ...state.conversationsByAccount,
-        [currentAccountId]: nextByAccount,
-      },
-    };
+  clearActivePane: () => set({
+    pendingReadAtByConversation: {},
+    contacts: [],
+    groups: [],
+    activeConversationId: '',
+    messages: [],
+    hasMoreHistory: false,
+    loadingOlder: false,
+    syncingHistory: false,
   }),
 
-  prependConversation: (entry) => set((state) => {
-    if (state.conversations.find((e) => e.id === entry.id)) return state;
-    const accountEntries = state.conversationsByAccount[entry.accountId] ?? [];
-    return {
-      conversations: [entry, ...state.conversations],
-      conversationsByAccount: {
-        ...state.conversationsByAccount,
-        [entry.accountId]: [entry, ...accountEntries],
-      },
-    };
-  }),
-
-  resetChat: () => set({
-    conversations: [],
+  resetAll: () => set({
     conversationsByAccount: {},
+    pendingReadAtByConversation: {},
     contacts: [],
     groups: [],
     activeConversationId: '',

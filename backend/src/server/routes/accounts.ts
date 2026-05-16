@@ -457,26 +457,47 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/:conversationId/mark-read', (req, res) => {
+  router.post('/:accountId/conversations/:conversationId/read-state', (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
       try {
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        const target = targetRuntime.resolveConversationTarget(conversationId);
-        await targetRuntime.markConversationRead(target.threadId, target.type === 'group');
+        const requestedReadAt = typeof req.body?.readAt === 'string' ? req.body.readAt.trim() : '';
+        const readAt = requestedReadAt && Number.isFinite(Date.parse(requestedReadAt))
+          ? new Date(requestedReadAt).toISOString()
+          : new Date().toISOString();
+        logger.info('read_state_update_request', { accountId, conversationId, requestedReadAt, readAt });
+        const updateResult = await knex.raw(
+          `UPDATE conversations SET last_read_at = ?, updated_at = NOW()
+           WHERE account_id = ? AND id = ?`,
+          [readAt, accountId, conversationId],
+        );
 
         await knex.raw(
-          `UPDATE conversations SET unread_count = 0, updated_at = NOW()
-           WHERE account_id = ? AND id = ?`,
-          [accountId, conversationId],
+          `UPDATE conversations
+           SET last_read_at = ?
+           WHERE account_id = ? AND last_read_at IS NULL`,
+          [new Date(0).toISOString(), accountId],
         );
+
+        logger.info('read_state_update_persisted', {
+          accountId,
+          conversationId,
+          readAt,
+          rowCount: typeof updateResult?.rowCount === 'number' ? updateResult.rowCount : undefined,
+        });
 
         broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
 
-        res.json({ ok: true });
+        res.json({ ok: true, readAt });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Mark read that bai' });
+        logger.error('read_state_update_failed', {
+          accountId,
+          conversationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat read state that bai' });
       }
     })();
   });

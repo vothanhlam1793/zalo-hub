@@ -132,7 +132,7 @@ export class GoldConversationRepo {
     }
 
     const rows = (await this.knex.raw(`
-      SELECT friend_id, display_name_snapshot, last_message_text, last_message_kind, last_direction, last_message_timestamp, message_count, unread_count
+      SELECT friend_id, display_name_snapshot, last_message_text, last_message_kind, last_direction, last_message_timestamp, message_count, last_read_at
            , id, thread_id, type, title, avatar
       FROM conversations
       WHERE account_id = ?
@@ -143,6 +143,17 @@ export class GoldConversationRepo {
     for (const row of rows) {
       const resolvedType = row.type ?? 'direct';
       const threadOrFriend = row.thread_id ?? row.friend_id;
+      const effectiveLastReadAt = row.last_read_at ?? new Date(0).toISOString();
+      const unreadRows = (await this.knex.raw(`
+        SELECT COUNT(*)::int AS cnt
+        FROM messages
+        WHERE account_id = ?
+          AND conversation_id = ?
+          AND direction = 'incoming'
+          AND timestamp > ?
+      `, [resolvedAccountId, row.id, effectiveLastReadAt])).rows as Array<{ cnt: number }>;
+      const derivedUnreadCount = Number(unreadRows[0]?.cnt ?? 0);
+
       summaries.push({
         id: `${resolvedType}:${threadOrFriend}`,
         accountId: resolvedAccountId,
@@ -163,7 +174,8 @@ export class GoldConversationRepo {
         lastMessageTimestamp: row.last_message_timestamp,
         lastDirection: row.last_direction,
         messageCount: row.message_count,
-        unreadCount: row.unread_count ?? 0,
+        unreadCount: derivedUnreadCount,
+        lastReadAt: effectiveLastReadAt,
       } satisfies GoldConversationSummary);
     }
     return summaries;

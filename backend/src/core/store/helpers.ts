@@ -43,7 +43,7 @@ export type RawConversationRow = {
   last_direction: 'incoming' | 'outgoing';
   last_message_timestamp: string;
   message_count: number;
-  unread_count: number;
+  last_read_at: string | null;
 };
 
 export type RawMessageRow = {

@@ -40,11 +40,12 @@ export function useConversationManager() {
     accountId: string,
     conversationId: string,
     beforeMessageId: string | undefined,
+    readAt: string | undefined,
     refreshConversationMessages: (accountId: string, conversationId: string) => Promise<any>,
     setSyncingHistory: (v: boolean) => void,
     setStatusMsg: (m: string) => void,
     setHasMoreHistory: (v: boolean) => void,
-    setConversations: (c: ConversationSummary[] | ((prev: ConversationSummary[]) => ConversationSummary[])) => void,
+    replaceAccountConversations: (accountId: string, c: ConversationSummary[]) => void,
     selectionTokenRef: React.MutableRefObject<number>,
     activeConversationIdRef: React.MutableRefObject<string>,
   ) => {
@@ -54,10 +55,13 @@ export function useConversationManager() {
     }
     try {
       const result = await api.accountSyncHistory(accountId, conversationId, { beforeMessageId, timeoutMs: 15000 });
+      if (readAt) {
+        await api.accountUpdateReadState(accountId, conversationId, readAt);
+      }
       await refreshConversationMessages(accountId, conversationId);
       const cv = await api.accountConversations(accountId);
       if (token === selectionTokenRef.current) {
-        setConversations(cv.conversations);
+        replaceAccountConversations(accountId, cv.conversations);
       }
       if (activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
         setStatusMsg(buildHistoryStatus(result));
@@ -84,7 +88,7 @@ export function useConversationManager() {
     setStatusMsg: (m: string) => void,
     loadData: (accountId: string, s?: SessionStatus | null, options?: { refresh?: boolean }) => void,
     refreshConversationMessages: (accountId: string, conversationId: string) => Promise<any>,
-    syncConversationHistory: (accountId: string, conversationId: string, beforeMessageId?: string) => Promise<HistorySyncResult>,
+    syncConversationHistory: (accountId: string, conversationId: string, beforeMessageId?: string, readAt?: string) => Promise<HistorySyncResult>,
     selectionTokenRef: React.MutableRefObject<number>,
     activeConversationIdRef: React.MutableRefObject<string>,
   ) => {
@@ -129,7 +133,7 @@ export function useConversationManager() {
           if (hasMore && r.messages.length < 10) {
             setStatusMsg('Đang tải lịch sử...');
             try {
-              const syncResult = await syncConversationHistory(accountId, conversationId, r.messages[0]?.providerMessageId);
+              const syncResult = await syncConversationHistory(accountId, conversationId, r.messages[0]?.providerMessageId, new Date().toISOString());
               if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
               if (syncResult.insertedCount > 0) {
                 const next = await refreshConversationMessages(accountId, conversationId);
@@ -161,7 +165,7 @@ export function useConversationManager() {
     setHasMoreHistory: (v: boolean) => void,
     setLoadError: (e: string) => void,
     prependMessages: (accountId: string, conversationId: string, incoming: Message[]) => { next: Message[] },
-    syncConversationHistory: (accountId: string, conversationId: string, beforeMessageId?: string) => Promise<HistorySyncResult>,
+    syncConversationHistory: (accountId: string, conversationId: string, beforeMessageId?: string, readAt?: string) => Promise<HistorySyncResult>,
     messagesAreaRef: React.MutableRefObject<HTMLDivElement | null>,
   ) => {
     if (!activeConversationId || loadingOlder || !hasMoreHistory || messages.length === 0) {
@@ -181,7 +185,7 @@ export function useConversationManager() {
       if (r.messages.length > 0) {
         prependMessages(accountId, activeConversationId, r.messages);
       } else {
-        const syncResult = await syncConversationHistory(accountId, activeConversationId, messages[0]?.providerMessageId);
+        const syncResult = await syncConversationHistory(accountId, activeConversationId, messages[0]?.providerMessageId, new Date().toISOString());
         if (syncResult.insertedCount > 0) {
           const next = await api.accountMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
           prependMessages(accountId, activeConversationId, next.messages);

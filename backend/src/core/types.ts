@@ -111,6 +111,7 @@ export interface GoldConversationSummary {
   lastDirection: 'incoming' | 'outgoing';
   messageCount: number;
   unreadCount: number;
+  lastReadAt?: string;
 }
 
 export interface GoldState {

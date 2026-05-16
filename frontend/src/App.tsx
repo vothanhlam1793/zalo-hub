@@ -105,14 +105,11 @@ function DashboardPage() {
     },
     onConversations: ({ accountId, conversations: nextConversations }: WsConversationSummariesPayload) => {
       if (!accountId) return;
-      chat.setConversationsForAccount(accountId, nextConversations);
-      if (accountId === resolveWorkspaceId()) {
-        chat.setConversations(nextConversations);
-      }
+      chat.replaceAccountConversations(accountId, nextConversations);
     },
     onMessage: ({ accountId, message }: WsConversationMessagePayload) => {
       if (accountId !== resolveWorkspaceId()) return;
-      chat.updateConversationFromWs(message);
+      chat.updateConversationFromWs(accountId, message);
       const { next } = messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
       if (activeConversationIdRef.current === message.conversationId) {
         chat.setMessages(next);
@@ -124,7 +121,7 @@ function DashboardPage() {
       else if (syncStatus === 'syncing') composer.setStatusMsg('Đang tự động đồng bộ lịch sử chat...');
       else if (syncStatus === 'done') {
         composer.setStatusMsg(`Tự động đồng bộ xong: ${requ18Received ?? 0} tin req_18 + ${historySynced ?? 0} cuộc trò chuyện (${historyMsgs ?? 0} tin)`);
-        loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
+        loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
       } else if (syncStatus === 'error') {
         composer.setLoadError('Tự động đồng bộ thất bại');
       }
@@ -167,17 +164,17 @@ function DashboardPage() {
     const accountId = resolveWorkspaceId();
     if (!status?.sessionActive || !accountId || accountId === loadedAccountRef.current) return;
     loadedAccountRef.current = accountId;
-    chat.resetChat();
-    void loadData(accountId, status, {}, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
+    chat.clearActivePane();
+    void loadData(accountId, status, {}, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
   }, [workspace.selectedAccountId, status?.sessionActive]);
 
   const onSelectAccount = useCallback((accountId: string) => {
     loadedAccountRef.current = '';
     const innerLoad = (aid: string, s?: SessionStatus | null, opts?: { refresh?: boolean }) =>
-      loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
+      loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
     void handleSelectAccount(
       accountId, workspace.setSelectedAccountId, setStatus, composer.setStatusMsg, composer.setLoadError,
-      chat.setActiveConversationId, chat.setMessages, chat.setConversations, chat.setConversationsForAccount, chat.setContacts, chat.setGroups,
+      chat.setActiveConversationId, chat.setMessages, chat.clearActivePane,
       clearComposer, messageCache.clearCache, unsubscribe, workspace.setKnownAccounts,
       innerLoad, activeConversationIdRef, selectionTokenRef,
     );
@@ -186,44 +183,56 @@ function DashboardPage() {
   const onSelectConversation = useCallback((conversationId: string) => {
     const accountId = resolveWorkspaceId();
     if (!accountId) { composer.setLoadError('Chưa có tài khoản workspace được chọn'); return; }
-    api.accountMarkRead(accountId, conversationId);
+    const readAt = new Date().toISOString();
+    chat.markConversationReadLocal(accountId, conversationId, readAt);
+    void api.accountUpdateReadState(accountId, conversationId, readAt)
+      .then((result) => {
+        if (result?.ok) {
+          chat.clearPendingReadAt(accountId, conversationId, result.readAt);
+        }
+      })
+      .catch((error) => {
+        composer.setLoadError(error instanceof Error ? error.message : 'Lưu trạng thái đã đọc thất bại');
+      });
     void selectConversation(
       conversationId, accountId, subscribe, messageCache.getCachedMessages,
       messageCache.mergeMessagesIntoConversation, chat.setMessages, chat.setActiveConversationId,
       chat.setHasMoreHistory, composer.setLoadError, composer.setStatusMsg,
-      (aid, s, opts) => loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError),
+      (aid, s, opts) => loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError),
       (aid, cid) => refreshConversationMessages(aid, cid, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
-      (aid, cid, bmid) => syncConversationHistory(aid, cid, bmid, (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef), chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.setConversations, selectionTokenRef, activeConversationIdRef),
+      (aid, cid, bmid, readAt) => syncConversationHistory(aid, cid, bmid, readAt, (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef), chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.replaceAccountConversations, selectionTokenRef, activeConversationIdRef),
       selectionTokenRef, activeConversationIdRef,
     );
   }, [resolveWorkspaceId, selectConversation, subscribe, messageCache, refreshConversationMessages, syncConversationHistory, loadData, chat, composer]);
 
   const onOpenDirectConversation = useCallback((contact: Contact) => {
+    const accountId = resolveWorkspaceId();
     const conversationId = directConversationId(contact.userId);
     const displayName = getContactDisplayName(contact);
-    const convs = chat.conversations;
+    const convs = chat.getAccountConversations(accountId);
     if (!convs.find((e) => e.id === conversationId)) {
-      chat.setConversations([{
-        id: conversationId, accountId: resolveWorkspaceId(), threadId: contact.userId, type: 'direct', title: displayName,
+      chat.replaceAccountConversations(accountId, [{
+        id: conversationId, accountId, threadId: contact.userId, type: 'direct', title: displayName,
         avatar: contact.avatar, lastMessageText: 'Nhấn để mở chat', lastMessageKind: 'text',
         lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0, unreadCount: 0,
       }, ...convs]);
     }
     void onSelectConversation(conversationId);
-  }, [chat.conversations, onSelectConversation]);
+  }, [chat, resolveWorkspaceId, onSelectConversation]);
 
   const onOpenGroupConversation = useCallback((group: Group) => {
+    const accountId = resolveWorkspaceId();
     const conversationId = groupConversationId(group.groupId);
-    const convs = chat.conversations;
+    const convs = chat.getAccountConversations(accountId);
     if (!convs.find((e) => e.id === conversationId)) {
-      chat.setConversations([{
-        id: conversationId, accountId: resolveWorkspaceId(), threadId: group.groupId, type: 'group', title: group.displayName,
+      chat.replaceAccountConversations(accountId, [{
+        id: conversationId, accountId, threadId: group.groupId, type: 'group', title: group.displayName,
         avatar: group.avatar, lastMessageText: 'Nhấn để mở nhóm chat', lastMessageKind: 'text',
         lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0, unreadCount: 0,
       }, ...convs]);
     }
     void onSelectConversation(conversationId);
-  }, [chat.conversations, onSelectConversation]);
+  }, [chat, resolveWorkspaceId, onSelectConversation]);
 
   const onLoadOlder = useCallback(() => {
     const accountId = resolveWorkspaceId();
@@ -236,9 +245,9 @@ function DashboardPage() {
         if (activeConversationIdRef.current === cid) chat.setMessages(next);
         return { next };
       },
-      (aid, cid, bmid) => syncConversationHistory(aid, cid, bmid,
+      (aid, cid, bmid, readAt) => syncConversationHistory(aid, cid, bmid, readAt,
         (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
-        chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.setConversations, selectionTokenRef, activeConversationIdRef),
+        chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.replaceAccountConversations, selectionTokenRef, activeConversationIdRef),
       { current: null } as never,
     );
   }, [resolveWorkspaceId, loadOlderMessages, chat.activeConversationId, chat.messages, chat.hasMoreHistory, chat.loadingOlder, messageCache, syncConversationHistory, refreshConversationMessages, chat, composer]);
@@ -255,9 +264,9 @@ function DashboardPage() {
     const conversationId = chat.activeConversationId;
     if (!accountId || !conversationId) return;
     void syncConversationHistory(
-      accountId, conversationId, undefined,
+      accountId, conversationId, undefined, new Date().toISOString(),
       (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
-      chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.setConversations, selectionTokenRef, activeConversationIdRef,
+      chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.replaceAccountConversations, selectionTokenRef, activeConversationIdRef,
     );
   }, [resolveWorkspaceId, chat.activeConversationId, syncConversationHistory, refreshConversationMessages, messageCache, chat, composer]);
 
@@ -265,7 +274,7 @@ function DashboardPage() {
     const accountId = resolveWorkspaceId();
     void handleSend(
       e, chat.activeConversationId, composer.text, composer.attachFile, accountId,
-      composer.setText, composer.setAttachFile, composer.setSending, composer.setStatusMsg, composer.setLoadError, chat.setConversations, chat.setMessages,
+      composer.setText, composer.setAttachFile, composer.setSending, composer.setStatusMsg, composer.setLoadError, chat.replaceAccountConversations, chat.setMessages,
       messageCache.mergeMessagesIntoConversation, fileInputRef,
     );
   }, [resolveWorkspaceId, handleSend, chat.activeConversationId, composer.text, composer.attachFile, messageCache, chat, composer]);
@@ -311,7 +320,7 @@ function DashboardPage() {
 
   const onRefresh = useCallback(() => {
     const id = resolveWorkspaceId();
-    if (id) loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
+    if (id) loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
   }, [resolveWorkspaceId, status, loadData, chat, composer]);
 
   const onRenameAccount = useCallback(async (nextDisplayName: string) => {
@@ -336,7 +345,7 @@ function DashboardPage() {
     api.accountMobileSync(accountId).then((result) => {
       const totalHistoryMsgs = (result.results ?? []).reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0);
       composer.setStatusMsg(`Mobile sync xong: ${result.requ18Received} tin req_18 + ${result.historySynced} cuộc trò chuyện (${totalHistoryMsgs} tin history). Đang làm mới...`);
-      return loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.setConversations, chat.setConversationsForAccount, composer.setLoadError);
+      return loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
     }).catch((err) => {
       composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ thất bại');
     }).finally(() => {
@@ -344,7 +353,8 @@ function DashboardPage() {
     });
   }, [resolveWorkspaceId, syncingAll, composer, chat, loadData, status]);
 
-  const activeConversation = useMemo(() => chat.conversations.find((e) => e.id === chat.activeConversationId), [chat.conversations, chat.activeConversationId]);
+  const visibleConversations = useMemo(() => chat.getAccountConversations(resolveWorkspaceId()), [chat, resolveWorkspaceId, workspace.selectedAccountId, chat.conversationsByAccount]);
+  const activeConversation = useMemo(() => visibleConversations.find((e) => e.id === chat.activeConversationId), [visibleConversations, chat.activeConversationId]);
   const activeName = activeConversation?.title ?? chat.activeConversationId;
   const isGroupConversation = activeConversation?.type === 'group';
   const currentAccountId = status?.account?.userId ?? '';
@@ -396,19 +406,19 @@ function DashboardPage() {
     void Promise.all(visibleAccountIds.map(async (accountId) => {
       try {
         const result = await api.accountConversations(accountId);
-        chat.setConversationsForAccount(accountId, result.conversations);
+        chat.setSidebarConversationsForAccount(accountId, result.conversations);
       } catch {
         // Ignore per-account sidebar unread preload failures.
       }
     }));
-  }, [sidebarAccounts, chat.setConversationsForAccount]);
+  }, [sidebarAccounts, chat.setSidebarConversationsForAccount]);
 
   const filteredConversations = useMemo(() => {
     const q = workspace.query.trim().toLowerCase();
-    const conversations = resolveConversationSummaries(chat.conversations);
+    const conversations = resolveConversationSummaries(visibleConversations);
     if (!q) return conversations;
     return conversations.filter((e) => e.title.toLowerCase().includes(q));
-  }, [chat.conversations, workspace.query, resolveConversationSummaries]);
+  }, [visibleConversations, workspace.query, resolveConversationSummaries]);
 
   const filteredContacts = useMemo(() => {
     const q = workspace.query.trim().toLowerCase();

@@ -84,6 +84,7 @@ export interface ConversationSummary {
   lastDirection: 'incoming' | 'outgoing';
   messageCount: number;
   unreadCount: number;
+  lastReadAt?: string;
 }
 
 export interface Contact {

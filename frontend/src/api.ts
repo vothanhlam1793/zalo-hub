@@ -174,11 +174,11 @@ export const api = {
       body: JSON.stringify({ messageId, cliMsgId, icon }),
     }),
 
-  accountMarkRead: (accountId: string, conversationId: string) =>
-    req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/mark-read`, {
+  accountUpdateReadState: (accountId: string, conversationId: string, readAt: string) =>
+    req<{ ok: boolean; readAt: string }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/read-state`, {
       method: 'POST',
-      body: '{}',
-    }).catch(() => {}),
+      body: JSON.stringify({ readAt }),
+    }),
 
   accountCreatePoll: (accountId: string, groupId: string, question: string, options: string[]) =>
     req(`/api/accounts/${encodeURIComponent(accountId)}/groups/${encodeURIComponent(groupId)}/poll`, {
