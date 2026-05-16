@@ -234,25 +234,12 @@ deploy_backend() {
   blue "[backend] Building backend"
   npm run build --prefix "$BACKEND_DIR"
 
-  blue "[backend] Restarting backend"
-  local pid
-  pid="$(ss -ltnp 2>/dev/null | awk '/:3399 / { if (match($0, /pid=([0-9]+)/, a)) { print a[1]; exit } }')"
-  if [[ -n "$pid" ]]; then
-    kill "$pid"
-    sleep 2
+  blue "[backend] Restarting backend via systemd"
+  if systemctl is-active --quiet zalohub.service; then
+    sudo systemctl restart zalohub.service
+  else
+    sudo systemctl start zalohub.service
   fi
-
-  nohup env \
-    NODE_ENV=production \
-    DATABASE_URL="postgresql://zalohub:zalohub@localhost:5433/zalohub" \
-    MINIO_ENDPOINT=localhost \
-    MINIO_PORT=9000 \
-    MINIO_ACCESS_KEY=zalohub \
-    MINIO_SECRET_KEY=zalohub-minio-secret \
-    MINIO_BUCKET=zalohub-media \
-    JWT_SECRET=zalohub-prod-jwt-secret-2026 \
-    node "$BACKEND_DIR/dist/server/index.js" \
-    > /tmp/zalohub-backend-prod.log 2>&1 & disown
 
   blue "[backend] Waiting for :3399"
   for _ in $(seq 1 20); do

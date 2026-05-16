@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { QrLoginDialog } from './QrLoginDialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -42,6 +43,8 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
   const [addOpen, setAddOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferEmail, setTransferEmail] = useState('');
+  const [qrOpen, setQrOpen] = useState(false);
+  const [reconnectId, setReconnectId] = useState<string | null>(null);
 
   const loadAccounts = async () => {
     try {
@@ -135,7 +138,12 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
 
   return (
     <div>
-      <h2 className="text-sm font-bold text-[#eee] mb-4">Tài khoản Zalo của tôi</h2>
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <h2 className="text-sm font-bold text-[#eee]">Tài khoản Zalo của tôi</h2>
+        <Button size="sm" className="text-[11px] h-8" onClick={() => setQrOpen(true)}>
+          + Thêm tài khoản (QR)
+        </Button>
+      </div>
 
       <div className="space-y-3">
         {visibleAccounts.map((acc) => (
@@ -146,6 +154,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
             members={members}
             onManage={handleManage}
             onToggleVisible={handleToggleVisible}
+            onReconnect={(id) => setReconnectId(id)}
             onDeselect={() => setSelectedAccount(null)}
             onAddMember={() => setAddOpen(true)}
             onTransferMaster={() => setTransferOpen(true)}
@@ -169,6 +178,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
                 members={members}
                 onManage={handleManage}
                 onToggleVisible={handleToggleVisible}
+                onReconnect={(id) => setReconnectId(id)}
                 onDeselect={() => setSelectedAccount(null)}
                 onAddMember={() => setAddOpen(true)}
                 onTransferMaster={() => setTransferOpen(true)}
@@ -239,13 +249,28 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <QrLoginDialog
+        open={qrOpen}
+        onOpenChange={setQrOpen}
+        onSuccess={() => { setQrOpen(false); loadAccounts(); }}
+      />
+
+      {reconnectId && (
+        <QrLoginDialog
+          open
+          accountId={reconnectId}
+          onOpenChange={() => setReconnectId(null)}
+          onSuccess={() => { setReconnectId(null); loadAccounts(); }}
+        />
+      )}
     </div>
   );
 }
 
 function AccountCard({
   acc, selectedAccount, members,
-  onManage, onToggleVisible, onDeselect,
+  onManage, onToggleVisible, onReconnect, onDeselect,
   onAddMember, onTransferMaster, onChangeRole, onRemoveMember,
 }: {
   acc: MyAccount;
@@ -253,6 +278,7 @@ function AccountCard({
   members: Array<{ userId: string; displayName: string; email: string; role: string }>;
   onManage: (a: MyAccount) => void;
   onToggleVisible: (a: MyAccount) => void;
+  onReconnect: (id: string) => void;
   onDeselect: () => void;
   onAddMember: () => void;
   onTransferMaster: () => void;
@@ -269,11 +295,16 @@ function AccountCard({
           {(acc.displayName || acc.accountId).charAt(0).toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <p className="text-sm font-medium text-[#eee] truncate">{acc.displayName || acc.accountId}</p>
             <Badge className={ROLE_COLORS[acc.role] || 'text-[10px]'}>{ROLE_LABELS[acc.role] || acc.role}</Badge>
             {!acc.hasSession && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(255,160,60,0.15)] text-[#ffa03c]">Mất kết nối</span>
+              <>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(255,160,60,0.15)] text-[#ffa03c]">Mất kết nối</span>
+                <Button variant="outline" size="sm" className="h-7 text-[11px] text-[#ffa03c] border-[rgba(255,160,60,0.3)]" onClick={() => onReconnect(acc.accountId)}>
+                  Đăng nhập lại
+                </Button>
+              </>
             )}
           </div>
           <p className="text-[11px] text-muted-foreground">{acc.phoneNumber || acc.accountId}</p>

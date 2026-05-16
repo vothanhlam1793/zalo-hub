@@ -116,7 +116,7 @@ export function createAdminRouter(
       );
 
       const result = await Promise.all(memberships.map(async (m: any) => {
-        const { rows } = await knex.raw('SELECT 1 FROM account_sessions WHERE account_id = ? AND is_active = 1', [m.account_id]);
+        const runtimeStatus = await accountManager?.getRuntimeStatus(m.account_id).catch(() => undefined);
         return {
           accountId: m.account_id,
           role: m.role,
@@ -124,7 +124,7 @@ export function createAdminRouter(
           displayName: m.hub_alias || m.display_name,
           phoneNumber: m.phone_number,
           avatar: m.avatar,
-          hasSession: rows.length > 0,
+          hasSession: Boolean(runtimeStatus?.sessionActive),
         };
       }));
 
@@ -250,17 +250,21 @@ export function createAdminRouter(
 
       try { accountManager?.stopRuntime(accountId); } catch {}
 
-      const runtime = await accountManager?.ensureRuntime(accountId);
-      if (!runtime) {
-        res.status(500).json({ error: 'Khong the khoi tao runtime' });
-        return;
-      }
+      // Create a fresh runtime directly — do NOT call ensureRuntime which
+      // would attempt loginWithStoredCredential (stale cookie) before QR.
+      const { GoldRuntime } = await import('../../core/runtime/index.js');
+      const { GoldStore } = await import('../../core/store/index.js');
+      const freshRuntime = new GoldRuntime(new GoldStore(knex), logger, { boundAccountId: accountId });
+      // Register in manager so the /reconnect/qr poll can find it
+      (accountManager as any)?.runtimes?.set(accountId, freshRuntime);
 
-      if (!runtime.isSessionActive()) {
-        runtime.loginByQr({ onQr: () => {} }).catch((err) => {
-          logger.error('reconnect_qr_failed', { accountId, error: err instanceof Error ? err.message : String(err) });
-        });
-      }
+      // Kick off QR login in background — do NOT await
+      freshRuntime.loginByQr({ onQr: () => {} }).catch((err) => {
+        logger.error('reconnect_qr_failed', { accountId, error: err instanceof Error ? err.message : String(err) });
+      });
+
+      // Give loginQR a moment to generate the QR before responding
+      await new Promise((r) => setTimeout(r, 2000));
 
       res.json({ started: true });
     } catch (err) {

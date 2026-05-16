@@ -36,6 +36,8 @@ export const api = {
 
   loginStart: () => req<{ started: boolean }>('/api/login/start', { method: 'POST', body: '{}' }),
   loginQr: () => req<{ qrCode: string | null; ready: boolean }>('/api/login/qr'),
+  reconnectStart: (accountId: string) => req<{ started: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/reconnect`, { method: 'POST', body: '{}' }),
+  reconnectQr: (accountId: string) => req<{ qrCode: string | null; ready: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/reconnect/qr`),
   logout: () => req('/api/logout', { method: 'POST', body: '{}' }),
   accounts: () => req<{ accounts: AccountStatusSummary[]; activeAccountId?: string }>('/api/accounts'),
   activateAccount: (accountId: string) => req<{ ok: boolean; accountId: string; status: SessionStatus }>('/api/accounts/activate', {
