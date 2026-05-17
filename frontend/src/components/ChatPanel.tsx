@@ -1,9 +1,10 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { formatSize, getInitial } from '../utils';
+import { formatSize, getInitial, isImageAttachment } from '../utils';
 import { MessageBubble } from './MessageBubble';
+import Lightbox, { type LightboxImage } from './Lightbox';
 import type { ConversationSummary, Message } from '../types';
 
 interface ChatPanelProps {
@@ -70,6 +71,43 @@ export function ChatPanel({
   const observerRef = useRef<ResizeObserver | null>(null);
   const observerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userScrolledUpRef = useRef(false);
+
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
+  const lightboxImages = useMemo<LightboxImage[]>(() => {
+    const result: LightboxImage[] = [];
+    for (const msg of messages) {
+      const att = msg.attachments?.[0];
+      const imgUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
+      if (imgUrl && isImageAttachment(msg, att?.fileName, att?.mimeType)) {
+        result.push({ url: imgUrl, senderName: msg.senderName });
+      }
+    }
+    return result;
+  }, [messages]);
+
+  const lightboxMsgIdToIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    let idx = 0;
+    for (const msg of messages) {
+      const att = msg.attachments?.[0];
+      const imgUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
+      if (imgUrl && isImageAttachment(msg, att?.fileName, att?.mimeType)) {
+        map.set(msg.id, idx);
+        idx += 1;
+      }
+    }
+    return map;
+  }, [messages]);
+
+  const openLightbox = useCallback((messageId: string) => {
+    const idx = lightboxMsgIdToIndex.get(messageId);
+    if (idx !== undefined) {
+      setLightboxIndex(idx);
+      setLightboxOpen(true);
+    }
+  }, [lightboxMsgIdToIndex]);
 
   useEffect(() => {
     const container = messagesAreaRef.current;
@@ -199,7 +237,7 @@ export function ChatPanel({
               )}
               <div className="flex flex-col gap-1.5">
                 {messages.map((m) => (
-                  <MessageBubble key={m.id} msg={m} isGroup={isGroupConversation} onReact={onReactMessage} />
+                  <MessageBubble key={m.id} msg={m} isGroup={isGroupConversation} onReact={onReactMessage} onOpenLightbox={openLightbox} />
                 ))}
               </div>
               <div ref={messagesEndRef} />
@@ -252,6 +290,14 @@ export function ChatPanel({
             />
           </form>
         </>
+      )}
+      {lightboxImages.length > 0 && (
+        <Lightbox
+          images={lightboxImages}
+          index={lightboxIndex}
+          open={lightboxOpen}
+          onClose={() => setLightboxOpen(false)}
+        />
       )}
     </div>
   );

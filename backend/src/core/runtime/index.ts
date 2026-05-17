@@ -437,6 +437,10 @@ export class GoldRuntime {
     return this.sync.getConversationMessages(conversationId, options);
   }
 
+  async resolveGroupSenderNames(conversationId: string, messages: GoldConversationMessage[]) {
+    return this.state.store.resolveGroupSenderNamesByAccount(this.state.boundAccountId, conversationId, messages);
+  }
+
   async getConversationSummaries() {
     return this.sync.getConversationSummaries();
   }

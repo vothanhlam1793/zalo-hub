@@ -300,4 +300,16 @@ export class GoldStore {
       replaceMessages,
     );
   }
+
+  async resolveGroupSenderNames(conversationId: string, messages: GoldConversationMessage[]): Promise<GoldConversationMessage[]> {
+    const accountId = this.accountRepo.resolveAccountId(undefined);
+    if (!accountId) return messages;
+    return this.conversationRepo.resolveGroupSenderNames(accountId, conversationId, messages);
+  }
+
+  async resolveGroupSenderNamesByAccount(accountId: string | undefined, conversationId: string, messages: GoldConversationMessage[]): Promise<GoldConversationMessage[]> {
+    const resolved = this.accountRepo.resolveAccountId(accountId);
+    if (!resolved) return messages;
+    return this.conversationRepo.resolveGroupSenderNames(resolved, conversationId, messages);
+  }
 }

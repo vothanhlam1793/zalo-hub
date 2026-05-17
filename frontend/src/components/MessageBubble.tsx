@@ -10,7 +10,7 @@ const REACTION_OPTIONS: MessageReactionOption[] = [
   { emoji: '😡', icon: ':-h' },
 ];
 
-export function MessageBubble({ msg, isGroup, onReact }: { msg: Message; isGroup: boolean; onReact?: (message: Message, reaction: MessageReactionOption) => void }) {
+export function MessageBubble({ msg, isGroup, onReact, onOpenLightbox }: { msg: Message; isGroup: boolean; onReact?: (message: Message, reaction: MessageReactionOption) => void; onOpenLightbox?: (messageId: string) => void }) {
   const dir = msg.direction;
   const att = msg.attachments?.[0];
   const imageUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
@@ -58,13 +58,14 @@ export function MessageBubble({ msg, isGroup, onReact }: { msg: Message; isGroup
   const showText = msg.text && msg.text !== '[image]' && msg.text !== '[file]' && msg.text !== '[video]' && !isSticker;
 
   if (isSticker) {
+    const stickerUrl = imageUrl || att?.url || '';
     return (
       <div className={`flex flex-col ${dir === 'outgoing' ? 'items-end' : 'items-start'}`}>
         <div className="group relative max-w-[160px]">
           {isGroup && dir === 'incoming' && msg.senderName && (
             <div className="text-xs text-[#667085] font-semibold mb-1">{msg.senderName}</div>
           )}
-          <img src={imageUrl || att?.url} alt="Sticker" className="w-full h-auto block" />
+          <img src={stickerUrl} alt="Sticker" className="w-full h-auto block" />
           <div className="text-[10px] text-[rgba(255,255,255,0.25)] mt-0.5 text-right">{formatTime(msg.timestamp)}</div>
           {reactionDock}
         </div>
@@ -126,7 +127,9 @@ export function MessageBubble({ msg, isGroup, onReact }: { msg: Message; isGroup
           </div>
         )}
         {shouldRenderImage ? (
-          <img src={imageUrl} alt={msg.text || 'Hình ảnh'} className="max-w-[240px] rounded-[10px] block" />
+          <button type="button" className="cursor-pointer block w-full text-left" onClick={() => onOpenLightbox?.(msg.id)} title="Xem ảnh lớn">
+            <img src={imageUrl} alt={msg.text || 'Hình ảnh'} className="max-w-[240px] rounded-[10px] block" />
+          </button>
         ) : shouldRenderVideo && att?.url ? (
           <div className="flex flex-col gap-2">
             <video className="max-w-[320px] w-full rounded-xl bg-black" controls preload="metadata">

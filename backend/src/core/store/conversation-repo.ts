@@ -371,40 +371,75 @@ export class GoldConversationRepo {
     }
 
     const messages = await listMessages(resolvedAccountId, conversationId);
+    const enriched = await this.resolveGroupSenderNames(resolvedAccountId, conversationId, messages);
+    await replaceMessages(resolvedAccountId, conversationId, enriched);
+    return enriched;
+  }
+
+  async resolveGroupSenderNames(
+    accountId: string,
+    conversationId: string,
+    messages: GoldConversationMessage[],
+  ): Promise<GoldConversationMessage[]> {
     const { type, threadId } = parseConversationId(conversationId);
     if (type !== 'group') {
       return messages;
     }
 
-    const groups = await listGroups(resolvedAccountId);
-    const group = groups.find((entry) => entry.groupId === threadId);
-    const contacts = await listContacts(resolvedAccountId);
-    const nextMessages = messages.map((message) => {
-      if (!message.senderId) {
-        return message;
-      }
+    const rows = (await this.knex.raw(`
+      SELECT group_id, members_json
+      FROM groups
+      WHERE account_id = ?
+    `, [accountId])).rows as Array<{ group_id: string; members_json: any }>;
 
-      const memberName = group?.members?.find((member) => member.userId === message.senderId)?.displayName;
-      const contact = contacts.find((entry) => entry.userId === message.senderId);
-      let payloadDisplayName: string | undefined;
+    const group = rows.find((g) => g.group_id === threadId);
+    const members: Array<{ userId: string; displayName?: string }> = [];
+    if (group?.members_json) {
+      const parsed = typeof group.members_json === 'string' ? JSON.parse(group.members_json) : group.members_json;
+      if (Array.isArray(parsed)) {
+        for (const member of parsed) {
+          if (member && typeof member === 'object') {
+            members.push({
+              userId: String(member.userId ?? member.uid ?? member.id ?? ''),
+              displayName: member.displayName ?? member.name ?? undefined,
+            });
+          }
+        }
+      }
+    }
+
+    const contacts = (await this.knex.raw(`
+      SELECT friend_id, display_name, zalo_name, zalo_alias, hub_alias
+      FROM friends
+      WHERE account_id = ?
+    `, [accountId])).rows as Array<{ friend_id: string; display_name: string; zalo_name: string; zalo_alias: string; hub_alias: string }>;
+
+    return messages.map((message) => {
+      if (!message.senderId) return message;
+
+      const memberName = members.find((m) => m.userId === message.senderId)?.displayName;
+      const contact = contacts.find((c) => c.friend_id === message.senderId);
+      let dName: string | undefined;
       if (message.rawMessageJson) {
         try {
           const raw = typeof message.rawMessageJson === 'string'
-            ? (message.rawMessageJson.trim() ? JSON.parse(message.rawMessageJson) as Record<string, unknown> : {})
-            : message.rawMessageJson as unknown as Record<string, unknown>;
-          payloadDisplayName = typeof raw.dName === 'string' && raw.dName.trim() ? raw.dName.trim() : undefined;
-        } catch {
-          // Ignore malformed payload.
-        }
+            ? (message.rawMessageJson.trim() ? JSON.parse(message.rawMessageJson) : {})
+            : message.rawMessageJson;
+          dName = typeof raw.dName === 'string' && raw.dName.trim() ? raw.dName.trim() : undefined;
+        } catch { /* ignore */ }
       }
 
-      const senderName = memberName ?? contact?.hubAlias ?? contact?.zaloAlias ?? contact?.zaloName ?? contact?.displayName ?? payloadDisplayName ?? message.senderName;
+      const senderName = memberName
+        ?? contact?.hub_alias
+        ?? contact?.zalo_alias
+        ?? contact?.zalo_name
+        ?? contact?.display_name
+        ?? dName
+        ?? message.senderName;
+
       return senderName && senderName !== message.senderName
         ? { ...message, senderName }
         : message;
     });
-
-    await replaceMessages(resolvedAccountId, conversationId, nextMessages);
-    return nextMessages;
   }
 }

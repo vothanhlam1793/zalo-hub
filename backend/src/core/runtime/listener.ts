@@ -190,7 +190,8 @@ export class GoldListener {
       isSelf: Boolean(message.isSelf),
       senderId: typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined,
       senderName: conversationType === 'group'
-        ? await this._resolveGroupSenderName?.(threadId, typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined)
+        ? (await this._resolveGroupSenderName?.(threadId, typeof data.uidFrom === 'string' || typeof data.uidFrom === 'number' ? String(data.uidFrom) : undefined))
+          ?? (typeof data.dName === 'string' && data.dName.trim() ? data.dName.trim() : undefined)
         : undefined,
       quote: normalizeMessageQuote(data),
       reactions: normalizeMessageReactions(data),

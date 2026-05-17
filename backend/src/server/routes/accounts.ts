@@ -199,7 +199,8 @@ export function createAccountsRouter(
           res.status(401).json({ error: 'Account chua active session' });
           return;
         }
-        const messages = await targetRuntime.getConversationMessages(conversationId, { since, before, limit });
+        const rawMessages = await targetRuntime.getConversationMessages(conversationId, { since, before, limit });
+        const messages = await targetRuntime.resolveGroupSenderNames(conversationId, rawMessages);
         const oldestTimestamp = messages[0]?.timestamp;
         const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
         res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
