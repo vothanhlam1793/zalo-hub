@@ -200,7 +200,7 @@ export class AccountRuntimeManager {
           && Boolean(listener.started)
           && Boolean(listener.lastEventAt)
           && (now - Date.parse(listener.lastEventAt as string)) > 60_000;
-        const shouldRestartListener = !listener.started || disconnectedTooLong;
+        const shouldRestartListener = (!listener.started && !listener.connected) || disconnectedTooLong;
         const shouldRelogin = !runtime.isSessionActive();
 
         if (!shouldRestartListener && !shouldRelogin) {

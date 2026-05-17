@@ -41,6 +41,7 @@ export class GoldListener {
     if (!this.state.listenerAttached) {
       listener.on('connected', () => {
         this.state.listenerState.connected = true;
+        this.state.listenerState.started = true;
         this.state.listenerState.lastEventAt = new Date().toISOString();
         this.state.listenerState.lastError = undefined;
         this.state.logger.info('message_listener_connected');
