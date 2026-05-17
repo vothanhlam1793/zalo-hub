@@ -42,7 +42,9 @@
 ║  │                                 │            │                           ║
 ║  │  handleReactionUpdate()         │            │                           ║
 ║  │  getConversationSummaries()     │            │                           ║
-║  │    + merge unread from Zalo     │            │                           ║
+║  │    → derive unread từ DB        │            │                           ║
+║  │      (incoming msg timestamp    │            │                           ║
+║  │       > last_read_at)           │            │                           ║
 ║  │  markConversationRead()         │            │                           ║
 ║  └─────────────────────────────────┘            │                           ║
 ║                                 │               │                           ║
@@ -67,7 +69,7 @@
 ║  │  GET  /api/status                    POST /api/accounts/:id/activate   │  ║
 ║  │  GET  /api/accounts                  POST /api/accounts/.../send       │  ║
 ║  │  GET  /api/accounts/.../conversations POST /api/accounts/.../reaction  │  ║
-║  │  GET  /api/accounts/.../messages     POST /api/accounts/.../mark-read  │  ║
+║  │  GET  /api/accounts/.../messages     POST /api/accounts/.../read-state │  ║
 ║  │  POST /api/accounts/.../sync-history POST /api/accounts/.../sync-all   │  ║
 ║  │  POST /api/conversations/sync-metadata                                 │  ║
 ║  │  GET  /media/*   ← stream từ MinIO                                    │  ║
@@ -77,9 +79,12 @@
 ║  │  Client subscribe(accountId, conversationId)                          │  ║
 ║  │  Server broadcast:                                                     │  ║
 ║  │    conversation_message  ← khi appendConversationMessage()             │  ║
-║  │    conversation_summaries ← sau mỗi message mới                        │  ║
+║  │    conversation_summaries ← sau mỗi message mới / sau mark-read        │  ║
 ║  │    session_state         ← khi trạng thái listener thay đổi            │  ║
 ║  │    ws_sync_status       ← tiến độ mobile sync (req_18)                 │  ║
+║  │                                                                        │  ║
+║  │  Unread guard: nếu tin incoming và CÓ client subscribe conversation   │  ║
+║  │  đó → KHÔNG tăng unread_count; nếu KHÔNG có → unread_count += 1       │  ║
 ║  └────────────────────────────────────────────────────────────────────────┘  ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -91,7 +96,8 @@
 ║                                                                              ║
 ║  ┌─ Stores (zustand) ────────────────────────────────────────────────────┐  ║
 ║  │  useWorkspaceStore  → selectedAccountId (localStorage)                │  ║
-║  │  useChatStore       → conversations, messages, contacts, groups       │  ║
+║  │  useChatStore       → conversationsByAccount, messages, contacts,     │  ║
+║  │  │                    groups, pendingReadAtByConversation              │  ║
 ║  │  useComposerStore   → text, attachFile, statusMsg, loadError          │  ║
 ║  │  useAuthStore       → user, token, login/logout                       │  ║
 ║  └────────────────────────────────────────────────────────────────────────┘  ║
@@ -107,8 +113,8 @@
 ║                                                                              ║
 ║  ┌─ Components ──────────────────────────────────────────────────────────┐  ║
 ║  │  App.tsx          → Router + WebSocket + onReactMessage                │  ║
-║  │  MiniSidebar      → Account switcher (avatar list)                    │  ║
-║  │  Sidebar          → Conversation list + unread badge                  │  ║
+║  │  MiniSidebar      → Account switcher + unread badge + status dots    │  ║
+║  │  Sidebar          → Conversation list + Contacts list + unread badge  │  ║
 ║  │  ChatPanel        → Message list + load older on scroll               │  ║
 ║  │  MessageBubble    → text, image, sticker, video, reaction             │  ║
 ║  │  ConversationDetailsPanel → metadata + sync history button            │  ║

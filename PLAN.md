@@ -147,6 +147,21 @@ Mục tiêu: System users + auth + phân quyền + Zalo rich features + admin UI
 - **Gold-9B**: 9 MessageKind (sticker, reaction, poll, voice, gif), backend sender methods + REST endpoints, typing indicator, history sync continuous loop, per-conversation + account-level sync buttons
 - **Gold-9C**: AdminPage v2 (users/Zalo accounts/phân quyền matrix), admin API, `requireSystemRole('admin')`, `requireAccountAccess(minRole?)`, auto-assign admin owner
 
+## Post Gold-9 — Done ✅
+
+Mục tiêu: Internal unread system + multi-account badge UI + listener stability
+
+Đã hoàn tất:
+
+- **Unread nội bộ Hub**: bỏ dependency Zalo `getUnreadMark()`, thay bằng `last_read_at` trong DB + derive unread từ `SELECT COUNT(*) WHERE timestamp > last_read_at`
+- **WS increment**: mỗi tin incoming và không có WS subscriber nào xem → `last_read_at` giữ nguyên → unread tăng
+- **Read-state API**: `POST /api/accounts/:id/conversations/:cid/read-state` lưu mốc đọc, broadcast summaries
+- **MiniSidebar badge**: tổng unread mỗi account + chấm trạng thái (xanh: active, vàng: có cred chưa active, xám: chưa login)
+- **Contacts badge**: unread per contact trong tab "Bạn bè"
+- **conversationsByAccount**: lưu list conversation riêng từng account để tính unread toàn cục
+- **Optimistic mark-read**: UI clear unread ngay khi click, sync với backend qua pendingReadAtByConversation
+- **Listener restart storm fix**: set `started=true` khi reconnect, watchdog skip restart nếu `connected=true`
+
 ## Gold-10 — Planned
 
 Mục tiêu: Shared inbox workflow cho team vận hành

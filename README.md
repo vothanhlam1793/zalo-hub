@@ -52,6 +52,15 @@ Xem [DEPLOY.md](./DEPLOY.md) để biết cách cài đặt, chạy development,
 - **Super admin** quản lý user hệ thống, không tự động là master của account nào
 - **Admin page** (`/admin`): thêm tài khoản QR, phân quyền, transfer master
 
+## Unread & Realtime
+
+- **Hệ unread nội bộ Hub**, không phụ thuộc Zalo API
+- Unread máy đếm: mỗi tin nhắn đến (incoming) và **không có client nào đang xem** → `unread_count += 1`
+- Mark-read: khi user mở conversation → `last_read_at = timestamp` → unread = số tin mới hơn mốc đó
+- **MiniSidebar**: hiển thị tổng unread mỗi account + chấm trạng thái (xanh: active, vàng: có credential chưa active, xám: chưa login)
+- **Sidebar**: badge unread ở tab `Cuộc trò chuyện` và tab `Bạn bè`
+- WebSocket broadcast realtime cập nhật badge đến mọi client
+
 ## Tech Stack
 
 | Layer      | Công nghệ                          |
