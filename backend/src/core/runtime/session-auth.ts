@@ -41,6 +41,9 @@ export class GoldSessionAuth {
       started: false,
       connected: false,
       startAttempts: 0,
+      closeCount: 0,
+      closeWindowStart: 0,
+      needsRelogin: false,
     };
     if (clearStoredSession) {
       await this.state.store.clearSessionForAccount(this.state.boundAccountId);

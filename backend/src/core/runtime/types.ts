@@ -48,6 +48,9 @@ export type ListenerState = {
   lastMessageAt?: string;
   lastError?: string;
   lastCloseCode?: string;
+  closeCount: number;
+  closeWindowStart: number;
+  needsRelogin: boolean;
 };
 
 export type ConversationListener = (message: GoldConversationMessage) => void;

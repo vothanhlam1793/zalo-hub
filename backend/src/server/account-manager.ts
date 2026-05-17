@@ -201,18 +201,20 @@ export class AccountRuntimeManager {
           && Boolean(listener.lastEventAt)
           && (now - Date.parse(listener.lastEventAt as string)) > 60_000;
         const shouldRestartListener = (!listener.started && !listener.connected) || disconnectedTooLong;
-        const shouldRelogin = !runtime.isSessionActive();
+        const shouldRelogin = !runtime.isSessionActive() || listener.needsRelogin === true;
 
         if (!shouldRestartListener && !shouldRelogin) {
           continue;
         }
 
         this.watchdogCooldownUntil.set(accountId, now + 120_000);
-        const reason = shouldRelogin
-          ? 'session_inactive'
-          : !listener.started
-            ? 'listener_not_started'
-            : 'listener_disconnected';
+        const reason = listener.needsRelogin
+          ? 'listener_needs_relogin'
+          : shouldRelogin
+            ? 'session_inactive'
+            : !listener.started
+              ? 'listener_not_started'
+              : 'listener_disconnected';
 
         try {
           if (shouldRelogin) {

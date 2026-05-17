@@ -76,6 +76,38 @@ export class GoldListener {
         this.state.listenerState.lastEventAt = new Date().toISOString();
         this.state.listenerState.lastCloseCode = String(code);
         this.state.logger.error('message_listener_closed', { code });
+
+        const now = Date.now();
+        if (now - this.state.listenerState.closeWindowStart > 600_000) {
+          this.state.listenerState.closeCount = 0;
+          this.state.listenerState.closeWindowStart = now;
+        }
+        this.state.listenerState.closeCount += 1;
+
+        if (this.state.listenerState.closeCount >= 5) {
+          this.state.listenerState.needsRelogin = true;
+          this.state.logger.error('message_listener_needs_relogin', {
+            closeCount: this.state.listenerState.closeCount,
+            closeWindowStart: new Date(this.state.listenerState.closeWindowStart).toISOString(),
+          });
+          return;
+        }
+
+        const retryDelay = Math.min(5000 * this.state.listenerState.closeCount, 30_000);
+        this.state.logger.info('message_listener_scheduling_retry', {
+          retryDelayMs: retryDelay,
+          closeCount: this.state.listenerState.closeCount,
+        });
+        setTimeout(() => {
+          if (this.state.listenerState.started || this.state.listenerState.connected) return;
+          try {
+            this.startMessageListener(listener);
+          } catch (error) {
+            this.state.logger.error('message_listener_retry_failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }, retryDelay);
       });
       this.state.listenerAttached = true;
       this.state.listenerState.attached = true;
@@ -311,6 +343,9 @@ export class GoldListener {
     this.state.listenerState.started = false;
     this.state.listenerState.connected = false;
     this.state.listenerState.lastEventAt = new Date().toISOString();
+    this.state.listenerState.closeCount = 0;
+    this.state.listenerState.closeWindowStart = 0;
+    this.state.listenerState.needsRelogin = false;
     this.startMessageListener(listener);
     return this.getListenerState();
   }

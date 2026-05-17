@@ -132,18 +132,20 @@ export class GoldConversationRepo {
     }
 
     const rows = (await this.knex.raw(`
-      SELECT friend_id, display_name_snapshot, last_message_text, last_message_kind, last_direction, last_message_timestamp, message_count, last_read_at
-           , id, thread_id, type, title, avatar
-      FROM conversations
-      WHERE account_id = ?
-      ORDER BY last_message_timestamp DESC, updated_at DESC
+      SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_timestamp, c.message_count
+           , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
+           , c.id, c.thread_id, c.type, c.title, c.avatar
+      FROM conversations c
+      LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+      WHERE c.account_id = ?
+      ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
     `, [resolvedAccountId])).rows as RawConversationRow[];
 
     const summaries: GoldConversationSummary[] = [];
     for (const row of rows) {
       const resolvedType = row.type ?? 'direct';
       const threadOrFriend = row.thread_id ?? row.friend_id;
-      const effectiveLastReadAt = row.last_read_at ?? new Date(0).toISOString();
+      const effectiveLastReadAt = row.last_read_at;
       const unreadRows = (await this.knex.raw(`
         SELECT COUNT(*)::int AS cnt
         FROM messages

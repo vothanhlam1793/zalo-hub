@@ -469,16 +469,12 @@ export function createAccountsRouter(
           : new Date().toISOString();
         logger.info('read_state_update_request', { accountId, conversationId, requestedReadAt, readAt });
         const updateResult = await knex.raw(
-          `UPDATE conversations SET last_read_at = ?, updated_at = NOW()
-           WHERE account_id = ? AND id = ?`,
-          [readAt, accountId, conversationId],
-        );
-
-        await knex.raw(
-          `UPDATE conversations
-           SET last_read_at = ?
-           WHERE account_id = ? AND last_read_at IS NULL`,
-          [new Date(0).toISOString(), accountId],
+          `INSERT INTO conversation_read_state (account_id, conversation_id, last_read_at, updated_at)
+           VALUES (?, ?, ?, NOW())
+           ON CONFLICT (account_id, conversation_id) DO UPDATE SET
+             last_read_at = EXCLUDED.last_read_at,
+             updated_at = NOW()`,
+          [accountId, conversationId, readAt],
         );
 
         logger.info('read_state_update_persisted', {
