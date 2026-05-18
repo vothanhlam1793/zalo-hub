@@ -68,6 +68,46 @@ export class GoldListener {
         this.state.listenerState.lastEventAt = new Date().toISOString();
         this.state.listenerState.lastError = error instanceof Error ? error.message : String(error);
         this.state.logger.error('message_listener_error', error);
+
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const isFatal = /cipher|key|token|unauthorized|expired|invalid.*data|SyntaxError|Expected.*JSON/i.test(errorMsg);
+        if (!isFatal) return;
+
+        this.state.listenerStarted = false;
+        this.state.listenerState.started = false;
+
+        const now = Date.now();
+        if (now - this.state.listenerState.closeWindowStart > 600_000) {
+          this.state.listenerState.closeCount = 0;
+          this.state.listenerState.closeWindowStart = now;
+        }
+        this.state.listenerState.closeCount += 1;
+
+        if (this.state.listenerState.closeCount >= 5) {
+          this.state.listenerState.needsRelogin = true;
+          this.state.logger.error('message_listener_needs_relogin_after_errors', {
+            closeCount: this.state.listenerState.closeCount,
+          });
+          return;
+        }
+
+        const retryDelay = Math.min(10_000 * this.state.listenerState.closeCount, 60_000);
+        this.state.logger.info('message_listener_scheduling_retry_after_error', {
+          retryDelayMs: retryDelay,
+          closeCount: this.state.listenerState.closeCount,
+          error: errorMsg.slice(0, 80),
+        });
+        const listenerRef = listener;
+        setTimeout(() => {
+          if (this.state.listenerState.started || this.state.listenerState.connected) return;
+          try {
+            this.startMessageListener(listenerRef);
+          } catch (retryError) {
+            this.state.logger.error('message_listener_retry_after_error_failed', {
+              error: retryError instanceof Error ? retryError.message : String(retryError),
+            });
+          }
+        }, retryDelay);
       });
       listener.on('closed', (code: unknown) => {
         this.state.listenerStarted = false;
