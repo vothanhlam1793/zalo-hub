@@ -1,0 +1,61 @@
+diff --git a/node_modules/zalo-api-final/dist/apis/listen.js b/node_modules/zalo-api-final/dist/apis/listen.js
+index 6f3143e..1c2a802 100644
+--- a/node_modules/zalo-api-final/dist/apis/listen.js
++++ b/node_modules/zalo-api-final/dist/apis/listen.js
+@@ -231,7 +231,7 @@ export class Listener extends EventEmitter {
+                             if (control.content.act == "join_reject")
+                                 continue;
+                             const groupEventData = typeof control.content.data == "string"
+-                                ? JSON.parse(control.content.data)
++                                ? (() => { try { return JSON.parse(control.content.data); } catch { return control.content.data; } })()
+                                 : control.content.data;
+                             const groupEvent = initializeGroupEvent(this.ctx.uid, groupEventData, getGroupEventType(control.content.act));
+                             if (groupEvent.isSelf && !this.selfListen)
+@@ -245,14 +245,14 @@ export class Listener extends EventEmitter {
+                             if (control.content.act == "req")
+                                 continue;
+                             const friendEventData = typeof control.content.data == "string"
+-                                ? JSON.parse(control.content.data)
++                                ? (() => { try { return JSON.parse(control.content.data); } catch { return control.content.data; } })()
+                                 : control.content.data;
+                             // Handles the case when act is "pin_create" and params is a string
+                             if (typeof friendEventData == "object" &&
+                                 "topic" in friendEventData &&
+                                 typeof friendEventData.topic == "object" &&
+                                 "params" in friendEventData.topic) {
+-                                friendEventData.topic.params = JSON.parse(`${friendEventData.topic.params}`);
++                                try { friendEventData.topic.params = JSON.parse(`${friendEventData.topic.params}`); } catch { /* ignore */ }
+                             }
+                             const friendEvent = initializeFriendEvent(this.ctx.uid, typeof friendEventData == "number" ? control.content.data : friendEventData, getFriendEventType(control.content.act));
+                             if (friendEvent.isSelf && !this.selfListen)
+@@ -265,14 +265,14 @@ export class Listener extends EventEmitter {
+                     const parsedData = (await decodeEventData(parsed, this.cipherKey)).data;
+                     const { reacts, reactGroups } = parsedData;
+                     for (const react of reacts) {
+-                        react.content = JSON.parse(react.content);
++                        try { react.content = JSON.parse(react.content); } catch { continue; }
+                         const reactionObject = new Reaction(this.ctx.uid, react, false);
+                         if (reactionObject.isSelf && !this.selfListen)
+                             continue;
+                         this.emit("reaction", reactionObject);
+                     }
+                     for (const reactGroup of reactGroups) {
+-                        reactGroup.content = JSON.parse(reactGroup.content);
++                        try { reactGroup.content = JSON.parse(reactGroup.content); } catch { continue; }
+                         const reactionObject = new Reaction(this.ctx.uid, reactGroup, true);
+                         if (reactionObject.isSelf && !this.selfListen)
+                             continue;
+@@ -302,7 +302,12 @@ export class Listener extends EventEmitter {
+                     const parsedData = (await decodeEventData(parsed, this.cipherKey)).data;
+                     const { actions } = parsedData;
+                     for (const action of actions) {
+-                        const data = JSON.parse(`{${action.data}}`);
++                        let data;
++                        try {
++                            data = JSON.parse(`{${action.data}}`);
++                        } catch {
++                            continue;
++                        }
+                         if (action.act_type == "typing") {
+                             if (action.act == "typing") {
+                                 const typingObject = new UserTyping(data);
