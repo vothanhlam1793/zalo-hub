@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useEffect, useState } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { cn } from '@/lib/utils';
 import { getAccountDisplayName, getContactDisplayName, getInitial, directConversationId, groupConversationId } from '../utils';
 import type { Contact, ConversationSummary, Group } from '../types';
 
@@ -23,6 +24,7 @@ interface SidebarProps {
   accountDisplayName?: string;
   accountAvatar?: string;
   accountPhoneNumber?: string;
+  className?: string;
   onRenameAccount: (nextDisplayName: string) => Promise<void>;
   onSelectConversation: (id: string) => void;
   onOpenDirectConversation: (contact: Contact) => void;
@@ -43,6 +45,7 @@ export function Sidebar({
   accountDisplayName,
   accountAvatar,
   accountPhoneNumber,
+  className,
   onRenameAccount,
   onSelectConversation,
   onOpenDirectConversation,
@@ -77,7 +80,7 @@ export function Sidebar({
   };
 
   return (
-    <div className="w-[300px] min-w-[280px] border-r border-[var(--sidebar-border)] flex flex-col bg-[var(--sidebar)] overflow-hidden max-sm:w-[260px] max-sm:min-w-[240px]">
+    <div className={cn('w-[300px] min-w-[280px] border-r border-[var(--sidebar-border)] flex flex-col bg-[var(--sidebar)] overflow-hidden max-sm:w-[260px] max-sm:min-w-[240px]', className)}>
       <div className="px-3.5 pt-3.5 pb-2.5 border-b border-[var(--sidebar-border)]">
         <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3">
           <div className="flex items-center gap-3">

@@ -14,6 +14,7 @@ interface ChatPanelProps {
   activeAvatar?: string;
   activeSubtitle?: string;
   isGroupConversation: boolean;
+  headerLeading?: React.ReactNode;
   messages: Message[];
   hasMoreHistory: boolean;
   loadingOlder: boolean;
@@ -43,6 +44,7 @@ export function ChatPanel({
   activeAvatar,
   activeSubtitle,
   isGroupConversation,
+  headerLeading,
   messages,
   hasMoreHistory,
   loadingOlder,
@@ -174,6 +176,7 @@ export function ChatPanel({
       ) : (
         <>
           <div className="shrink-0 px-5 py-3.5 border-b border-[var(--border)] flex items-center gap-3">
+            {headerLeading}
             <Avatar className="w-9 h-9 text-sm shrink-0">
               {activeAvatar ? <img src={activeAvatar} alt={activeName} className="w-full h-full object-cover rounded-full" /> : null}
               <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] font-bold">
