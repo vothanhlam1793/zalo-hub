@@ -18,33 +18,71 @@ export function useComposer() {
     setMessages: (m: Message[]) => void,
     mergeMessagesIntoConversation: (accountId: string, conversationId: string, incoming: Message[], mode?: 'append' | 'replace') => { next: Message[] },
     fileInputRef: React.MutableRefObject<HTMLInputElement | null>,
+    appendLocalMessage?: (msg: Message) => void,
+    updateConversationSummaryLocal?: (accountId: string, msg: { conversationId: string; text: string; kind: string; timestamp: string; direction: string }) => void,
   ) => {
     e.preventDefault();
-    if (!activeConversationId || (!text.trim() && !attachFile)) return;
+    const trimmedText = text.trim();
+    if (!activeConversationId || (!trimmedText && !attachFile)) return;
     if (!accountId) {
       setStatusMsg('Chưa có tài khoản workspace được chọn');
       return;
     }
+
+    const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date().toISOString();
+    const kind = attachFile ? (attachFile.type.startsWith('image/') ? 'image' : 'file') : 'text';
+
+    const pendingMsg: Message = {
+      id: tempId,
+      conversationId: activeConversationId,
+      threadId: '',
+      conversationType: 'direct',
+      text: trimmedText || (attachFile ? `[${kind}]` : ''),
+      kind,
+      attachments: [],
+      direction: 'outgoing',
+      isSelf: true,
+      timestamp: now,
+      providerMessageId: tempId,
+      cliMsgId: undefined,
+    };
+
+    appendLocalMessage?.(pendingMsg);
+    setText('');
+    setAttachFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setSending(true);
     setStatusMsg('');
+
+    updateConversationSummaryLocal?.(accountId, {
+      conversationId: activeConversationId,
+      text: pendingMsg.text,
+      kind: pendingMsg.kind,
+      timestamp: now,
+      direction: 'outgoing',
+    });
+
     try {
       if (attachFile) {
-        await api.accountSendAttachment(accountId, activeConversationId, attachFile, text.trim() || undefined);
-        setAttachFile(null);
-        if (fileInputRef.current) fileInputRef.current.value = '';
+        const result: any = await api.accountSendAttachment(accountId, activeConversationId, attachFile, trimmedText || undefined);
+        const resId = result?.message?.msgId ?? result?.msgId;
+        if (resId) {
+          pendingMsg.id = String(resId);
+          pendingMsg.providerMessageId = String(resId);
+        }
       } else {
-        await api.accountSendText(accountId, activeConversationId, text.trim());
+        const result: any = await api.accountSendText(accountId, activeConversationId, trimmedText);
+        const resId = result?.message?.msgId ?? result?.msgId;
+        if (resId) {
+          pendingMsg.id = String(resId);
+          pendingMsg.providerMessageId = String(resId);
+        }
       }
-      setText('');
-      const r = await api.accountMessages(accountId, activeConversationId, { limit: 40 });
-      const { next } = mergeMessagesIntoConversation(accountId, activeConversationId, r.messages, 'replace');
-      setMessages(next);
-      const cv = await api.accountConversations(accountId);
-      replaceAccountConversations(accountId, cv.conversations);
-      setStatusMsg('Đã gửi.');
       setLoadError('');
     } catch (err) {
       setStatusMsg(err instanceof Error ? err.message : 'Gửi thất bại');
+      setLoadError(err instanceof Error ? err.message : 'Gửi thất bại');
     } finally {
       setSending(false);
     }

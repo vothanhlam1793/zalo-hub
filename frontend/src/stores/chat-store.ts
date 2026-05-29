@@ -18,6 +18,9 @@ interface ChatState {
   clearPendingReadAt: (accountId: string, conversationId: string, persistedReadAt?: string) => void;
   prependConversation: (entry: ConversationSummary) => void;
   updateConversationFromWs: (accountId: string, message: { conversationId: string; text: string; kind: string; timestamp: string; direction: string }) => void;
+  updateConversationSummaryLocal: (accountId: string, message: { conversationId: string; text: string; kind: string; timestamp: string; direction: string }) => void;
+  appendLocalMessage: (msg: Message) => void;
+  reconcileOutgoingMessage: (sentMsg: Message) => void;
 
   getAccountConversations: (accountId: string) => ConversationSummary[];
   setContacts: (c: Contact[]) => void;
@@ -125,6 +128,44 @@ export const useChatStore = create<ChatState>((set, get) => ({
         [accountId]: next,
       },
     };
+  }),
+
+  updateConversationSummaryLocal: (accountId, msg) => set((state) => {
+    const current = state.conversationsByAccount[accountId] ?? [];
+    const idx = current.findIndex((e) => e.id === msg.conversationId);
+    const next = [...current];
+    if (idx >= 0) {
+      next[idx] = {
+        ...next[idx],
+        lastMessageText: msg.text,
+        lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
+        lastMessageTimestamp: msg.timestamp,
+        lastDirection: msg.direction as 'incoming' | 'outgoing',
+        messageCount: next[idx].messageCount + 1,
+      };
+    }
+    next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
+    return {
+      conversationsByAccount: {
+        ...state.conversationsByAccount,
+        [accountId]: next,
+      },
+    };
+  }),
+
+  appendLocalMessage: (msg) => set((state) => ({
+    messages: [...state.messages, msg],
+  })),
+
+  reconcileOutgoingMessage: (sentMsg) => set((state) => {
+    const next = state.messages.map((m) => {
+      if (m.id.startsWith('pending-') && m.conversationId === sentMsg.conversationId
+          && m.direction === 'outgoing' && m.text === sentMsg.text) {
+        return sentMsg;
+      }
+      return m;
+    });
+    return { messages: next };
   }),
 
   getAccountConversations: (accountId) => get().conversationsByAccount[accountId] ?? [],

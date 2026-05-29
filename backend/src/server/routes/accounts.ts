@@ -368,9 +368,11 @@ export function createAccountsRouter(
           }
           result = await targetRuntime.sendText(conversationId, text);
         }
-        broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-        broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
         res.json(result);
+        void (async () => {
+          broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
+          broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
+        })();
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Gui tin that bai' });
       }
@@ -402,9 +404,11 @@ export function createAccountsRouter(
           mimeType: req.file.mimetype,
           caption: caption || undefined,
         });
-        broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-        broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
         res.json(result);
+        void (async () => {
+          broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
+          broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
+        })();
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
       }

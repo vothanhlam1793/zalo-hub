@@ -107,6 +107,9 @@ export function useDashboardState() {
       chat.updateConversationFromWs(accountId, message);
       const { next } = messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
       if (activeConversationIdRef.current === message.conversationId) {
+        if (message.isSelf && message.direction === 'outgoing') {
+          chat.reconcileOutgoingMessage(message);
+        }
         chat.setMessages(next);
       }
     },
@@ -260,6 +263,7 @@ export function useDashboardState() {
       e, chat.activeConversationId, composer.text, composer.attachFile, accountId,
       composer.setText, composer.setAttachFile, composer.setSending, composer.setStatusMsg, composer.setLoadError, chat.replaceAccountConversations, chat.setMessages,
       messageCache.mergeMessagesIntoConversation, fileInputRef,
+      chat.appendLocalMessage, chat.updateConversationSummaryLocal,
     );
   }, [resolveWorkspaceId, handleSend, chat.activeConversationId, composer.text, composer.attachFile, messageCache, chat, composer]);
 
