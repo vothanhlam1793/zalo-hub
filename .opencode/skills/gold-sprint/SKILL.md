@@ -1,12 +1,32 @@
 ---
 name: gold-sprint
 description: >
-  Multi-agent workflow for large codebases covering 3 modes: (1) Gold/Sprint — build new features with structured phases and quality gates; (2) Reorg — analyze messy codebase, propose new structure, user confirms, then AI refactors; (3) Docgen — scan codebase and generate all docs (README, module docs, API docs, AGENTS.md, onboarding guide, changelog). Triggers on: "let's build X", "implement feature Y", "tôi muốn làm tính năng", "bắt đầu sprint", "new gold", "new sprint", "triển khai", "cơ cấu lại", "refactor thư mục", "project rối", "viết tài liệu", "generate docs", "docgen", "onboarding", "AGENTS.md", or whenever the user has an existing codebase that needs restructuring or documentation.
+  Multi-phase execution workflow for substantial codebase work after the task is reasonably clear. Covers 3 modes: (1) Gold/Sprint for large feature delivery across planning, implementation, verification, and testing; (2) Reorg for restructuring messy codebases with proposal, confirmation, migration, and verification; (3) Docgen for generating project and module documentation for existing codebases. Use this whenever the user wants to deliver a sizeable feature, run a structured sprint, reorganize a messy repo with explicit checkpoints, or generate comprehensive docs for a real codebase. If the request is still vague, the repo must be reviewed first, or the workflow files do not exist yet, use `task-intake` first so the shared `workflow/` contract is initialized before Gold Sprint begins.
 ---
 
 # Gold Sprint Skill
 
 Three modes for managing large codebases. Read the user's intent and pick the right mode — don't ask if it's obvious.
+
+## Shared workflow contract
+
+This skill does not start from a blank slate when a shared workflow already exists.
+
+Before selecting `GOLD`, `REORG`, or `DOCGEN`, read the shared workflow files if present:
+
+- `workflow/brief.md`
+- `workflow/repo_assessment.md`
+- `workflow/handoff.md`
+
+Use `references/shared-workflow-contract.md` as the contract for shared files.
+
+Rules:
+
+- All notes inside `workflow/` must be written in English.
+- Treat `workflow/brief.md` and `workflow/repo_assessment.md` as the primary source of truth.
+- Update `workflow/plan.md`, `workflow/verification.md`, `workflow/decision_log.md`, and `workflow/handoff.md` as execution progresses.
+- Skill-specific files may add depth, but they must stay aligned with the shared workflow files.
+- If `workflow/` does not exist and the task is still at the beginning, do not invent a parallel note structure. Hand off to `task-intake` first unless the user explicitly wants to skip intake and accepts the risk.
 
 ---
 
@@ -32,6 +52,14 @@ Build new features with full quality gates across sprints.
 
 ### Folder Structure
 ```
+workflow/
+├── brief.md
+├── repo_assessment.md
+├── plan.md
+├── verification.md
+├── handoff.md
+└── decision_log.md
+
 gold_<N>_<slug>/
 ├── gold_brief.md
 ├── gold_summary.md
@@ -55,27 +83,53 @@ gold_<N>_<slug>/
 [ ] MAIN      → Write sprint_summary.md, present to user, ask: next sprint / pause / adjust?
 ```
 
+### Phase Discipline (mandatory)
+
+This workflow is sequential in both logic and communication. Do not silently blend phases together.
+
+- Before starting a phase, explicitly announce the transition in chat using a short marker such as `MAIN -> PLANNER`, `PLANNER -> CODER`, `CODER -> VERIFIER`, `VERIFIER -> TESTER`, `TESTER -> MAIN`.
+- Each phase must complete its required artifact(s) before the next phase begins.
+- Do not skip `VERIFIER` or `TESTER` just because the sprint feels small. Small scaffolding/documentation sprints may use lightweight verification/testing, but they must still produce the expected files.
+- `MAIN` is the only role that talks to the user for confirmations. `PLANNER`, `CODER`, `VERIFIER`, and `TESTER` work through artifacts.
+- If one assistant is performing multiple roles, it must still behave as if the roles are separate: finish one phase, report that it is complete, then move to the next phase.
+- If a phase discovers missing information or a meaningful tradeoff, control returns to `MAIN`, who asks the user before work continues.
+- Do not treat quick progress updates as a substitute for phase completion. Phase completion requires the artifact for that phase.
+
+### Minimum Artifacts Per Phase
+
+- Shared workflow state before execution: `workflow/brief.md`, `workflow/repo_assessment.md`, `workflow/handoff.md`
+- Shared execution state during and after execution: `workflow/plan.md`, `workflow/verification.md`, `workflow/decision_log.md`
+- `MAIN` at Gold kickoff: `gold_brief.md`
+- `PLANNER`: `plan.md` and `test_key.md`
+- `CODER`: code/document/file changes required by the plan
+- `VERIFIER`: verification notes in the sprint record or explicit pass/fail assessment before testing
+- `TESTER`: `report.md`
+- `CODER` after testing: `coder_response.md`
+- `MAIN` at sprint close: `sprint_summary.md`
+
+For small or non-code sprints, `VERIFIER` may be concise and `TESTER` may validate structure/scope instead of runtime behavior, but both phases still happen in order.
+
 ### Phase Responsibilities
 
 **MAIN** — sole contact with user. Never skips confirmation before new sprint or Gold.
-- Gold kickoff: ask idea → clarify → write gold_brief.md → confirm → Sprint 1
+- Gold kickoff: read shared workflow files → clarify only what is still missing → write gold_brief.md → confirm → Sprint 1
 - Sprint end: read report.md + coder_response.md → write sprint_summary.md → present → ask next step
 - Continuing gold: read gold_brief.md + last sprint_summary.md → propose scope → confirm
 
 **PLANNER** — technical precision, no ambiguity.
-- plan.md: scope, architecture decisions + rationale, file/module breakdown, implementation sequence, risks
+- update `workflow/plan.md` first, then write sprint `plan.md`: scope, architecture decisions + rationale, file/module breakdown, implementation sequence, risks
 - test_key.md: 3–10 test cases, each with input/expected output/pass criteria/weight (weights sum to 100%)
 - Escalate to Main when: architecture has real tradeoffs, new tech stack additions, touching sensitive modules, anything user flagged as needing sign-off. See `references/escalation_guide.md`.
 
 **CODER** — implement exactly per plan.md. Stop and report to Main if plan is contradictory.
 
-**VERIFIER** — structural check only (no running tests). Flag: plan vs implementation mismatches, broken imports, missing error handling. Send critical issues back to Coder before Tester runs.
+**VERIFIER** — structural check only (no running tests). Flag: plan vs implementation mismatches, broken imports, missing error handling. Update `workflow/verification.md` with the current state before Tester runs. Send critical issues back to Coder before Tester runs.
 
 **TESTER** — score = Σ(weight × pass_factor). pass_factor: 1.0 pass / 0.5 partial / 0.0 fail.
 
-**CODER (response)** — for each failed test: root cause + fixable next sprint? + suggested fix. Analysis only, no re-implementation.
+**CODER (response)** — for each failed test: root cause + fixable next sprint? + suggested fix. Analysis only, no re-implementation. Record important tradeoffs in `workflow/decision_log.md`.
 
-See `references/file_templates.md` for exact output formats.
+See `references/shared-workflow-contract.md` for shared file expectations and `references/file_templates.md` for exact mode-specific output formats.
 
 ---
 
@@ -97,14 +151,14 @@ For codebases that are messy, hard to navigate, or have grown without structure.
 ```
 
 ### ANALYZER
-Scan the project and produce `reorg/analysis.md`:
+Scan the project and update `workflow/repo_assessment.md` before producing `reorg/analysis.md`:
 - Current folder tree (full depth)
 - Identified problems: mixed concerns, circular dependencies, inconsistent naming, orphaned files, modules too large/too small
 - Hotspots: which files are imported the most? which are never imported?
 - Tech stack detected (framework, language, conventions)
 
 ### PROPOSER
-Produce `reorg/proposal.md`:
+Update `workflow/plan.md`, then produce `reorg/proposal.md`:
 
 ```
 ## Proposed Structure
@@ -153,6 +207,7 @@ After execution:
 - Check all imports resolve (no broken references)
 - Run existing tests if available
 - Check app entry point still works
+- Update `workflow/verification.md`
 - Produce `reorg/verification.md`: pass/fail per check
 
 ---
@@ -186,7 +241,7 @@ Generate complete documentation for an existing codebase — even if none exists
 - `<module>/API.md` — if module exposes HTTP endpoints: route, method, request, response, auth
 
 ### SCANNER
-Produce `docgen/scan.md` (internal, not shown to user):
+Update `workflow/repo_assessment.md`, then produce `docgen/scan.md` (internal, not shown to user):
 - All modules detected + their purpose (inferred from code)
 - All public API endpoints
 - All environment variables used
@@ -201,6 +256,7 @@ Write all docs based on scan. Rules:
 - For AGENTS.md: write as instructions to an AI, not a human
 - For CHANGELOG.md: if no git log available, create a template with [FILL] markers
 - Flag uncertain things with `<!-- TODO: verify this -->`
+- Update `workflow/handoff.md` to show what documentation was generated and what still needs human review.
 
 ### REFINER
 After user feedback: update flagged sections, remove TODOs that got answered, fill gaps.
@@ -254,5 +310,6 @@ After user feedback: update flagged sections, remove TODOs that got answered, fi
 
 ## References
 
+- `references/shared-workflow-contract.md` — Shared workflow files used across skills and future agents
 - `references/file_templates.md` — Full templates for all Gold/Sprint output files
 - `references/escalation_guide.md` — When Planner escalates vs. decides independently

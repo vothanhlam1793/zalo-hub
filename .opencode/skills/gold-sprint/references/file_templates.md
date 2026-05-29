@@ -1,14 +1,16 @@
 # File Templates
 
+All mode-specific notes in this file should be written in English. The shared `workflow/` files remain the primary source of truth across skills.
+
 ## gold_brief.md
 
 ```markdown
 # Gold Brief — Gold <N>: <Title>
 
-## Mục tiêu
-<Mô tả feature/goal bằng tiếng người dùng>
+## Goal
+<Feature goal in clear working English>
 
-## Kết quả cuối (Definition of Done)
+## Definition of Done
 - [ ] <Điều kiện 1>
 - [ ] <Điều kiện 2>
 
@@ -17,10 +19,10 @@
 - Existing modules liên quan: ...
 - Không được đụng vào: ...
 
-## Sensitive Areas (cần user confirm trước khi Planner quyết định)
+## Sensitive Areas (require user confirmation before Planner decides)
 - ...
 
-## Sprint Breakdown (dự kiến)
+## Planned Sprint Breakdown
 - Sprint 1: ...
 - Sprint 2: ...
 - Sprint 3: ...
@@ -34,7 +36,7 @@
 # Technical Plan — Gold <N>, Sprint <N>
 
 ## Sprint Scope
-<Chính xác sprint này làm gì — không hơn không kém>
+<Exactly what this sprint covers>
 
 ## Architecture Decisions
 | Decision | Chosen Approach | Rationale |
@@ -56,7 +58,7 @@
 - Dependency: ...
 - Risk: ... → Mitigation: ...
 
-## Out of Scope (this sprint)
+## Out of Scope
 - ...
 ```
 
@@ -69,11 +71,11 @@
 
 ## Test Cases
 
-### TC-01: <Tên test> (Weight: X%)
+### TC-01: <Test name> (Weight: X%)
 - **Input**: ...
 - **Expected Output**: ...
 - **Pass Criteria**: ...
-- **Partial Credit**: ... (nếu có)
+- **Partial Credit**: ... (if applicable)
 
 ### TC-02: <Tên test> (Weight: X%)
 - **Input**: ...
@@ -89,7 +91,7 @@
 | 02 | ... | X% |
 | **Total** | | **100%** |
 
-## Out of Scope for Testing (this sprint)
+## Out of Scope for Testing
 - ...
 ```
 
@@ -155,19 +157,19 @@
 ## Score: <X>%
 
 ## What Was Delivered
-<1-2 câu mô tả những gì đã build xong>
+<1-2 sentences describing what was completed>
 
 ## What Passed ✅
 - ...
 
 ## What Failed / Needs Work ❌
-- <TC-02>: <lý do ngắn gọn>
+- <TC-02>: <short reason>
 
 ## Assessment
-<Pass / Needs Fix / Escalate — và lý do>
+<Pass / Needs Fix / Escalate and why>
 
 ## Recommendation
-<Tiếp tục Sprint tiếp theo? Fix rồi retry? Cần user quyết định gì?>
+<Continue to the next sprint? Fix and retry? What user decision is needed?>
 ```
 
 ---
@@ -187,12 +189,12 @@
 | 3 | X% | ... |
 
 ## Definition of Done — Final Status
-- [x] Điều kiện 1 — đạt
-- [ ] Điều kiện 2 — chưa đạt (lý do)
+- [x] Condition 1 — met
+- [ ] Condition 2 — not met (reason)
 
 ## Lessons Learned
 - ...
 
-## Leftover / Next Gold (nếu có)
+## Leftover / Next Gold
 - ...
 ```
