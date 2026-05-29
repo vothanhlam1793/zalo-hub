@@ -28,6 +28,9 @@ import { createLegacyRouter } from './routes/legacy.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createMonitorRouter } from './routes/monitor.js';
 import { getEmptyStatus } from './helpers/status.js';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yaml';
+import fs from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,6 +109,14 @@ async function main() {
   });
 
   app.use('/api', createSystemRouter(logger, accountManager, () => loginPromise));
+
+  const swaggerSpec = YAML.parse(fs.readFileSync(path.resolve(__dirname, '../../docs/api/openapi.yaml'), 'utf8'));
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.get('/api-docs.yaml', (_req, res) => {
+    res.setHeader('Content-Type', 'text/yaml');
+    res.sendFile(path.resolve(__dirname, '../../docs/api/openapi.yaml'));
+  });
+
   app.use('/api', createAuthRouter(logger, loginRuntime, knex, accountManager, broadcast, () => loginPromise, (p) => { loginPromise = p; }, getEmptyStatus));
   const systemAuth = createSystemAuthRouter(logger, knex);
   app.use('/api', systemAuth.router);
