@@ -66,13 +66,56 @@
 ║  └──────────────────────────────────────────────────────────────────────┘   ║
 ║                                                                              ║
 ║  ┌─ API Routes ──────────────────────────────────────────────────────────┐  ║
-║  │  GET  /api/status                    POST /api/accounts/:id/activate   │  ║
-║  │  GET  /api/accounts                  POST /api/accounts/.../send       │  ║
-║  │  GET  /api/accounts/.../conversations POST /api/accounts/.../reaction  │  ║
-║  │  GET  /api/accounts/.../messages     POST /api/accounts/.../read-state │  ║
-║  │  POST /api/accounts/.../sync-history POST /api/accounts/.../sync-all   │  ║
-║  │  POST /api/conversations/sync-metadata                                 │  ║
-║  │  GET  /media/*   ← stream từ MinIO                                    │  ║
+║  │  Auth: POST /api/auth/login  GET /api/auth/me  POST /api/auth/logout  │  ║
+║  │                                                                        │  ║
+║  │  Chat:  GET  /api/accounts/:id/contacts      (auth: viewer)            │  ║
+║  │         GET  /api/accounts/:id/groups        (auth: viewer)            │  ║
+║  │         GET  /api/accounts/:id/conversations (auth: viewer)            │  ║
+║  │         GET  /api/accounts/:id/.../messages  (auth: viewer)            │  ║
+║  │         POST /api/accounts/:id/send          (auth: editor)            │  ║
+║  │         POST /api/accounts/:id/.../reaction  (auth: editor)            │  ║
+║  │         POST /api/accounts/:id/.../read-state(auth: viewer)            │  ║
+║  │         POST /api/accounts/:id/sync-history  (auth: editor)            │  ║
+║  │                                                                        │  ║
+║  │  Monitor:GET  /api/accounts/:id/monitor/conversations (auth: viewer)   │  ║
+║  │         GET  /api/accounts/:id/monitor/conversations/unread            │  ║
+║  │         GET  /api/accounts/:id/monitor/conversations/:cid              │  ║
+║  │         GET  /api/accounts/:id/monitor/conversations/:cid/messages     │  ║
+║  │         GET  /api/accounts/:id/monitor/messages (from/to range sync)   │  ║
+║  │                                                                        │  ║
+║  │  Admin: GET/PUT/DEL /api/admin/users       (auth: admin)               │  ║
+║  │         GET/POST/DEL /api/admin/accounts/*  (auth: master)             │  ║
+║  │         GET  /api/me/accounts               (auth: any)                │  ║
+║  │                                                                        │  ║
+║  │  Media: GET  /media/*   ← stream từ MinIO                              │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+║  ┌─ Auth Middleware ──────────────────────────────────────────────────────┐  ║
+║  │  requireAuth: verify JWT → gắn systemUserId vào req                    │  ║
+║  │  requireAccountAccess(role): verify zalo_account_memberships           │  ║
+║  │    → query: SELECT role FROM zalo_account_memberships                  │  ║
+║  │             WHERE user_id = ? AND account_id = ?                       │  ║
+║  │    → check role rank (master:5, admin:4, editor:3, viewer:2)          │  ║
+║  │  requireSystemRole(role): check system_users.role                      │  ║
+║  │  requireAccountMaster: chỉ membership role = 'master'                  │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+║  ┌─ Monitor API (agent) ──────────────────────────────────────────────────┐  ║
+║  │  Store layer:                                                          │  ║
+║  │    message-repo: listMonitorMessagesByAccountAndRange()                │  ║
+║  │                  cursor: (timestamp > ? OR (timestamp = ? AND id > ?)) │  ║
+║  │    conversation-repo: listMonitorConversationsByAccountAndRange()      │  ║
+║  │                       listUnreadConversationsByAccount()               │  ║
+║  │                       getConversationSummaryByAccountAndId()           │  ║
+║  │                                                                        │  ║
+║  │  Router: routes/monitor.ts (mergeParams: true)                         │  ║
+║  │    Mounted at /api/accounts → monitor routes: /:id/monitor/...         │  ║
+║  │    Tất cả route dùng requireAuth + requireAccountAccess('viewer')     │  ║
+║  │                                                                        │  ║
+║  │  DB indexes for monitor:                                               │  ║
+║  │    idx_messages_account_time_id    (account_id, timestamp, id)         │  ║
+║  │    idx_messages_account_conv_time_id (account_id, conv_id, time, id)   │  ║
+║  │    idx_conversations_account_lastmsg (account_id, last_msg_time DESC)  │  ║
 ║  └────────────────────────────────────────────────────────────────────────┘  ║
 ║                                                                              ║
 ║  ┌─ WebSocket /ws ───────────────────────────────────────────────────────┐  ║
