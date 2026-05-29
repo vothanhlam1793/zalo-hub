@@ -26,6 +26,7 @@ import { createSystemAuthRouter } from './routes/system-auth.js';
 import { createAccountsRouter } from './routes/accounts.js';
 import { createLegacyRouter } from './routes/legacy.js';
 import { createAdminRouter } from './routes/admin.js';
+import { createMonitorRouter } from './routes/monitor.js';
 import { getEmptyStatus } from './helpers/status.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -109,6 +110,7 @@ async function main() {
   const systemAuth = createSystemAuthRouter(logger, knex);
   app.use('/api', systemAuth.router);
   app.use('/api/accounts', createAccountsRouter(logger, accountManager, broadcast, upload, knex, systemAuth.requireAuth, systemAuth.requireAccountAccess));
+  app.use('/api/accounts', createMonitorRouter(logger, loginStore, accountManager, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
 

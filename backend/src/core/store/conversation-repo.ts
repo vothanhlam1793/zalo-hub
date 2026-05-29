@@ -442,4 +442,293 @@ export class GoldConversationRepo {
         : message;
     });
   }
+
+  async listMonitorConversationsByAccountAndRange(
+    accountId: string | undefined,
+    options: {
+      from: string;
+      to: string;
+      type?: 'direct' | 'group';
+      onlyUnread?: boolean;
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<{ items: GoldConversationSummary[]; nextCursor: string | null }> {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
+      return { items: [], nextCursor: null };
+    }
+
+    const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+    let cursorTimestamp: string | undefined;
+    if (options.cursor) {
+      cursorTimestamp = options.cursor;
+    }
+
+    let whereExtra = '';
+    const bindings: any[] = [resolvedAccountId, options.from, options.to];
+
+    if (options.type) {
+      whereExtra += ' AND c.type = ?';
+      bindings.push(options.type);
+    }
+
+    if (cursorTimestamp) {
+      whereExtra += ' AND c.last_message_timestamp < ?';
+      bindings.push(cursorTimestamp);
+    }
+
+    if (options.onlyUnread) {
+      whereExtra += ` AND EXISTS (
+        SELECT 1 FROM messages mu
+        WHERE mu.account_id = c.account_id
+          AND mu.conversation_id = c.id
+          AND mu.direction = 'incoming'
+          AND mu.timestamp > COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z')
+          AND mu.timestamp >= ?
+          AND mu.timestamp < ?
+      )`;
+      bindings.push(options.from, options.to);
+    }
+
+    bindings.push(limit + 1);
+
+    const rows = (await this.knex.raw(`
+      SELECT c.id, c.thread_id, c.type, c.title, c.avatar, c.friend_id,
+             c.display_name_snapshot, c.last_message_text, c.last_message_kind,
+             c.last_direction, c.last_message_timestamp, c.message_count,
+             COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at,
+             (SELECT COUNT(*)::int FROM messages mr
+              WHERE mr.account_id = c.account_id
+                AND mr.conversation_id = c.id
+                AND mr.timestamp >= ?
+                AND mr.timestamp < ?
+             ) AS message_count_in_range,
+             (SELECT COUNT(*)::int FROM messages mr
+              WHERE mr.account_id = c.account_id
+                AND mr.conversation_id = c.id
+                AND mr.direction = 'incoming'
+                AND mr.timestamp > COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z')
+             ) AS unread_count
+      FROM conversations c
+      LEFT JOIN conversation_read_state rs
+        ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+      WHERE c.account_id = ?
+        AND EXISTS (
+          SELECT 1 FROM messages mi
+          WHERE mi.account_id = c.account_id
+            AND mi.conversation_id = c.id
+            AND mi.timestamp >= ?
+            AND mi.timestamp < ?
+        )
+        ${whereExtra}
+      ORDER BY c.last_message_timestamp DESC
+      LIMIT ?
+    `, [...bindings, options.from, options.to, resolvedAccountId, options.from, options.to, limit + 1])).rows as Array<{
+      id: string;
+      thread_id: string;
+      type: 'direct' | 'group';
+      title: string | null;
+      avatar: string | null;
+      friend_id: string;
+      display_name_snapshot: string | null;
+      last_message_text: string;
+      last_message_kind: string;
+      last_direction: 'incoming' | 'outgoing';
+      last_message_timestamp: string;
+      message_count: number;
+      last_read_at: string;
+      message_count_in_range: number;
+      unread_count: number;
+    }>;
+
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+
+    const items: GoldConversationSummary[] = [];
+    for (const row of rows) {
+      const threadOrFriend = row.thread_id ?? row.friend_id;
+      items.push({
+        id: row.id,
+        accountId: resolvedAccountId,
+        threadId: threadOrFriend,
+        type: row.type ?? 'direct',
+        title: row.title
+          ?? row.display_name_snapshot
+          ?? (row.type === 'group'
+            ? (await this.getGroupDisplayNameFn(threadOrFriend, resolvedAccountId))
+            : (await this.getFriendDisplayNameFn(row.friend_id, resolvedAccountId)))
+          ?? threadOrFriend,
+        avatar: row.avatar ?? (row.type === 'group'
+          ? (await this.getGroupAvatarFn(threadOrFriend, resolvedAccountId))
+          : (await this.getFriendAvatarFn(row.friend_id, resolvedAccountId))),
+        lastMessageText: row.last_message_text,
+        lastMessageKind: toMessageKind(row.last_message_kind),
+        lastMessageTimestamp: row.last_message_timestamp,
+        lastDirection: row.last_direction,
+        messageCount: row.message_count,
+        unreadCount: row.unread_count,
+        lastReadAt: row.last_read_at,
+      } satisfies GoldConversationSummary);
+    }
+
+    const lastItem = items[items.length - 1];
+    const nextCursor = hasMore && lastItem
+      ? lastItem.lastMessageTimestamp
+      : null;
+
+    return { items, nextCursor };
+  }
+
+  async listUnreadConversationsByAccount(
+    accountId: string | undefined,
+  ): Promise<GoldConversationSummary[]> {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
+      return [];
+    }
+
+    const rows = (await this.knex.raw(`
+      SELECT c.id, c.thread_id, c.type, c.title, c.avatar, c.friend_id,
+             c.display_name_snapshot, c.last_message_text, c.last_message_kind,
+             c.last_direction, c.last_message_timestamp, c.message_count,
+             COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at,
+             (SELECT COUNT(*)::int FROM messages mr
+              WHERE mr.account_id = c.account_id
+                AND mr.conversation_id = c.id
+                AND mr.direction = 'incoming'
+                AND mr.timestamp > COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z')
+             ) AS unread_count
+      FROM conversations c
+      LEFT JOIN conversation_read_state rs
+        ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+      WHERE c.account_id = ?
+        AND EXISTS (
+          SELECT 1 FROM messages mu
+          WHERE mu.account_id = c.account_id
+            AND mu.conversation_id = c.id
+            AND mu.direction = 'incoming'
+            AND mu.timestamp > COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z')
+        )
+      ORDER BY c.last_message_timestamp DESC
+    `, [resolvedAccountId])).rows as Array<{
+      id: string;
+      thread_id: string;
+      type: 'direct' | 'group';
+      title: string | null;
+      avatar: string | null;
+      friend_id: string;
+      display_name_snapshot: string | null;
+      last_message_text: string;
+      last_message_kind: string;
+      last_direction: 'incoming' | 'outgoing';
+      last_message_timestamp: string;
+      message_count: number;
+      last_read_at: string;
+      unread_count: number;
+    }>;
+
+    const items: GoldConversationSummary[] = [];
+    for (const row of rows) {
+      const threadOrFriend = row.thread_id ?? row.friend_id;
+      items.push({
+        id: row.id,
+        accountId: resolvedAccountId,
+        threadId: threadOrFriend,
+        type: row.type ?? 'direct',
+        title: row.title
+          ?? row.display_name_snapshot
+          ?? (row.type === 'group'
+            ? (await this.getGroupDisplayNameFn(threadOrFriend, resolvedAccountId))
+            : (await this.getFriendDisplayNameFn(row.friend_id, resolvedAccountId)))
+          ?? threadOrFriend,
+        avatar: row.avatar ?? (row.type === 'group'
+          ? (await this.getGroupAvatarFn(threadOrFriend, resolvedAccountId))
+          : (await this.getFriendAvatarFn(row.friend_id, resolvedAccountId))),
+        lastMessageText: row.last_message_text,
+        lastMessageKind: toMessageKind(row.last_message_kind),
+        lastMessageTimestamp: row.last_message_timestamp,
+        lastDirection: row.last_direction,
+        messageCount: row.message_count,
+        unreadCount: row.unread_count,
+        lastReadAt: row.last_read_at,
+      } satisfies GoldConversationSummary);
+    }
+
+    return items;
+  }
+
+  async getConversationSummaryByAccountAndId(
+    accountId: string | undefined,
+    conversationId: string,
+  ): Promise<GoldConversationSummary | undefined> {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) {
+      return undefined;
+    }
+
+    const { type, threadId } = parseConversationId(conversationId);
+    const canonicalConversationId = `${type}:${threadId}`;
+
+    const rows = (await this.knex.raw(`
+      SELECT c.id, c.thread_id, c.type, c.title, c.avatar, c.friend_id,
+             c.display_name_snapshot, c.last_message_text, c.last_message_kind,
+             c.last_direction, c.last_message_timestamp, c.message_count,
+             COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at,
+             (SELECT COUNT(*)::int FROM messages mr
+              WHERE mr.account_id = c.account_id
+                AND mr.conversation_id = c.id
+                AND mr.direction = 'incoming'
+                AND mr.timestamp > COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z')
+             ) AS unread_count
+      FROM conversations c
+      LEFT JOIN conversation_read_state rs
+        ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+      WHERE c.account_id = ?
+        AND c.id = ?
+      LIMIT 1
+    `, [resolvedAccountId, canonicalConversationId])).rows as Array<{
+      id: string;
+      thread_id: string;
+      type: 'direct' | 'group';
+      title: string | null;
+      avatar: string | null;
+      friend_id: string;
+      display_name_snapshot: string | null;
+      last_message_text: string;
+      last_message_kind: string;
+      last_direction: 'incoming' | 'outgoing';
+      last_message_timestamp: string;
+      message_count: number;
+      last_read_at: string;
+      unread_count: number;
+    }>;
+
+    const row = rows[0];
+    if (!row) return undefined;
+
+    const threadOrFriend = row.thread_id ?? row.friend_id;
+    return {
+      id: row.id,
+      accountId: resolvedAccountId,
+      threadId: threadOrFriend,
+      type: row.type ?? 'direct',
+      title: row.title
+        ?? row.display_name_snapshot
+        ?? (row.type === 'group'
+          ? (await this.getGroupDisplayNameFn(threadOrFriend, resolvedAccountId))
+          : (await this.getFriendDisplayNameFn(row.friend_id, resolvedAccountId)))
+        ?? threadOrFriend,
+      avatar: row.avatar ?? (row.type === 'group'
+        ? (await this.getGroupAvatarFn(threadOrFriend, resolvedAccountId))
+        : (await this.getFriendAvatarFn(row.friend_id, resolvedAccountId))),
+      lastMessageText: row.last_message_text,
+      lastMessageKind: toMessageKind(row.last_message_kind),
+      lastMessageTimestamp: row.last_message_timestamp,
+      lastDirection: row.last_direction,
+      messageCount: row.message_count,
+      unreadCount: row.unread_count,
+      lastReadAt: row.last_read_at,
+    } satisfies GoldConversationSummary;
+  }
 }

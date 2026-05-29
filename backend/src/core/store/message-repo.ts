@@ -433,4 +433,128 @@ export class GoldMessageRepo {
     `, [JSON.stringify(reactions), resolvedAccountId, providerMessageId.trim()]);
     return true;
   }
+
+  async listMonitorMessagesByAccountAndRange(
+    accountId: string | undefined,
+    options: {
+      from: string;
+      to: string;
+      conversationId?: string;
+      conversationType?: 'direct' | 'group';
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<{ items: GoldConversationMessage[]; nextCursor: string | null }> {
+    const resolvedAccountId = this.requireAccountId(accountId);
+    const limit = Math.max(1, Math.min(options.limit ?? 100, 1000));
+    let cursorTimestamp: string | undefined;
+    let cursorId: string | undefined;
+    if (options.cursor) {
+      const parts = options.cursor.split('|');
+      cursorTimestamp = parts[0];
+      cursorId = parts[1];
+    }
+
+    let whereClauses = 'm.account_id = ? AND m.timestamp >= ? AND m.timestamp < ?';
+    const bindings: any[] = [resolvedAccountId, options.from, options.to];
+
+    if (options.conversationId) {
+      const { threadId, type } = parseConversationId(options.conversationId);
+      const canonicalType = await this.resolveCanonicalConversationType(resolvedAccountId, threadId, type);
+      const canonicalConversationId = `${canonicalType}:${threadId}`;
+      whereClauses += ' AND m.conversation_id = ?';
+      bindings.push(canonicalConversationId);
+    }
+
+    if (options.conversationType) {
+      whereClauses += ' AND m.conversation_type = ?';
+      bindings.push(options.conversationType);
+    }
+
+    if (cursorTimestamp && cursorId) {
+      whereClauses += ' AND (m.timestamp > ? OR (m.timestamp = ? AND m.id > ?))';
+      bindings.push(cursorTimestamp, cursorTimestamp, cursorId);
+    }
+
+    bindings.push(limit + 1);
+
+    const rows = (await this.knex.raw(`
+      SELECT m.id, m.conversation_id, m.thread_id, m.conversation_type, m.friend_id,
+             m.text, m.kind, m.image_url, m.direction, m.is_self, m.timestamp,
+             m.sender_id, m.sender_name, m.provider_message_id,
+             m.raw_message_json, m.reactions_json, m.created_at
+      FROM messages m
+      WHERE ${whereClauses}
+      ORDER BY m.timestamp ASC, m.id ASC
+      LIMIT ?
+    `, bindings)).rows as RawMessageRow[];
+
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+
+    const messageIds = rows.map((r) => r.id);
+    const attachmentsByMessageId = new Map<string, GoldAttachment[]>();
+    if (messageIds.length > 0) {
+      const placeholders = messageIds.map(() => '?').join(',');
+      const attRows = (await this.knex.raw(`
+        SELECT id, message_id, type, url, source_url, local_path, thumbnail_url,
+               thumbnail_source_url, thumbnail_local_path, file_name, mime_type,
+               size, width, height, duration
+        FROM attachments
+        WHERE message_id IN (${placeholders})
+      `, messageIds)).rows as RawAttachmentRow[];
+
+      for (const att of attRows) {
+        const list = attachmentsByMessageId.get(att.message_id) ?? [];
+        list.push({
+          id: att.id,
+          type: toMessageKind(att.type),
+          url: att.url ?? undefined,
+          sourceUrl: att.source_url ?? undefined,
+          localPath: att.local_path ?? undefined,
+          thumbnailUrl: att.thumbnail_url ?? undefined,
+          thumbnailSourceUrl: att.thumbnail_source_url ?? undefined,
+          thumbnailLocalPath: att.thumbnail_local_path ?? undefined,
+          fileName: att.file_name ?? undefined,
+          mimeType: att.mime_type ?? undefined,
+          size: att.size ?? undefined,
+          width: att.width ?? undefined,
+          height: att.height ?? undefined,
+          duration: att.duration ?? undefined,
+        });
+        attachmentsByMessageId.set(att.message_id, list);
+      }
+    }
+
+    const items = rows.map((row) => {
+      const canonical = canonicalizeStoredMessage(row, attachmentsByMessageId.get(row.id) ?? []);
+      return {
+        id: row.id,
+        conversationId: row.conversation_id ?? `direct:${row.friend_id}`,
+        threadId: row.thread_id ?? row.friend_id,
+        conversationType: row.conversation_type ?? 'direct',
+        text: canonical.text,
+        kind: canonical.kind,
+        attachments: canonical.attachments,
+        direction: row.direction,
+        isSelf: Boolean(row.is_self),
+        timestamp: row.timestamp,
+        senderId: row.sender_id ?? undefined,
+        senderName: row.sender_name ?? undefined,
+        providerMessageId: row.provider_message_id ?? undefined,
+        imageUrl: canonical.imageUrl,
+        rawMessageJson: row.raw_message_json ?? undefined,
+        cliMsgId: undefined as string | undefined,
+        quote: undefined,
+        reactions: row.reactions_json ? tryParseReactions(row.reactions_json) : undefined,
+      } satisfies GoldConversationMessage;
+    });
+
+    const lastItem = items[items.length - 1];
+    const nextCursor = hasMore && lastItem
+      ? `${lastItem.timestamp}|${lastItem.id}`
+      : null;
+
+    return { items, nextCursor };
+  }
 }

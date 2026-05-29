@@ -312,4 +312,45 @@ export class GoldStore {
     if (!resolved) return messages;
     return this.conversationRepo.resolveGroupSenderNames(resolved, conversationId, messages);
   }
+
+  async listMonitorMessagesByAccountAndRange(
+    accountId: string | undefined,
+    options: {
+      from: string;
+      to: string;
+      conversationId?: string;
+      conversationType?: 'direct' | 'group';
+      limit?: number;
+      cursor?: string;
+    },
+  ) {
+    return this.messageRepo.listMonitorMessagesByAccountAndRange(accountId, options);
+  }
+
+  async listMonitorConversationsByAccountAndRange(
+    accountId: string | undefined,
+    options: {
+      from: string;
+      to: string;
+      type?: 'direct' | 'group';
+      onlyUnread?: boolean;
+      limit?: number;
+      cursor?: string;
+    },
+  ) {
+    return this.conversationRepo.listMonitorConversationsByAccountAndRange(accountId, options);
+  }
+
+  async listUnreadConversationsByAccount(
+    accountId: string | undefined,
+  ) {
+    return this.conversationRepo.listUnreadConversationsByAccount(accountId);
+  }
+
+  async getConversationSummaryByAccountAndId(
+    accountId: string | undefined,
+    conversationId: string,
+  ) {
+    return this.conversationRepo.getConversationSummaryByAccountAndId(accountId, conversationId);
+  }
 }

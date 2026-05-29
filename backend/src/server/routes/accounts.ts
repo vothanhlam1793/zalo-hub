@@ -17,9 +17,14 @@ export function createAccountsRouter(
 ) {
 
   const router = Router();
+  const needsViewer = requireAccountAccess?.('viewer');
   const needsEditor = requireAccountAccess?.('editor');
 
-  router.get('/', (_req, res) => {
+  const auth = requireAuth ? [requireAuth] : [];
+  const viewAny = requireAuth && needsViewer ? [requireAuth, needsViewer] : [];
+  const editAny = requireAuth && needsEditor ? [requireAuth, needsEditor] : [];
+
+  router.get('/', ...auth, (_req, res) => {
     void (async () => {
       res.json({
         accounts: await accountManager.listAccountStatuses(),
@@ -28,7 +33,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/activate', (req, res) => {
+  router.post('/activate', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.body?.accountId ?? '').trim();
       if (!accountId) {
@@ -51,7 +56,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.get('/:accountId/status', (req, res) => {
+  router.get('/:accountId/status', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       if (!accountId) {
@@ -77,7 +82,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.put('/:accountId/profile', (req, res) => {
+  router.put('/:accountId/profile', ...editAny, (req, res) => {
     const accountId = String(req.params.accountId ?? '').trim();
     const displayName = typeof req.body?.displayName === 'string' ? req.body.displayName.trim() : '';
     const hubAlias = typeof req.body?.hubAlias === 'string' ? req.body.hubAlias.trim() : '';
@@ -115,7 +120,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.get('/:accountId/contacts', (req, res) => {
+  router.get('/:accountId/contacts', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
@@ -136,7 +141,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.get('/:accountId/groups', (req, res) => {
+  router.get('/:accountId/groups', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
@@ -165,7 +170,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.get('/:accountId/conversations', (req, res) => {
+  router.get('/:accountId/conversations', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
@@ -182,7 +187,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.get('/:accountId/conversations/:conversationId/messages', (req, res) => {
+  router.get('/:accountId/conversations/:conversationId/messages', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
@@ -210,7 +215,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/:conversationId/sync-metadata', (req, res) => {
+  router.post('/:accountId/conversations/:conversationId/sync-metadata', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
@@ -234,7 +239,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/sync-history', (req, res) => {
+  router.post('/:accountId/conversations/sync-history', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.body?.conversationId ?? '').trim();
@@ -260,7 +265,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/mobile-sync-thread', (req, res) => {
+  router.post('/:accountId/mobile-sync-thread', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const threadId = String(req.body?.threadId ?? '').trim();
@@ -286,7 +291,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/mobile-sync', (req, res) => {
+  router.post('/:accountId/mobile-sync', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const perThreadTimeoutMs = typeof req.body?.perThreadTimeoutMs === 'number' ? req.body.perThreadTimeoutMs : undefined;
@@ -307,7 +312,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/sync-all', (req, res) => {
+  router.post('/:accountId/sync-all', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
@@ -326,7 +331,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/send', (req, res) => {
+  router.post('/:accountId/send', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.body?.conversationId ?? '').trim();
@@ -372,7 +377,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/send-attachment', upload.single('file'), (req, res) => {
+  router.post('/:accountId/send-attachment', upload.single('file'), ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.body?.conversationId ?? '').trim();
@@ -406,7 +411,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/:conversationId/sticker', (req, res) => {
+  router.post('/:accountId/conversations/:conversationId/sticker', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
@@ -422,7 +427,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/:conversationId/typing', (req, res) => {
+  router.post('/:accountId/conversations/:conversationId/typing', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
@@ -437,7 +442,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/:conversationId/reaction', (req, res) => {
+  router.post('/:accountId/conversations/:conversationId/reaction', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
@@ -458,7 +463,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/:conversationId/read-state', (req, res) => {
+  router.post('/:accountId/conversations/:conversationId/read-state', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
@@ -499,7 +504,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/groups/:groupId/poll', (req, res) => {
+  router.post('/:accountId/groups/:groupId/poll', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const groupId = String(req.params.groupId ?? '').trim();
@@ -515,7 +520,7 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/conversations/:conversationId/forward', (req, res) => {
+  router.post('/:accountId/conversations/:conversationId/forward', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
