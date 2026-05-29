@@ -1,0 +1,1359 @@
+openapi: "3.0.3"
+info:
+  title: ZaloHub API
+  description: |
+    Nền tảng chat Zalo đa người dùng với Agent Monitor API.
+    
+    **Version:** v1.0.2
+    
+    **Auth:** JWT Bearer token. Gọi `POST /api/auth/login` để lấy token,
+    rồi gửi header `Authorization: Bearer <token>` cho mọi request khác.
+    
+    **Tài khoản mặc định:** `admin@zalohub.local` / `admin123` (super_admin)
+    
+    **Monitor API flow cho agent:**
+    1. `POST /api/auth/login` lấy token
+    2. `GET /api/me/accounts` biết được account nào
+    3. `GET /api/accounts/{id}/monitor/conversations?from=&to=` quét conversation thay đổi
+    4. `GET /api/accounts/{id}/monitor/messages?from=&to=&conversationId=` tải message
+  version: "1.0.2"
+  contact:
+    name: ZaloHub
+
+servers:
+  - url: http://localhost:3399
+    description: Local development
+
+tags:
+  - name: Auth
+    description: Đăng nhập hệ thống
+  - name: Accounts
+    description: Quản lý tài khoản Zalo, contacts, groups, conversations
+  - name: Monitor
+    description: Agent monitor API — giám sát chat từ xa
+  - name: Admin
+    description: Admin panel — quản lý users, phân quyền account
+  - name: Media
+    description: Media file proxy từ MinIO
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    SystemUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        type: { type: string, enum: [human] }
+        role: { type: string }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    LoginResponse:
+      type: object
+      properties:
+        token: { type: string }
+        user: { $ref: '#/components/schemas/SystemUser' }
+
+    MeResponse:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/SystemUser' }
+        memberships:
+          type: array
+          items:
+            type: object
+            properties:
+              account_id: { type: string }
+              role: { type: string }
+
+    AccountListItem:
+      type: object
+      properties:
+        accountId: { type: string }
+        displayName: { type: string }
+        phoneNumber: { type: string }
+        avatar: { type: string }
+        hubAlias: { type: string }
+        hasCredential: { type: boolean }
+        sessionActive: { type: boolean }
+        isActive: { type: boolean }
+        listener:
+          type: object
+          properties:
+            connected: { type: boolean }
+            started: { type: boolean }
+            lastError: { type: string }
+            lastEventAt: { type: string }
+
+    Contact:
+      type: object
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        zaloName: { type: string }
+        zaloAlias: { type: string }
+        hubAlias: { type: string }
+        avatar: { type: string }
+        status: { type: string }
+        phoneNumber: { type: string }
+
+    Group:
+      type: object
+      properties:
+        groupId: { type: string }
+        displayName: { type: string }
+        avatar: { type: string }
+        memberCount: { type: integer }
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              userId: { type: string }
+              displayName: { type: string }
+              avatar: { type: string }
+              role: { type: string }
+
+    ConversationSummary:
+      type: object
+      properties:
+        id: { type: string, description: "format: direct:{threadId} hoặc group:{threadId}" }
+        accountId: { type: string }
+        threadId: { type: string }
+        type: { type: string, enum: [direct, group] }
+        title: { type: string }
+        avatar: { type: string, nullable: true }
+        lastMessageText: { type: string }
+        lastMessageKind: { type: string }
+        lastMessageTimestamp: { type: string, format: date-time }
+        lastDirection: { type: string, enum: [incoming, outgoing] }
+        messageCount: { type: integer }
+        unreadCount: { type: integer }
+        lastReadAt: { type: string, nullable: true }
+
+    MonitorConversationItem:
+      allOf:
+        - $ref: '#/components/schemas/ConversationSummary'
+        - type: object
+          properties:
+            messageCountInRange:
+              type: integer
+              description: Số message trong khoảng from/to
+
+    Attachment:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string }
+        url: { type: string }
+        sourceUrl: { type: string }
+        localPath: { type: string }
+        thumbnailUrl: { type: string }
+        fileName: { type: string }
+        mimeType: { type: string }
+        size: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+        duration: { type: integer }
+
+    MessageQuote:
+      type: object
+      properties:
+        messageId: { type: string }
+        senderId: { type: string }
+        senderName: { type: string }
+        text: { type: string }
+        kind: { type: string }
+
+    ReactionItem:
+      type: object
+      properties:
+        emoji: { type: string }
+        count: { type: integer }
+        userIds: { type: array, items: { type: string } }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        conversationId: { type: string }
+        threadId: { type: string }
+        conversationType: { type: string, enum: [direct, group] }
+        text: { type: string }
+        kind: { type: string, enum: [text, image, file, video, sticker, gif, voice, poll] }
+        attachments: { type: array, items: { $ref: '#/components/schemas/Attachment' } }
+        direction: { type: string, enum: [incoming, outgoing] }
+        isSelf: { type: boolean }
+        timestamp: { type: string, format: date-time }
+        senderId: { type: string }
+        senderName: { type: string }
+        providerMessageId: { type: string }
+        imageUrl: { type: string }
+        quote: { $ref: '#/components/schemas/MessageQuote' }
+        reactions: { type: array, items: { $ref: '#/components/schemas/ReactionItem' } }
+        rawMessageJson: { type: string, description: "Chỉ trả khi includeRaw=1" }
+        cliMsgId: { type: string }
+
+    ErrorResponse:
+      type: object
+      properties:
+        error: { type: string }
+
+    OkResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+
+    SendRequest:
+      type: object
+      required: [conversationId]
+      properties:
+        conversationId: { type: string }
+        text: { type: string }
+        imageBase64: { type: string }
+        imageFileName: { type: string }
+        imageMimeType: { type: string }
+
+    ReadStateRequest:
+      type: object
+      properties:
+        readAt: { type: string }
+
+    ReactionRequest:
+      type: object
+      required: [messageId, cliMsgId, icon]
+      properties:
+        messageId: { type: string }
+        cliMsgId: { type: string }
+        icon: { type: string }
+
+    SyncHistoryRequest:
+      type: object
+      required: [conversationId]
+      properties:
+        conversationId: { type: string }
+        beforeMessageId: { type: string }
+        timeoutMs: { type: integer }
+
+    MobileSyncThreadRequest:
+      type: object
+      required: [threadId]
+      properties:
+        threadId: { type: string }
+        threadType: { type: string, enum: [direct, group] }
+        timeoutMs: { type: integer }
+
+    MobileSyncRequest:
+      type: object
+      properties:
+        perThreadTimeoutMs: { type: integer }
+        maxTotalTimeMs: { type: integer }
+
+    ForwardRequest:
+      type: object
+      required: [messageId, toThreadId]
+      properties:
+        messageId: { type: string }
+        toThreadId: { type: string }
+        toType: { type: string, enum: [direct, group] }
+
+    PollRequest:
+      type: object
+      required: [question, options]
+      properties:
+        question: { type: string }
+        options: { type: array, items: { type: string } }
+
+    TypingRequest:
+      type: object
+      properties:
+        isTyping: { type: boolean }
+
+    ActivateRequest:
+      type: object
+      required: [accountId]
+      properties:
+        accountId: { type: string }
+
+    ProfileUpdateRequest:
+      type: object
+      properties:
+        displayName: { type: string }
+        hubAlias: { type: string }
+
+    CreateUserRequest:
+      type: object
+      required: [email, password, displayName]
+      properties:
+        email: { type: string }
+        password: { type: string }
+        displayName: { type: string }
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        displayName: { type: string }
+        role: { type: string }
+        type: { type: string }
+        password: { type: string }
+
+    AddMemberRequest:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string }
+        role: { type: string, enum: [viewer, editor, admin, master] }
+
+    UpdateMemberRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [viewer, editor, admin, master] }
+
+    TransferRequest:
+      type: object
+      required: [userId]
+      properties:
+        userId: { type: string }
+
+    SyncProfileResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        profile: { type: object }
+        account: { type: object }
+
+    AdminUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        displayName: { type: string }
+        type: { type: string }
+        role: { type: string }
+        memberships:
+          type: array
+          items: { type: object }
+
+    AdminAccount:
+      type: object
+      properties:
+        accountId: { type: string }
+        displayName: { type: string }
+        phoneNumber: { type: string }
+        avatar: { type: string }
+        hubAlias: { type: string }
+        master: { type: object, nullable: true }
+        memberCount: { type: integer }
+
+    MyAccount:
+      type: object
+      properties:
+        accountId: { type: string }
+        role: { type: string }
+        visible: { type: boolean }
+        displayName: { type: string }
+        phoneNumber: { type: string }
+        avatar: { type: string }
+        hasSession: { type: boolean }
+
+security:
+  - BearerAuth: []
+
+paths:
+  # =========================================================================
+  # AUTH
+  # =========================================================================
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Đăng nhập hệ thống
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        "200":
+          description: Thành công, trả về JWT token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        "400":
+          description: Thiếu email hoặc password
+        "401":
+          description: Sai email hoặc password
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Lấy thông tin user hiện tại và danh sách memberships
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        "401":
+          description: Token không hợp lệ hoặc hết hạn
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Đăng xuất, xóa session token
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  # =========================================================================
+  # ACCOUNTS
+  # =========================================================================
+  /api/accounts:
+    get:
+      tags: [Accounts]
+      summary: Danh sách tất cả Zalo accounts và trạng thái runtime
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AccountListItem'
+                  activeAccountId: { type: string }
+
+  /api/accounts/activate:
+    post:
+      tags: [Accounts]
+      summary: Kích hoạt một account làm primary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateRequest'
+      responses:
+        "200":
+          description: Kích hoạt thành công
+        "401":
+          description: Account chưa active session
+
+  /api/accounts/{accountId}/status:
+    get:
+      tags: [Accounts]
+      summary: Lấy trạng thái runtime của một account
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Trạng thái account
+        "500":
+          description: Lỗi server
+
+  /api/accounts/{accountId}/profile:
+    put:
+      tags: [Accounts]
+      summary: Cập nhật profile account (displayName, hubAlias)
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdateRequest'
+      responses:
+        "200":
+          description: Cập nhật thành công
+
+  /api/accounts/{accountId}/contacts:
+    get:
+      tags: [Accounts]
+      summary: Danh sách contacts của account
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: refresh
+          in: query
+          schema: { type: string, enum: ["0", "1"] }
+          description: "1 = tải lại từ Zalo API"
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contacts: { type: array, items: { $ref: '#/components/schemas/Contact' } }
+                  count: { type: integer }
+        "401":
+          description: Account chưa active session
+
+  /api/accounts/{accountId}/groups:
+    get:
+      tags: [Accounts]
+      summary: Danh sách groups của account
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: refresh
+          in: query
+          schema: { type: string, enum: ["0", "1"] }
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  groups: { type: array, items: { $ref: '#/components/schemas/Group' } }
+                  count: { type: integer }
+        "401":
+          description: Account chưa active session
+
+  /api/accounts/{accountId}/conversations:
+    get:
+      tags: [Accounts]
+      summary: Danh sách conversation summaries của account
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations: { type: array, items: { $ref: '#/components/schemas/ConversationSummary' } }
+                  count: { type: integer }
+        "401":
+          description: Account chưa active session
+
+  /api/accounts/{accountId}/conversations/{conversationId}/messages:
+    get:
+      tags: [Accounts]
+      summary: Lấy messages của một conversation
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: conversationId
+          in: path
+          required: true
+          schema: { type: string }
+          description: "Format: direct:{threadId} hoặc group:{threadId}"
+        - name: since
+          in: query
+          schema: { type: string }
+        - name: before
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversationId: { type: string }
+                  messages: { type: array, items: { $ref: '#/components/schemas/Message' } }
+                  count: { type: integer }
+                  oldestTimestamp: { type: string }
+                  hasMore: { type: boolean }
+        "400":
+          description: Thiếu conversationId
+        "401":
+          description: Account chưa active session
+
+  /api/accounts/{accountId}/conversations/{conversationId}/sync-metadata:
+    post:
+      tags: [Accounts]
+      summary: Đồng bộ metadata của một conversation từ Zalo
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Sync thành công }
+
+  /api/accounts/{accountId}/conversations/sync-history:
+    post:
+      tags: [Accounts]
+      summary: Đồng bộ lịch sử tin nhắn cũ từ Zalo
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncHistoryRequest'
+      responses:
+        "200": { description: Sync thành công }
+
+  /api/accounts/{accountId}/mobile-sync-thread:
+    post:
+      tags: [Accounts]
+      summary: Mobile sync (req_18) cho một thread cụ thể
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MobileSyncThreadRequest'
+      responses:
+        "200": { description: Sync completion result }
+
+  /api/accounts/{accountId}/mobile-sync:
+    post:
+      tags: [Accounts]
+      summary: Mobile sync cho tất cả conversations của account
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MobileSyncRequest'
+      responses:
+        "200": { description: Sync completion result }
+
+  /api/accounts/{accountId}/sync-all:
+    post:
+      tags: [Accounts]
+      summary: Đồng bộ tất cả conversations qua Zalo listener
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Sync thành công }
+
+  /api/accounts/{accountId}/send:
+    post:
+      tags: [Accounts]
+      summary: Gửi tin nhắn (text hoặc ảnh base64)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendRequest'
+      responses:
+        "200": { description: Gửi thành công }
+        "401": { description: Account chưa active session }
+
+  /api/accounts/{accountId}/send-attachment:
+    post:
+      tags: [Accounts]
+      summary: Gửi file đính kèm
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [conversationId, file]
+              properties:
+                conversationId: { type: string }
+                file: { type: string, format: binary }
+                caption: { type: string }
+      responses:
+        "200": { description: Gửi thành công }
+
+  /api/accounts/{accountId}/conversations/{conversationId}/sticker:
+    post:
+      tags: [Accounts]
+      summary: Gửi sticker
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stickerId, catId]
+              properties:
+                stickerId: { type: string }
+                catId: { type: string }
+      responses:
+        "200": { description: Gửi sticker thành công }
+
+  /api/accounts/{accountId}/conversations/{conversationId}/typing:
+    post:
+      tags: [Accounts]
+      summary: Gửi typing indicator
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TypingRequest'
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /api/accounts/{accountId}/conversations/{conversationId}/reaction:
+    post:
+      tags: [Accounts]
+      summary: Gửi reaction vào một message
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReactionRequest'
+      responses:
+        "200": { description: Reaction thành công }
+
+  /api/accounts/{accountId}/conversations/{conversationId}/read-state:
+    post:
+      tags: [Accounts]
+      summary: Đánh dấu đã đọc conversation
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReadStateRequest'
+      responses:
+        "200":
+          description: Thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  readAt: { type: string }
+
+  /api/accounts/{accountId}/groups/{groupId}/poll:
+    post:
+      tags: [Accounts]
+      summary: Tạo poll trong group
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: groupId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PollRequest'
+      responses:
+        "200": { description: Tạo poll thành công }
+
+  /api/accounts/{accountId}/conversations/{conversationId}/forward:
+    post:
+      tags: [Accounts]
+      summary: Forward message sang conversation khác
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForwardRequest'
+      responses:
+        "200": { description: Forward thành công }
+
+  # =========================================================================
+  # QR LOGIN (Zalo account)
+  # =========================================================================
+  /api/login/start:
+    post:
+      tags: [Accounts]
+      summary: Bắt đầu QR login cho một Zalo account mới
+      responses:
+        "200":
+          description: QR login bắt đầu
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started: { type: boolean }
+                  qrCodeAvailable: { type: boolean }
+
+  /api/login/qr:
+    get:
+      tags: [Accounts]
+      summary: Lấy QR code hiện tại đang chờ quét
+      responses:
+        "200":
+          description: QR code sẵn sàng hoặc chưa
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  qrCode: { type: string, nullable: true }
+                  ready: { type: boolean }
+
+  /api/logout:
+    post:
+      tags: [Accounts]
+      summary: Logout Zalo account (xóa session credential)
+      responses:
+        "200": { description: Logout thành công }
+
+  /api/status:
+    get:
+      tags: [Accounts]
+      summary: Health check + session status
+      security: []
+      responses:
+        "200": { description: OK }
+
+  /api/health:
+    get:
+      tags: [Accounts]
+      summary: Simple health check
+      security: []
+      responses:
+        "200": { description: OK }
+
+  # =========================================================================
+  # MONITOR
+  # =========================================================================
+  /api/accounts/{accountId}/monitor/conversations:
+    get:
+      tags: [Monitor]
+      summary: |
+        Khám phá conversation nào có dữ liệu trong khoảng from/to.
+        Agent dùng endpoint này để biết nên quét những conversation nào.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: from
+          in: query
+          required: true
+          schema: { type: string }
+          description: "ISO 8601. timestamp >= from"
+          example: "2026-05-29T00:00:00.000Z"
+        - name: to
+          in: query
+          required: true
+          schema: { type: string }
+          description: "ISO 8601. timestamp < to"
+          example: "2026-05-30T00:00:00.000Z"
+        - name: type
+          in: query
+          schema: { type: string, enum: [direct, group] }
+        - name: onlyUnread
+          in: query
+          schema: { type: string, enum: ["0", "1"] }
+          description: "1 = chỉ trả conversation có unread trong range"
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 500 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: "lastMessageTimestamp từ item cuối trang trước"
+      responses:
+        "200":
+          description: Danh sách conversations có hoạt động
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accountId: { type: string }
+                  from: { type: string }
+                  to: { type: string }
+                  items: { type: array, items: { $ref: '#/components/schemas/MonitorConversationItem' } }
+                  nextCursor: { type: string, nullable: true }
+
+  /api/accounts/{accountId}/monitor/conversations/unread:
+    get:
+      tags: [Monitor]
+      summary: Danh sách conversations có unread messages
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Conversations có unread
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accountId: { type: string }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        conversationId: { type: string }
+                        threadId: { type: string }
+                        type: { type: string, enum: [direct, group] }
+                        title: { type: string }
+                        unreadCount: { type: integer }
+                        lastMessageTimestamp: { type: string }
+
+  /api/accounts/{accountId}/monitor/messages:
+    get:
+      tags: [Monitor]
+      summary: |
+        Incremental message sync. Lấy messages trong khoảng from/to.
+        Có thể lọc theo conversationId hoặc lấy toàn bộ account.
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: from
+          in: query
+          required: true
+          schema: { type: string }
+          description: "ISO 8601. timestamp >= from"
+        - name: to
+          in: query
+          required: true
+          schema: { type: string }
+          description: "ISO 8601. timestamp < to"
+        - name: conversationId
+          in: query
+          schema: { type: string }
+          description: "Filter theo conversationId cụ thể"
+        - name: type
+          in: query
+          schema: { type: string, enum: [direct, group] }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 1000 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: "Format: {timestamp}|{id} từ item cuối trang trước"
+      responses:
+        "200":
+          description: Danh sách messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accountId: { type: string }
+                  from: { type: string }
+                  to: { type: string }
+                  items: { type: array, items: { $ref: '#/components/schemas/Message' } }
+                  nextCursor: { type: string, nullable: true }
+
+  /api/accounts/{accountId}/monitor/conversations/{conversationId}:
+    get:
+      tags: [Monitor]
+      summary: Chi tiết metadata một conversation
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Thông tin conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversation:
+                    $ref: '#/components/schemas/ConversationSummary'
+        "404":
+          description: Không tìm thấy conversation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/accounts/{accountId}/monitor/conversations/{conversationId}/messages:
+    get:
+      tags: [Monitor]
+      summary: |
+        Lấy lịch sử messages của một conversation.
+        Hỗ trợ cả from/to range sync và before/after classic.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: conversationId, in: path, required: true, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string }, description: "ISO 8601. Dùng cùng to cho range sync" }
+        - { name: to, in: query, schema: { type: string }, description: "ISO 8601. Dùng cùng from cho range sync" }
+        - { name: before, in: query, schema: { type: string }, description: "Lấy messages cũ hơn timestamp này" }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Messages của conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accountId: { type: string }
+                  conversationId: { type: string }
+                  items: { type: array, items: { $ref: '#/components/schemas/Message' } }
+                  nextCursor: { type: string, nullable: true }
+
+  # =========================================================================
+  # MY ACCOUNTS (auth + membership based)
+  # =========================================================================
+  /api/me/accounts:
+    get:
+      tags: [Monitor]
+      summary: |
+        Danh sách accounts mà user hiện tại được phép truy cập.
+        Agent dùng endpoint này để khám phá account scope.
+      responses:
+        "200":
+          description: Danh sách accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MyAccount'
+
+  # =========================================================================
+  # ADMIN
+  # =========================================================================
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      summary: Danh sách system users (admin/super_admin only)
+      responses:
+        "200":
+          description: Danh sách users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminUser'
+
+    post:
+      tags: [Admin]
+      summary: Tạo system user mới (admin/super_admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        "200":
+          description: Tạo thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: string }
+
+  /api/admin/users/{userId}:
+    put:
+      tags: [Admin]
+      summary: Cập nhật system user
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+    delete:
+      tags: [Admin]
+      summary: Xóa system user
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /api/admin/accounts/all:
+    get:
+      tags: [Admin]
+      summary: Tất cả Zalo accounts với master info (admin/super_admin only)
+      responses:
+        "200":
+          description: Danh sách accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminAccount'
+
+  /api/admin/accounts/{accountId}/members:
+    post:
+      tags: [Admin]
+      summary: Thêm user vào account (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddMemberRequest'
+      responses:
+        "200": { description: Thêm thành công }
+
+  /api/admin/accounts/{accountId}/members/{userId}:
+    put:
+      tags: [Admin]
+      summary: Cập nhật role của member (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMemberRequest'
+      responses:
+        "200": { description: Cập nhật thành công }
+    delete:
+      tags: [Admin]
+      summary: Xóa member khỏi account (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /api/admin/accounts/{accountId}/transfer:
+    put:
+      tags: [Admin]
+      summary: Chuyển quyền master cho user khác (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        "200": { description: Chuyển quyền thành công }
+
+  /api/admin/accounts/{accountId}/reconnect:
+    post:
+      tags: [Admin]
+      summary: Kích hoạt QR login lại cho account (member of account)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Reconnect bắt đầu
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started: { type: boolean }
+
+  /api/admin/accounts/{accountId}/reconnect/qr:
+    get:
+      tags: [Admin]
+      summary: Lấy QR code reconnect hiện tại
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  qrCode: { type: string, nullable: true }
+                  ready: { type: boolean }
+
+  /api/admin/accounts/{accountId}:
+    put:
+      tags: [Admin]
+      summary: Cập nhật alias account (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hubAlias: { type: string }
+      responses:
+        "200": { description: Cập nhật thành công }
+    delete:
+      tags: [Admin]
+      summary: Xóa Zalo account (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /api/admin/accounts/{accountId}/logout:
+    post:
+      tags: [Admin]
+      summary: Force logout Zalo account (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /api/admin/accounts/{accountId}/sync-profile:
+    post:
+      tags: [Admin]
+      summary: Đồng bộ profile từ Zalo API (master only)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Sync thành công
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncProfileResponse'
+
+  /api/me/accounts/{accountId}/visible:
+    put:
+      tags: [Admin]
+      summary: Ẩn/hiện account trong sidebar (cá nhân)
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visible: { type: boolean }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  visible: { type: boolean }
+
+  # =========================================================================
+  # MEDIA
+  # =========================================================================
+  /media/{*path}:
+    get:
+      tags: [Media]
+      summary: Stream media file từ MinIO
+      security: []
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema: { type: string }
+          description: "Object path trong MinIO bucket"
+      responses:
+        "200":
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string, format: binary
+        "404":
+          description: File không tồn tại
