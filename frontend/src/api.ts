@@ -282,4 +282,10 @@ export const api = {
       method: 'POST',
       body: '{}',
     }),
+
+  // Dify Bots
+  adminBots: () => req<{ bots: Array<any> }>('/api/admin/bots'),
+  adminBotCreate: (data: any) => req<any>('/api/admin/bots', { method: 'POST', body: JSON.stringify(data) }),
+  adminBotUpdate: (id: string, data: any) => req<any>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  adminBotDelete: (id: string) => req<{ ok: boolean }>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

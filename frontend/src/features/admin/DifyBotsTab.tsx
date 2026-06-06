@@ -48,7 +48,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
 
   const loadBots = async () => {
     try {
-      const data = await api.req('/api/admin/bots') as { bots: DifyBot[] };
+      const data = await api.adminBots();
       setBots(data.bots);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load bots');
@@ -107,10 +107,10 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
         filter_keywords: formKeywords.split(',').map((k) => k.trim()).filter(Boolean),
       };
       if (editingBot) {
-        await api.req(`/api/admin/bots/${editingBot.id}`, { method: 'PUT', body: payload });
+        await api.adminBotUpdate(editingBot.id, payload);
         setStatus('Đã cập nhật bot');
       } else {
-        await api.req('/api/admin/bots', { method: 'POST', body: payload });
+        await api.adminBotCreate(payload);
         setStatus('Đã tạo bot mới');
       }
       resetForm();
@@ -126,7 +126,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Xóa bot "${name}"?`)) return;
     try {
-      await api.req(`/api/admin/bots/${id}`, { method: 'DELETE' });
+      await api.adminBotDelete(id);
       setStatus(`Đã xóa bot "${name}"`);
       loadBots();
     } catch (err) {
@@ -136,7 +136,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
 
   const handleToggleEnabled = async (bot: DifyBot) => {
     try {
-      await api.req(`/api/admin/bots/${bot.id}`, { method: 'PUT', body: { enabled: !bot.enabled } });
+      await api.adminBotUpdate(bot.id, { enabled: !bot.enabled });
       setBots(bots.map((b) => (b.id === bot.id ? { ...b, enabled: !b.enabled } : b)));
       setStatus(`Bot "${bot.name}" đã ${!bot.enabled ? 'bật' : 'tắt'}`);
     } catch (err) {
