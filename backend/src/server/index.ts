@@ -116,11 +116,11 @@ async function main() {
 
   app.use('/api', createSystemRouter(logger, accountManager, () => loginPromise));
 
-  const swaggerSpec = YAML.parse(fs.readFileSync(path.resolve(__dirname, '../../docs/api/openapi.yaml'), 'utf8'));
+  const swaggerSpec = YAML.parse(fs.readFileSync(path.resolve(__dirname, '../../../docs/api/openapi.yaml'), 'utf8'));
   app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.get('/api-docs.yaml', (_req, res) => {
     res.setHeader('Content-Type', 'text/yaml');
-    res.sendFile(path.resolve(__dirname, '../../docs/api/openapi.yaml'));
+    res.sendFile(path.resolve(__dirname, '../../../docs/api/openapi.yaml'));
   });
 
   app.use('/api', createAuthRouter(logger, loginRuntime, knex, accountManager, broadcast, () => loginPromise, (p) => { loginPromise = p; }, getEmptyStatus));
