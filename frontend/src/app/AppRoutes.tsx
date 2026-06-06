@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import LoginPage from '../pages/LoginPage';
-import AdminPage from '../pages/AdminPage';
-import { AuthGuard } from '../components/AuthGuard';
+import LoginPage from '../features/auth/components/LoginPage';
+import AdminPage from '../features/admin/AdminPage';
+import { AuthGuard } from '../features/auth/components/AuthGuard';
 import { useMobileRouteRedirect } from './useMobileRouteRedirect';
 import { DashboardPage } from '../features/chat/DashboardPage';
 

@@ -19,6 +19,9 @@ import { GoldRuntime } from '../core/runtime.js';
 import { GoldStore } from '../core/store.js';
 import { Client as MinioClient } from 'minio';
 import { AccountRuntimeManager } from './account-manager.js';
+import { DifyBotService } from './services/dify-bot-service.js';
+import { DifyBotExecutor } from './services/dify-bot-executor.js';
+import { createDifyBotsRouter } from './routes/dify-bots.js';
 import { createWsHandler } from './ws/handler.js';
 import { createSystemRouter } from './routes/system.js';
 import { createAuthRouter } from './routes/auth.js';
@@ -55,6 +58,9 @@ async function main() {
   const loginStore = new GoldStore(knex);
   const loginRuntime = new GoldRuntime(loginStore, logger);
   const accountManager = new AccountRuntimeManager(logger, knex);
+  const difyBotService = new DifyBotService(knex, logger);
+  const difyBotExecutor = new DifyBotExecutor(difyBotService, logger);
+  accountManager.setDifyBotExecutor(difyBotExecutor);
   const app = express();
   const port = Number(process.env.GOLD2_PORT ?? 3399);
   const server = createServer(app);
@@ -124,6 +130,7 @@ async function main() {
   app.use('/api/accounts', createMonitorRouter(logger, loginStore, accountManager, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
+  app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
 
   server.listen(port, '0.0.0.0', async () => {
     console.log(`zalohub-backend running at http://localhost:${port}`);

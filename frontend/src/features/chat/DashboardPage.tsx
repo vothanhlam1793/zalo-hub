@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
-import { MiniSidebar } from '../../components/MiniSidebar';
-import { Sidebar } from '../../components/Sidebar';
-import { ChatPanel } from '../../components/ChatPanel';
-import { ConversationDetailsPanel } from '../../components/ConversationDetailsPanel';
-import type { Contact, Group } from '../../types';
-
-type DashboardState = ReturnType<typeof import('../../App').useDashboardState>;
+import { MiniSidebar } from './components/MiniSidebar';
+import { Sidebar } from './components/Sidebar';
+import { ChatPanel } from './components/ChatPanel';
+import { ConversationDetailsPanel } from './components/ConversationDetailsPanel';
+import type { Contact, Group } from '@/types';
+import type { DashboardState } from './useDashboardState';
+import { useDashboardState } from './useDashboardState';
 
 function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
   const {
@@ -284,6 +284,6 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
 }
 
 export function DashboardPage({ mobileMode, dashboard }: { mobileMode: boolean; dashboard?: DashboardState }) {
-  const resolvedDashboard = dashboard ?? require('../../App').useDashboardState();
+  const resolvedDashboard = dashboard ?? useDashboardState();
   return mobileMode ? <MobileDashboardPage dashboard={resolvedDashboard} /> : <DesktopDashboardPage dashboard={resolvedDashboard} />;
 }

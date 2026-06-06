@@ -3,6 +3,7 @@ import { GoldRuntime } from '../core/runtime.js';
 import { GoldStore } from '../core/store.js';
 import type { Knex } from 'knex';
 import type { GoldAccountRecord, GoldConversationMessage } from '../core/types.js';
+import type { DifyBotExecutor } from './services/dify-bot-executor.js';
 
 export type AccountMessageEvent = {
   accountId: string;
@@ -14,6 +15,7 @@ export class AccountRuntimeManager {
   private readonly runtimes = new Map<string, GoldRuntime>();
   private readonly runtimeStartPromises = new Map<string, Promise<GoldRuntime>>();
   private readonly messageListeners = new Set<(event: AccountMessageEvent) => void>();
+  private difyBotExecutor?: DifyBotExecutor;
   private readonly watchdogCooldownUntil = new Map<string, number>();
   private readonly lastRecoveryState = new Map<string, {
     at: string;
@@ -34,6 +36,10 @@ export class AccountRuntimeManager {
 
   setBroadcast(fn: (payload: Record<string, unknown>) => void) {
     this.broadcast = fn;
+  }
+
+  setDifyBotExecutor(executor: DifyBotExecutor) {
+    this.difyBotExecutor = executor;
   }
 
   async listAccounts(): Promise<GoldAccountRecord[]> {
@@ -126,6 +132,13 @@ export class AccountRuntimeManager {
           listener({ accountId: normalizedAccountId, message });
         }
       });
+
+      // Attach Dify bot executor
+      if (this.difyBotExecutor) {
+        this.difyBotExecutor.attachToRuntime(normalizedAccountId, runtime);
+        this.logger.info('dify_bot_executor_attached', { accountId: normalizedAccountId });
+      }
+
       await runtime.startBoundAccount();
       this.runtimes.set(normalizedAccountId, runtime);
       this.logger.info('account_runtime_ready', { accountId: normalizedAccountId });
