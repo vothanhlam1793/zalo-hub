@@ -46,7 +46,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex w-full min-h-screen min-h-dvh overflow-hidden">
+      <div className="flex w-full h-dvh overflow-hidden">
         <MiniSidebar
           accounts={sidebarAccounts}
           selectedAccountId={workspace.selectedAccountId}
@@ -176,9 +176,9 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex w-full min-h-screen min-h-dvh bg-[var(--background)]">
+      <div className="flex w-full h-dvh bg-[var(--background)]">
         {screen === 'list' && (
-          <div className="flex min-h-screen min-h-dvh w-full flex-col">
+          <div className="flex h-dvh w-full flex-col">
             <div className="border-b border-[var(--border)] bg-[rgba(9,12,18,0.96)] px-3 py-3 backdrop-blur">
               <div className="flex items-center gap-2">
                 <Button type="button" variant="ghost" size="sm" className="h-9 px-3 text-xs" onClick={() => navigate('/admin')}>
@@ -231,7 +231,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
         )}
 
         {screen === 'chat' && (
-          <div className="relative flex min-h-screen min-h-dvh w-full flex-col overflow-hidden">
+          <div className="relative flex h-dvh w-full flex-col overflow-hidden">
             <ChatPanel
               activeConversationId={chat.activeConversationId}
               activeConversation={activeConversation}
