@@ -116,11 +116,26 @@ async function main() {
 
   app.use('/api', createSystemRouter(logger, accountManager, () => loginPromise));
 
-  const swaggerSpec = YAML.parse(fs.readFileSync(path.resolve(__dirname, '../../../docs/api/openapi.yaml'), 'utf8'));
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  let swaggerSpec: object | undefined;
+  try {
+    const yamlPath = path.resolve(__dirname, '../../../docs/api/openapi.yaml');
+    if (fs.existsSync(yamlPath)) {
+      swaggerSpec = YAML.parse(fs.readFileSync(yamlPath, 'utf8'));
+    }
+  } catch (err) {
+    console.error('Failed to load OpenAPI spec:', err instanceof Error ? err.message : String(err));
+  }
+  if (swaggerSpec) {
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  }
   app.get('/api-docs.yaml', (_req, res) => {
-    res.setHeader('Content-Type', 'text/yaml');
-    res.sendFile(path.resolve(__dirname, '../../../docs/api/openapi.yaml'));
+    const yamlPath = path.resolve(__dirname, '../../../docs/api/openapi.yaml');
+    if (fs.existsSync(yamlPath)) {
+      res.setHeader('Content-Type', 'text/yaml');
+      res.sendFile(yamlPath);
+    } else {
+      res.status(404).json({ error: 'API docs not available' });
+    }
   });
 
   app.use('/api', createAuthRouter(logger, loginRuntime, knex, accountManager, broadcast, () => loginPromise, (p) => { loginPromise = p; }, getEmptyStatus));

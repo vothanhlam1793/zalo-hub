@@ -1354,6 +1354,7 @@ paths:
           content:
             application/octet-stream:
               schema:
-                type: string, format: binary
+                type: string
+                format: binary
         "404":
           description: File không tồn tại
