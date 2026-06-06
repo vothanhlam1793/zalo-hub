@@ -175,7 +175,9 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
                 <div>
                   <CardTitle className="text-sm text-[#eee]">{bot.name}</CardTitle>
                   <p className="text-[11px] text-muted-foreground">
-                    {account ? `${account.displayName || account.accountId}` : bot.account_id}
+                    {account
+                      ? `${account.hubAlias || account.displayName || account.accountId}${account.phoneNumber ? ` — ${account.phoneNumber}` : ''}`
+                      : bot.account_id}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -248,7 +250,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
                   <SelectContent>
                     {accounts.map((acc) => (
                       <SelectItem key={acc.accountId} value={acc.accountId} className="text-xs">
-                        {acc.displayName || acc.accountId}
+                        {acc.hubAlias || acc.displayName || acc.accountId}{acc.phoneNumber ? ` — ${acc.phoneNumber}` : ''}
                       </SelectItem>
                     ))}
                   </SelectContent>
