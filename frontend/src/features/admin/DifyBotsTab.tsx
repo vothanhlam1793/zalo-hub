@@ -17,6 +17,7 @@ interface DifyBot {
   name: string;
   dify_api_key: string;
   dify_webhook_url: string;
+  bot_token: string;
   enabled: boolean;
   filter_mode: 'all' | 'keywords' | 'mention';
   filter_keywords: string[];
@@ -193,6 +194,12 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
               <CardContent>
                 <div className="grid grid-cols-1 gap-1.5 text-[11px] text-muted-foreground">
                   <p>Webhook: <span className="text-[#aaa] font-mono text-[10px]">{bot.dify_webhook_url}</span></p>
+                  <p>Token: <code className="text-[#aaa] font-mono text-[10px] select-all">{bot.bot_token}</code>
+                    <Button variant="ghost" size="sm" className="text-[10px] h-5 px-1 ml-1"
+                      onClick={() => { navigator.clipboard.writeText(bot.bot_token); setStatus('Đã copy token'); }}>
+                      📋
+                    </Button>
+                  </p>
                   <p>Filter: <Badge variant="outline" className="text-[10px]">{bot.filter_mode}</Badge>
                     {bot.filter_keywords && bot.filter_keywords.length > 0 && (
                       <span className="ml-1">— {bot.filter_keywords.join(', ')}</span>

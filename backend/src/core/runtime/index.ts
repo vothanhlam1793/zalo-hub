@@ -373,6 +373,14 @@ export class GoldRuntime {
     return this.auth.loginWithStoredCredential();
   }
 
+  async listContacts() {
+    return this.state.store.listContactsByAccount(this.state.boundAccountId);
+  }
+
+  async listConversations() {
+    return this.sync.getConversationSummaries();
+  }
+
   async startBoundAccount() {
     return this.auth.startBoundAccount();
   }

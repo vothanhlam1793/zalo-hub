@@ -22,6 +22,7 @@ import { AccountRuntimeManager } from './account-manager.js';
 import { DifyBotService } from './services/dify-bot-service.js';
 import { DifyBotExecutor } from './services/dify-bot-executor.js';
 import { createDifyBotsRouter } from './routes/dify-bots.js';
+import { createBotApiRouter } from './routes/bot-api.js';
 import { createWsHandler } from './ws/handler.js';
 import { createSystemRouter } from './routes/system.js';
 import { createAuthRouter } from './routes/auth.js';
@@ -146,6 +147,7 @@ async function main() {
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
   app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
+  app.use('/api/bot', createBotApiRouter(accountManager, difyBotService));
 
   server.listen(port, '0.0.0.0', async () => {
     console.log(`zalohub-backend running at http://localhost:${port}`);

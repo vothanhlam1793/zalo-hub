@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import crypto from 'crypto';
 import type { GoldLogger } from '../../core/logger.js';
 
 export interface DifyBotConfig {
@@ -7,6 +8,7 @@ export interface DifyBotConfig {
   name: string;
   dify_api_key: string;
   dify_webhook_url: string;
+  bot_token: string;
   enabled: boolean;
   filter_mode: 'all' | 'keywords' | 'mention';
   filter_keywords: string[];
@@ -36,8 +38,18 @@ export class DifyBotService {
       .where('enabled', true);
   }
 
-  async createBot(data: Omit<DifyBotConfig, 'id' | 'created_at' | 'updated_at'>): Promise<DifyBotConfig> {
-    const [bot] = await this.knex<DifyBotConfig>('dify_bots').insert(data).returning('*');
+  async findByToken(token: string): Promise<DifyBotConfig | undefined> {
+    return this.knex<DifyBotConfig>('dify_bots')
+      .where('bot_token', token)
+      .where('enabled', true)
+      .first();
+  }
+
+  async createBot(data: Omit<DifyBotConfig, 'id' | 'created_at' | 'updated_at' | 'bot_token'>): Promise<DifyBotConfig> {
+    const bot_token = 'zhb_' + crypto.randomBytes(24).toString('base64url');
+    const [bot] = await this.knex<DifyBotConfig>('dify_bots')
+      .insert({ ...data, bot_token })
+      .returning('*');
     return bot;
   }
 

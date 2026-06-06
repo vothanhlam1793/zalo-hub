@@ -1,0 +1,77 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ZaloHub Bot API",
+    "version": "1.0.0",
+    "description": "API cho Dify bot giao tiếp với tài khoản Zalo qua ZaloHub"
+  },
+  "servers": [
+    { "url": "https://hub.besen.vn/api/bot", "description": "ZaloHub Production" }
+  ],
+  "security": [{ "bearerAuth": [] }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "description": "Bot token từ ZaloHub (dạng zhb_xxx). Lấy trong Admin Panel → Dify Bots → chọn bot." }
+    }
+  },
+  "paths": {
+    "/send-message": {
+      "post": {
+        "summary": "Gửi tin nhắn Zalo",
+        "operationId": "sendMessage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": { "type": "string", "description": "ID cuộc hội thoại (có từ webhook trigger)" },
+                  "text": { "type": "string", "description": "Nội dung tin nhắn" }
+                },
+                "required": ["conversationId", "text"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Gửi thành công", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" }, "message": { "type": "object" }  } } } } },
+          "400": { "description": "Thiếu conversationId hoặc text" },
+          "401": { "description": "Token không hợp lệ" },
+          "503": { "description": "Tài khoản Zalo không online" }
+        }
+      }
+    },
+    "/conversations/{conversationId}/messages": {
+      "get": {
+        "summary": "Lấy tin nhắn trong cuộc hội thoại",
+        "operationId": "getMessages",
+        "parameters": [
+          { "name": "conversationId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "Danh sách tin nhắn", "content": { "application/json": { "schema": { "type": "object", "properties": { "conversationId": { "type": "string" }, "messages": { "type": "array" }, "count": { "type": "integer" } } } } } }
+        }
+      }
+    },
+    "/conversations": {
+      "get": {
+        "summary": "Lấy danh sách hội thoại",
+        "operationId": "listConversations",
+        "responses": {
+          "200": { "description": "Danh sách hội thoại", "content": { "application/json": { "schema": { "type": "object", "properties": { "conversations": { "type": "array" } } } } } }
+        }
+      }
+    },
+    "/contacts": {
+      "get": {
+        "summary": "Lấy danh sách liên hệ",
+        "operationId": "listContacts",
+        "responses": {
+          "200": { "description": "Danh sách liên hệ", "content": { "application/json": { "schema": { "type": "object", "properties": { "contacts": { "type": "array" } } } } } }
+        }
+      }
+    }
+  }
+}
