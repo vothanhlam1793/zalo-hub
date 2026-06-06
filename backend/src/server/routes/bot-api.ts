@@ -22,13 +22,14 @@ export function createBotApiRouter(
       servers: [
         { url: `${process.env.PUBLIC_URL || 'https://hub.besen.vn'}/api/bot`, description: 'ZaloHub Production' },
       ],
-      security: [{ bearerAuth: [] }],
+      security: [{ ApiKeyAuth: [] }],
       components: {
         securitySchemes: {
-          bearerAuth: {
-            type: 'http',
-            scheme: 'bearer',
-            description: 'Bot token từ ZaloHub (dạng zhb_xxx). Lấy trong Admin Panel → Dify Bots.',
+          ApiKeyAuth: {
+            type: 'apiKey',
+            in: 'header',
+            name: 'X-Bot-Token',
+            description: 'Bot token từ ZaloHub (dạng zhb_xxx). Lấy trong Admin Panel → Dify Bots, paste vào đây khi import tool.',
           },
         },
       },

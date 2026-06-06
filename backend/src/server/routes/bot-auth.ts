@@ -12,13 +12,27 @@ declare global {
 
 export function createBotAuth(botService: DifyBotService) {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Missing or invalid Authorization header' });
+    let token: string | undefined;
+
+    // X-Bot-Token header (for Dify Custom Tool via apiKey auth)
+    const botToken = req.headers['x-bot-token'];
+    if (typeof botToken === 'string' && botToken.length > 0) {
+      token = botToken;
+    }
+
+    // Fallback: Authorization Bearer
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.slice(7);
+      }
+    }
+
+    if (!token) {
+      res.status(401).json({ error: 'Missing X-Bot-Token header' });
       return;
     }
 
-    const token = authHeader.slice(7);
     const bot = await botService.findByToken(token);
     if (!bot) {
       res.status(401).json({ error: 'Invalid bot token' });
