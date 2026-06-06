@@ -306,6 +306,19 @@ function AccountCard({
                 </Button>
               </>
             )}
+            {acc.hasSession && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-[10px] px-2 border-[rgba(255,255,255,0.1)] text-muted-foreground"
+                onClick={async () => {
+                  try { await api.restartAccount(acc.accountId); }
+                  catch { /* ignore */ }
+                }}
+              >
+                ↻ Restart
+              </Button>
+            )}
           </div>
           <p className="text-[11px] text-muted-foreground">{acc.phoneNumber || acc.accountId}</p>
 

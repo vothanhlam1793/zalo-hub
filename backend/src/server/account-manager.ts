@@ -59,6 +59,11 @@ export class AccountRuntimeManager {
     return this.runtimes.get(accountId);
   }
 
+  async restartRuntime(accountId: string): Promise<void> {
+    this.stopRuntime(accountId);
+    await this.ensureRuntime(accountId);
+  }
+
   hasRuntime(accountId: string) {
     return this.runtimes.has(accountId.trim());
   }
@@ -72,6 +77,10 @@ export class AccountRuntimeManager {
   }
 
   stopRuntime(accountId: string) {
+    const runtime = this.runtimes.get(accountId.trim());
+    if (runtime) {
+      try { runtime.closeMessageListener(); } catch { /* ignore */ }
+    }
     this.runtimes.delete(accountId.trim());
     this.runtimeStartPromises.delete(accountId.trim());
   }

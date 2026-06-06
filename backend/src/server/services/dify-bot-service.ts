@@ -6,7 +6,7 @@ export interface DifyBotConfig {
   id: string;
   account_id: string;
   name: string;
-  dify_api_key: string;
+  dify_api_key: string | null;
   dify_webhook_url: string;
   bot_token: string;
   enabled: boolean;
@@ -25,7 +25,11 @@ export class DifyBotService {
   async listBots(accountId?: string): Promise<DifyBotConfig[]> {
     let query = this.knex<DifyBotConfig>('dify_bots').orderBy('created_at', 'desc');
     if (accountId) query = query.where('account_id', accountId);
-    return query;
+    const rows = await query;
+    return rows.map(row => ({
+      ...row,
+      filter_keywords: Array.isArray(row.filter_keywords) ? row.filter_keywords : [],
+    }));
   }
 
   async getBot(id: string): Promise<DifyBotConfig | undefined> {
@@ -48,7 +52,7 @@ export class DifyBotService {
   async createBot(data: Omit<DifyBotConfig, 'id' | 'created_at' | 'updated_at' | 'bot_token'>): Promise<DifyBotConfig> {
     const bot_token = 'zhb_' + crypto.randomBytes(24).toString('base64url');
     const [bot] = await this.knex<DifyBotConfig>('dify_bots')
-      .insert({ ...data, bot_token })
+      .insert({ ...data, dify_api_key: data.dify_api_key || '', bot_token })
       .returning('*');
     return bot;
   }

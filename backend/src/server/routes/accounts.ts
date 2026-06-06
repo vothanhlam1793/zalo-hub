@@ -141,6 +141,19 @@ export function createAccountsRouter(
     })();
   });
 
+  // POST /api/accounts/:accountId/restart — restart account runtime (reattach Dify executor)
+  router.post('/:accountId/restart', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        await accountManager.restartRuntime(accountId);
+        res.json({ ok: true, message: 'Account restarted, Dify executor reattached' });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Restart failed' });
+      }
+    })();
+  });
+
   router.get('/:accountId/groups', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();

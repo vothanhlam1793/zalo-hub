@@ -86,12 +86,13 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
     setFormWebhookUrl(bot.dify_webhook_url);
     setFormEnabled(bot.enabled);
     setFormFilterMode(bot.filter_mode);
-    setFormKeywords((bot.filter_keywords ?? []).join(', '));
+    const keywords = Array.isArray(bot.filter_keywords) ? bot.filter_keywords : [];
+    setFormKeywords(keywords.join(', '));
     setShowForm(true);
   };
 
   const handleSubmit = async () => {
-    if (!formName.trim() || !formAccountId || !formApiKey.trim() || !formWebhookUrl.trim()) {
+    if (!formName.trim() || !formAccountId || !formWebhookUrl.trim()) {
       setError('Vui lòng điền đầy đủ các trường bắt buộc');
       return;
     }
@@ -201,7 +202,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
                     </Button>
                   </p>
                   <p>Filter: <Badge variant="outline" className="text-[10px]">{bot.filter_mode}</Badge>
-                    {bot.filter_keywords && bot.filter_keywords.length > 0 && (
+                    {Array.isArray(bot.filter_keywords) && bot.filter_keywords.length > 0 && (
                       <span className="ml-1">— {bot.filter_keywords.join(', ')}</span>
                     )}
                   </p>
@@ -266,7 +267,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
 
               {/* API Key */}
               <div className="space-y-1.5">
-                <Label className="text-[11px]">Dify API Key *</Label>
+                <Label className="text-[11px]">Dify API Key (tùy chọn — chỉ cần khi dùng API /v1/workflows/run)</Label>
                 <Input
                   value={formApiKey}
                   onChange={(e) => setFormApiKey(e.target.value)}

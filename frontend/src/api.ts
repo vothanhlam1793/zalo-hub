@@ -283,6 +283,11 @@ export const api = {
       body: '{}',
     }),
 
+  restartAccount: (accountId: string) =>
+    req<{ ok: boolean; message?: string }>(`/api/accounts/${encodeURIComponent(accountId)}/restart`, {
+      method: 'POST',
+    }),
+
   // Dify Bots
   adminBots: () => req<{ bots: Array<any> }>('/api/admin/bots'),
   adminBotCreate: (data: any) => req<any>('/api/admin/bots', { method: 'POST', body: JSON.stringify(data) }),

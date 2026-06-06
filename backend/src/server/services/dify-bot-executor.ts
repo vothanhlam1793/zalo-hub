@@ -44,12 +44,17 @@ export class DifyBotExecutor {
       try {
         this.logger.info('dify_bot_processing', { botId: bot.id, botName: bot.name, messageId: message.id });
 
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        // Only add Authorization if API key is configured (webhook triggers don't need it)
+        if (bot.dify_api_key) {
+          headers['Authorization'] = `Bearer ${bot.dify_api_key}`;
+        }
+
         const response = await fetch(bot.dify_webhook_url, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${bot.dify_api_key}`,
-          },
+          headers,
           body: JSON.stringify({
             text: message.text,
             sender_name: message.senderName ?? message.senderId ?? 'unknown',
