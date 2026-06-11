@@ -38,6 +38,12 @@ export class GoldSender {
       throw new Error('conversationId va text la bat buoc');
     }
 
+    // If Zalo listener flagged needsRelogin, attempt to refresh session before sending
+    if (this.state.listenerState.needsRelogin) {
+      this.state.logger.info('send_text_needs_relogin', { conversationId });
+      await this._loginWithStoredCredential?.();
+    }
+
     if (!this.state.session) {
       await this._loginWithStoredCredential?.();
     }
@@ -118,6 +124,12 @@ export class GoldSender {
     if (!conversationId) throw new Error('conversationId la bat buoc');
     if (!options.fileBuffer?.length) throw new Error('fileBuffer la bat buoc');
     if (!options.fileName.trim()) throw new Error('fileName la bat buoc');
+
+    // If Zalo listener flagged needsRelogin, attempt to refresh session before sending
+    if (this.state.listenerState.needsRelogin) {
+      this.state.logger.info('send_attachment_needs_relogin', { conversationId });
+      await this._loginWithStoredCredential?.();
+    }
 
     if (!this.state.session) {
       await this._loginWithStoredCredential?.();
