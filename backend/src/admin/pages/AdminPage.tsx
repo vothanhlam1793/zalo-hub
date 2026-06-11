@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuthStore } from "../stores/auth-store";
 import { MyAccountsTab } from "../components/MyAccountsTab";
+import DifyBotsTab from "../components/DifyBotsTab";
 
 export default function AdminPage() {
   const { user } = useAuthStore();
@@ -21,7 +22,8 @@ export default function AdminPage() {
           <a href="/api/admin/accounts/all" className="text-[11px] text-[#9fc0ff] hover:underline">API Accounts</a>
         </div>}
       </div>
-      <div className="max-w-3xl mx-auto p-6">
+      <div className="max-w-3xl mx-auto p-6 space-y-8">
+        <DifyBotsTab isSuperAdmin={isSuperAdmin} />
         <MyAccountsTab isSuperAdmin={isSuperAdmin} />
       </div>
     </div>

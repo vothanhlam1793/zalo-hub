@@ -234,6 +234,59 @@ export function createAdminRouter(
     }
   });
 
+  // ---- ACCOUNT ENTITIES (all conversations: groups + contacts + recent chats) ----
+  router.get('/admin/accounts/:id/entities', requireAuth, async (req: Request, res: Response) => {
+    const accountId = String(req.params.id).trim();
+    try {
+      const runtime = await accountManager?.ensureRuntime(accountId);
+      if (!runtime) {
+        res.status(404).json({ error: 'Khong tim thay runtime account' });
+        return;
+      }
+
+      const seen = new Set<string>();
+      const entities: Array<{ id: string; name: string; type: 'group' | 'contact' | 'conversation' }> = [];
+
+      try {
+        const groups = await runtime.listGroups();
+        for (const g of groups) {
+          const id = `group:${g.groupId}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const name = g.displayName || g.groupId || id;
+          if (id && name) entities.push({ id, name, type: 'group' });
+        }
+      } catch {}
+
+      try {
+        const contacts = await runtime.listContacts();
+        for (const c of contacts) {
+          const id = String(c.userId || c.id || '');
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          const name = c.displayName || c.userId || id;
+          if (id && name) entities.push({ id, name, type: 'contact' });
+        }
+      } catch {}
+
+      try {
+        const conversations = await runtime.listConversations();
+        for (const conv of conversations) {
+          const id = String(conv.id || conv.threadId || '');
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          const name = conv.title || id;
+          const type = id.startsWith('group:') ? 'group' as const : 'contact' as const;
+          if (id && name) entities.push({ id, name, type });
+        }
+      } catch {}
+
+      res.json({ accountId, entities });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Loi lay entities' });
+    }
+  });
+
   // ---- RECONNECT (authenticated, member of account) ----
   router.post('/admin/accounts/:id/reconnect', requireAuth, async (req: Request, res: Response) => {
     const userId = String((req as any).systemUserId ?? '');

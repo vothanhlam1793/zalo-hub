@@ -125,7 +125,7 @@ export class GoldSender {
 
     const api = this.state.session?.api;
     if (typeof api?.sendMessage !== 'function') {
-      throw new Error('Session khong ho tro sendMessage');
+      throw new Error('Session khong ho tro sendMessage (Vui long login lai bang Mat khau thay vi QR code)');
     }
 
     const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };

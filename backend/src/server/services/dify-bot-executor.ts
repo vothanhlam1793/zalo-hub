@@ -14,20 +14,13 @@ export class DifyBotExecutor {
     if (msg.isSelf) return false;
     if (msg.direction === 'outgoing') return false;
 
-    switch (bot.filter_mode) {
-      case 'all':
-        return true;
-      case 'keywords': {
-        const keywords: string[] = bot.filter_keywords ?? [];
-        if (keywords.length === 0) return false;
-        const lower = msg.text.toLowerCase();
-        return keywords.some((kw) => lower.includes(kw.toLowerCase()));
-      }
-      case 'mention':
-        return true;
-      default:
+    if (bot.receive_groups && bot.receive_groups.length > 0) {
+      if (!bot.receive_groups.includes(msg.conversationId)) {
         return false;
+      }
     }
+
+    return true;
   }
 
   async processMessage(

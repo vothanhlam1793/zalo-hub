@@ -293,4 +293,5 @@ export const api = {
   adminBotCreate: (data: any) => req<any>('/api/admin/bots', { method: 'POST', body: JSON.stringify(data) }),
   adminBotUpdate: (id: string, data: any) => req<any>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
   adminBotDelete: (id: string) => req<{ ok: boolean }>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  adminAccountEntities: (accountId: string) => req<{ accountId: string; entities: Array<{ id: string; name: string; type: 'group' | 'contact' | 'conversation' }> }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/entities`),
 };

@@ -147,7 +147,7 @@ async function main() {
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
   app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
-  app.use('/api/bot', createBotApiRouter(accountManager, difyBotService));
+  app.use('/api/bot', createBotApiRouter(accountManager, difyBotService, loginStore));
 
   server.listen(port, '0.0.0.0', async () => {
     console.log(`zalohub-backend running at http://localhost:${port}`);

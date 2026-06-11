@@ -1,11 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import type { AccountRuntimeManager } from '../account-manager.js';
+import type { GoldStore } from '../../core/store/index.js';
 import { createBotAuth } from './bot-auth.js';
 import type { DifyBotService } from '../services/dify-bot-service.js';
 
 export function createBotApiRouter(
   accountManager: AccountRuntimeManager,
   botService: DifyBotService,
+  store: GoldStore,
 ) {
   const router = Router();
   const botAuth = createBotAuth(botService);
@@ -86,6 +88,20 @@ export function createBotApiRouter(
             responses: { '200': { description: 'Danh sách liên hệ' } },
           },
         },
+        '/messages': {
+          get: {
+            summary: 'Lấy tất cả tin nhắn trong khoảng thời gian (không cần conversation ID)',
+            operationId: 'getMessagesByTimeRange',
+            parameters: [
+              { name: 'from', in: 'query', required: true, schema: { type: 'string' }, description: 'ISO 8601 start (e.g. 2026-06-08T00:00:00Z)' },
+              { name: 'to', in: 'query', required: true, schema: { type: 'string' }, description: 'ISO 8601 end (e.g. 2026-06-08T23:59:59Z)' },
+              { name: 'limit', in: 'query', schema: { type: 'integer', default: 200, maximum: 1000 } },
+              { name: 'cursor', in: 'query', schema: { type: 'string' }, description: 'Cursor cho pagination' },
+              { name: 'type', in: 'query', schema: { type: 'string', enum: ['direct', 'group'] }, description: 'Lọc theo loại hội thoại' },
+            ],
+            responses: { '200': { description: 'Danh sách tin nhắn kèm nextCursor' } },
+          },
+        },
       },
     });
   });
@@ -100,6 +116,16 @@ export function createBotApiRouter(
 
     if (!conversationId || !text) {
       res.status(400).json({ error: 'conversationId and text are required' });
+      return;
+    }
+
+    const sendGroups: string[] = (bot.send_groups && Array.isArray(bot.send_groups)) ? bot.send_groups : [];
+    if (sendGroups.length > 0 && !sendGroups.includes(conversationId)) {
+      res.status(403).json({
+        error: 'Bot khong duoc phep gui tin nhan vao group nay',
+        conversationId,
+        allowed_groups: sendGroups,
+      });
       return;
     }
 
@@ -171,6 +197,49 @@ export function createBotApiRouter(
       res.json({ contacts });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to list contacts' });
+    }
+  });
+
+  // GET /api/bot/messages — lấy tất cả tin nhắn trong khoảng thời gian (không cần biết conversation)
+  router.get('/messages', async (req: Request, res: Response) => {
+    const bot = req.difyBot!;
+    const accountId = bot.account_id;
+
+    const fromRaw = String(req.query.from ?? '').trim();
+    const toRaw = String(req.query.to ?? '').trim();
+    if (!fromRaw || !toRaw) {
+      res.status(400).json({ error: 'from and to are required (ISO 8601, e.g. 2026-06-08T00:00:00Z)' });
+      return;
+    }
+
+    const limitRaw = req.query.limit;
+    const limit: number = Math.min(Number(Array.isArray(limitRaw) ? limitRaw[0] : limitRaw) || 200, 1000);
+    const cursor = String(req.query.cursor ?? '').trim() || undefined;
+    const typeRaw = req.query.type;
+    const conversationType = (Array.isArray(typeRaw) ? typeRaw[0] : typeRaw) as 'direct' | 'group' | undefined;
+    const convIdRaw = req.query.conversationId;
+    const conversationId = (Array.isArray(convIdRaw) ? convIdRaw[0] : convIdRaw) as string | undefined;
+
+    try {
+      const result = await store.listMonitorMessagesByAccountAndRange(accountId, {
+        from: fromRaw,
+        to: toRaw,
+        limit,
+        cursor,
+        conversationType,
+        conversationId,
+      });
+
+      res.json({
+        accountId,
+        from: fromRaw,
+        to: toRaw,
+        messages: result.items,
+        count: result.items.length,
+        nextCursor: result.nextCursor,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to get messages' });
     }
   });
 

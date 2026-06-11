@@ -10,8 +10,8 @@ export interface DifyBotConfig {
   dify_webhook_url: string;
   bot_token: string;
   enabled: boolean;
-  filter_mode: 'all' | 'keywords' | 'mention';
-  filter_keywords: string[];
+  receive_groups?: string[];
+  send_groups?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -28,7 +28,8 @@ export class DifyBotService {
     const rows = await query;
     return rows.map(row => ({
       ...row,
-      filter_keywords: Array.isArray(row.filter_keywords) ? row.filter_keywords : [],
+      receive_groups: Array.isArray(row.receive_groups) ? row.receive_groups : [],
+      send_groups: Array.isArray(row.send_groups) ? row.send_groups : [],
     }));
   }
 
@@ -52,15 +53,27 @@ export class DifyBotService {
   async createBot(data: Omit<DifyBotConfig, 'id' | 'created_at' | 'updated_at' | 'bot_token'>): Promise<DifyBotConfig> {
     const bot_token = 'zhb_' + crypto.randomBytes(24).toString('base64url');
     const [bot] = await this.knex<DifyBotConfig>('dify_bots')
-      .insert({ ...data, dify_api_key: data.dify_api_key || '', bot_token })
+      .insert({
+        account_id: data.account_id,
+        name: data.name,
+        dify_api_key: data.dify_api_key || '',
+        dify_webhook_url: data.dify_webhook_url,
+        enabled: data.enabled ?? true,
+        bot_token,
+        receive_groups: this.knex.raw('?::jsonb', [JSON.stringify(data.receive_groups ?? [])]),
+        send_groups: this.knex.raw('?::jsonb', [JSON.stringify(data.send_groups ?? [])]),
+      })
       .returning('*');
     return bot;
   }
 
   async updateBot(id: string, data: Partial<Omit<DifyBotConfig, 'id' | 'created_at'>>): Promise<DifyBotConfig | undefined> {
+    const updateData: Record<string, unknown> = { ...data, updated_at: this.knex.fn.now() };
+    if (data.receive_groups !== undefined) updateData.receive_groups = this.knex.raw('?::jsonb', [JSON.stringify(data.receive_groups)]);
+    if (data.send_groups !== undefined) updateData.send_groups = this.knex.raw('?::jsonb', [JSON.stringify(data.send_groups)]);
     const [bot] = await this.knex<DifyBotConfig>('dify_bots')
       .where('id', id)
-      .update({ ...data, updated_at: this.knex.fn.now() })
+      .update(updateData as any)
       .returning('*');
     return bot;
   }
