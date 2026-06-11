@@ -398,82 +398,108 @@ export default function DifyBotsTab({ isSuperAdmin }: { isSuperAdmin: boolean })
       </div>
 
       {showForm && (
-        <Card className="mt-4 border border-[#1e293b] bg-[#0d1015]">
-          <CardHeader>
-            <CardTitle className="text-sm text-[#eee]">
-              {editingBot ? `Sửa bot: ${editingBot.name}` : "Tạo Bot Dify mới"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Tên bot *</Label>
-                <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="vd: CSKH Bot" className="text-xs h-8" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Tài khoản Zalo *</Label>
-                <Select value={formAccountId} onValueChange={handleAccountChange}>
-                  <SelectTrigger className="text-xs h-8"><SelectValue placeholder="Chọn tài khoản..." /></SelectTrigger>
-                  <SelectContent>
-                    {accounts.map((acc) => (
-                      <SelectItem key={acc.accountId} value={acc.accountId} className="text-xs">
-                        {acc.hubAlias || acc.displayName || acc.accountId}{acc.phoneNumber ? ` — ${acc.phoneNumber}` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Dify API Key (tùy chọn)</Label>
-                <Input value={formApiKey} onChange={(e) => setFormApiKey(e.target.value)} placeholder="app-xxxxx" type="password" className="text-xs h-8 font-mono" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Dify Webhook URL *</Label>
-                <Input value={formWebhookUrl} onChange={(e) => setFormWebhookUrl(e.target.value)} placeholder="https://dify.example.com/v1/webhook/..." className="text-xs h-8 font-mono" />
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => { resetForm(); setShowForm(false); }}>
+          <Card className="w-full max-w-lg max-h-[90vh] overflow-y-auto border border-[#1e293b] bg-[#0d1015] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <CardHeader>
+              <CardTitle className="text-sm text-[#eee]">
+                {editingBot ? `Sửa bot: ${editingBot.name}` : "Tạo Bot Dify mới"}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">Tên bot *</Label>
+                  <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="vd: CSKH Bot" className="text-xs h-8" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">Tài khoản Zalo *</Label>
+                  <Select value={formAccountId} onValueChange={handleAccountChange}>
+                    <SelectTrigger className="text-xs h-8"><SelectValue placeholder="Chọn tài khoản..." /></SelectTrigger>
+                    <SelectContent>
+                      {accounts.map((acc) => (
+                        <SelectItem key={acc.accountId} value={acc.accountId} className="text-xs">
+                          {acc.hubAlias || acc.displayName || acc.accountId}{acc.phoneNumber ? ` — ${acc.phoneNumber}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">Dify API Key (tùy chọn)</Label>
+                  <Input value={formApiKey} onChange={(e) => setFormApiKey(e.target.value)} placeholder="app-xxxxx" type="password" className="text-xs h-8 font-mono" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">Dify Webhook URL *</Label>
+                  <Input value={formWebhookUrl} onChange={(e) => setFormWebhookUrl(e.target.value)} placeholder="https://dify.example.com/v1/webhook/..." className="text-xs h-8 font-mono" />
+                </div>
 
-              <div className="space-y-1.5 md:col-span-2 border-t border-[#1e293b] pt-4 mt-2">
-                <Label className="text-[12px] text-[#fbbf24]">Conversation Whitelist</Label>
-                {!formAccountId && <p className="text-[10px] text-muted-foreground">Chọn tài khoản Zalo trước để tải danh sách group/contact.</p>}
-                {loadingEntities && <p className="text-[10px] text-muted-foreground">Đang tải danh sách...</p>}
-              </div>
+                <div className="space-y-1.5 md:col-span-2 border-t border-[#1e293b] pt-4 mt-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[12px] text-[#fbbf24]">Conversation Whitelist</Label>
+                    {formAccountId && !entitiesLoaded && !loadingEntities && (
+                      <Button variant="ghost" size="sm" className="text-[10px] h-6 text-[#fbbf24]" onClick={() => loadEntities(formAccountId)}>
+                        🔄 Tải lại
+                      </Button>
+                    )}
+                  </div>
+                  {!formAccountId && <p className="text-[10px] text-muted-foreground">Chọn tài khoản Zalo trước để tải danh sách group/contact.</p>}
+                  {loadingEntities && <p className="text-[10px] text-muted-foreground">Đang tải danh sách...</p>}
+                  {formAccountId && !loadingEntities && !entitiesLoaded && (
+                    <p className="text-[10px] text-[#ff8888]">Không tải được danh sách. Bấm "Tải lại" để thử.</p>
+                  )}
+                </div>
 
-              {entitiesLoaded && (
-                <>
-                  <div className="relative">
-                    <MultiSelectDropdown
-                      entities={entities}
-                      selectedIds={formReceiveGroups}
-                      onChange={setFormReceiveGroups}
-                      label="Receive Groups (chỉ nhận webhook từ)"
-                      placeholder="Để trống = tất cả group"
+                {entitiesLoaded && (
+                  <>
+                    <div className="relative">
+                      <MultiSelectDropdown
+                        entities={entities}
+                        selectedIds={formReceiveGroups}
+                        onChange={setFormReceiveGroups}
+                        label="Receive Groups (chỉ nhận webhook từ)"
+                        placeholder="Để trống = tất cả group"
+                      />
+                    </div>
+                    <div className="relative">
+                      <MultiSelectDropdown
+                        entities={entities}
+                        selectedIds={formSendGroups}
+                        onChange={setFormSendGroups}
+                        label="Send Groups (chỉ gửi reply vào)"
+                        placeholder="Để trống = tất cả group"
+                      />
+                    </div>
+                  </>
+                )}
+                {formAccountId && !entitiesLoaded && !loadingEntities && (
+                  <div className="md:col-span-2 space-y-1.5">
+                    <Label className="text-[10px] text-muted-foreground">Hoặc nhập trực tiếp Conversation ID (cách nhau bởi dấu phẩy):</Label>
+                    <Input
+                      placeholder="group:1533316465603451045, group:5204171834933792432"
+                      className="text-xs h-8 font-mono"
+                      onChange={(e) => {
+                        const ids = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                        setFormReceiveGroups(ids);
+                        setFormSendGroups(ids);
+                      }}
                     />
                   </div>
-                  <div className="relative">
-                    <MultiSelectDropdown
-                      entities={entities}
-                      selectedIds={formSendGroups}
-                      onChange={setFormSendGroups}
-                      label="Send Groups (chỉ gửi reply vào)"
-                      placeholder="Để trống = tất cả group"
-                    />
-                  </div>
-                </>
-              )}
+                )}
 
-              <div className="flex items-center gap-3 pt-6">
-                <Switch checked={formEnabled} onCheckedChange={setFormEnabled} />
-                <Label className="text-[11px]">{formEnabled ? "Đang bật" : "Đã tắt"}</Label>
+                <div className="flex items-center gap-3 pt-6">
+                  <Switch checked={formEnabled} onCheckedChange={setFormEnabled} />
+                  <Label className="text-[11px]">{formEnabled ? "Đang bật" : "Đã tắt"}</Label>
+                </div>
               </div>
-            </div>
-            <div className="flex gap-2 mt-6">
-              <Button size="sm" onClick={handleSubmit} disabled={saving} className="text-xs">
-                {saving ? "Đang lưu..." : editingBot ? "Cập nhật" : "Tạo Bot"}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => { resetForm(); setShowForm(false); }} className="text-xs">Hủy</Button>
-            </div>
-          </CardContent>
-        </Card>
+              <div className="flex gap-2 mt-6">
+                <Button size="sm" onClick={handleSubmit} disabled={saving} className="text-xs">
+                  {saving ? "Đang lưu..." : editingBot ? "Cập nhật" : "Tạo Bot"}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => { resetForm(); setShowForm(false); }} className="text-xs">Hủy</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
   );
