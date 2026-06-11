@@ -8,6 +8,12 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { api } from '@/api';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import type { AccountSummary } from '@/types';
 
 interface DifyBot {
@@ -447,114 +453,113 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
         })}
       </div>
 
-      {/* Form */}
-      {showForm && (
-        <Card className="mt-4 border border-[var(--border)] bg-[#0d1015]">
-          <CardHeader>
-            <CardTitle className="text-sm text-[#eee]">
+      {/* Form Modal */}
+      <Dialog open={showForm} onOpenChange={(open) => { if (!open) { resetForm(); setShowForm(false); } }}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto border-[var(--border)] bg-[#0d1015]">
+          <DialogHeader>
+            <DialogTitle className="text-sm text-[#eee]">
               {editingBot ? `Sửa bot: ${editingBot.name}` : 'Tạo Bot Dify mới'}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Tên bot *</Label>
-                <Input
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  placeholder="vd: CSKH Bot"
-                  className="text-xs h-8"
-                />
-              </div>
+            </DialogTitle>
+          </DialogHeader>
 
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Tài khoản Zalo *</Label>
-                <Select value={formAccountId} onValueChange={handleAccountChange}>
-                  <SelectTrigger className="text-xs h-8">
-                    <SelectValue placeholder="Chọn tài khoản..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {accounts.map((acc) => (
-                      <SelectItem key={acc.accountId} value={acc.accountId} className="text-xs">
-                        {acc.hubAlias || acc.displayName || acc.accountId}{acc.phoneNumber ? ` — ${acc.phoneNumber}` : ''}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Tên bot *</Label>
+              <Input
+                value={formName}
+                onChange={(e) => setFormName(e.target.value)}
+                placeholder="vd: CSKH Bot"
+                className="text-xs h-8"
+              />
+            </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Dify API Key (tùy chọn — chỉ cần khi dùng API /v1/workflows/run)</Label>
-                <Input
-                  value={formApiKey}
-                  onChange={(e) => setFormApiKey(e.target.value)}
-                  placeholder="app-xxxxx"
-                  type="password"
-                  className="text-xs h-8 font-mono"
-                />
-              </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Tài khoản Zalo *</Label>
+              <Select value={formAccountId} onValueChange={handleAccountChange}>
+                <SelectTrigger className="text-xs h-8">
+                  <SelectValue placeholder="Chọn tài khoản..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {accounts.map((acc) => (
+                    <SelectItem key={acc.accountId} value={acc.accountId} className="text-xs">
+                      {acc.hubAlias || acc.displayName || acc.accountId}{acc.phoneNumber ? ` — ${acc.phoneNumber}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-[11px]">Dify Webhook URL *</Label>
-                <Input
-                  value={formWebhookUrl}
-                  onChange={(e) => setFormWebhookUrl(e.target.value)}
-                  placeholder="https://dify.example.com/v1/webhook/..."
-                  className="text-xs h-8 font-mono"
-                />
-              </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Dify API Key (tùy chọn — chỉ cần khi dùng API /v1/workflows/run)</Label>
+              <Input
+                value={formApiKey}
+                onChange={(e) => setFormApiKey(e.target.value)}
+                placeholder="app-xxxxx"
+                type="password"
+                className="text-xs h-8 font-mono"
+              />
+            </div>
 
-              {/* Group Whitelist */}
-              <div className="space-y-1.5 md:col-span-2 border-t border-[var(--border)] pt-4 mt-2">
-                <Label className="text-[12px] text-[#fbbf24]">Conversation Whitelist</Label>
-                {!formAccountId && (
-                  <p className="text-[10px] text-muted-foreground">Chọn tài khoản Zalo trước để tải danh sách group/contact.</p>
-                )}
-                {loadingEntities && (
-                  <p className="text-[10px] text-muted-foreground">Đang tải danh sách...</p>
-                )}
-              </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Dify Webhook URL *</Label>
+              <Input
+                value={formWebhookUrl}
+                onChange={(e) => setFormWebhookUrl(e.target.value)}
+                placeholder="https://dify.example.com/v1/webhook/..."
+                className="text-xs h-8 font-mono"
+              />
+            </div>
 
-              {entitiesLoaded && (
-                <>
-                  <div className="relative">
-                    <MultiSelectDropdown
-                      entities={entities}
-                      selectedIds={formReceiveGroups}
-                      onChange={setFormReceiveGroups}
-                      label="Receive Groups (chỉ nhận webhook từ các group này)"
-                      placeholder="Để trống = tất cả group"
-                    />
-                  </div>
-                  <div className="relative">
-                    <MultiSelectDropdown
-                      entities={entities}
-                      selectedIds={formSendGroups}
-                      onChange={setFormSendGroups}
-                      label="Send Groups (chỉ gửi reply vào các group này)"
-                      placeholder="Để trống = tất cả group"
-                    />
-                  </div>
-                </>
+            {/* Group Whitelist */}
+            <div className="space-y-1.5 md:col-span-2 border-t border-[var(--border)] pt-4 mt-2">
+              <Label className="text-[12px] text-[#fbbf24]">Conversation Whitelist</Label>
+              {!formAccountId && (
+                <p className="text-[10px] text-muted-foreground">Chọn tài khoản Zalo trước để tải danh sách group/contact.</p>
               )}
-
-              <div className="flex items-center gap-3 pt-6">
-                <Switch checked={formEnabled} onCheckedChange={setFormEnabled} />
-                <Label className="text-[11px]">{formEnabled ? 'Đang bật' : 'Đã tắt'}</Label>
-              </div>
+              {loadingEntities && (
+                <p className="text-[10px] text-muted-foreground">Đang tải danh sách...</p>
+              )}
             </div>
 
-            <div className="flex gap-2 mt-6">
-              <Button size="sm" onClick={handleSubmit} disabled={saving} className="text-xs">
-                {saving ? 'Đang lưu...' : editingBot ? 'Cập nhật' : 'Tạo Bot'}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => { resetForm(); setShowForm(false); }} className="text-xs">
-                Hủy
-              </Button>
+            {entitiesLoaded && (
+              <>
+                <div className="relative">
+                  <MultiSelectDropdown
+                    entities={entities}
+                    selectedIds={formReceiveGroups}
+                    onChange={setFormReceiveGroups}
+                    label="Receive Groups (chỉ nhận webhook từ các group này)"
+                    placeholder="Để trống = tất cả group"
+                  />
+                </div>
+                <div className="relative">
+                  <MultiSelectDropdown
+                    entities={entities}
+                    selectedIds={formSendGroups}
+                    onChange={setFormSendGroups}
+                    label="Send Groups (chỉ gửi reply vào các group này)"
+                    placeholder="Để trống = tất cả group"
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="flex items-center gap-3 pt-6">
+              <Switch checked={formEnabled} onCheckedChange={setFormEnabled} />
+              <Label className="text-[11px]">{formEnabled ? 'Đang bật' : 'Đã tắt'}</Label>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+
+          <div className="flex gap-2 mt-6">
+            <Button size="sm" onClick={handleSubmit} disabled={saving} className="text-xs">
+              {saving ? 'Đang lưu...' : editingBot ? 'Cập nhật' : 'Tạo Bot'}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => { resetForm(); setShowForm(false); }} className="text-xs">
+              Hủy
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
