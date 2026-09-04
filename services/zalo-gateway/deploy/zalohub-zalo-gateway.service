@@ -1,0 +1,14 @@
+[Unit]
+Description=ZaloHub Zalo Gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/zalohub
+EnvironmentFile=/etc/zalohub/zalo-gateway.env
+ExecStart=/usr/bin/npm run start --workspace=@zalohub/zalo-gateway
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

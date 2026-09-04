@@ -1,17 +1,14 @@
 # Plan
 
 ## Objective
-Define and approve the target architecture for three independently deployable services before source migration.
+Execute the approved three-service reorganization through verified, incremental extraction phases.
 
 ## In Scope
-- Service responsibilities and ownership boundaries.
-- Database/schema ownership.
-- Internal HTTP and event contracts.
-- Deployment topology and health checks.
-- Incremental migration phases.
+- Phase 1 service workspace, contracts, independent health checks, and deployment foundations.
+- Detailed extraction maps and cutover controls for later phases.
 
 ## Out of Scope
-- Full source migration before approval.
+- Extracting Zalo runtime source before Phase 1 verification.
 - Rewriting stable Zalo runtime behavior.
 - Introducing a message broker before a concrete scaling need is validated.
 
@@ -24,7 +21,7 @@ Define and approve the target architecture for three independently deployable se
 - `frontend/src/features/`
 
 ## Proposed Approach
-Create an independently deployable Zalo Gateway first, then adapt the Management API and Web Platform through authenticated internal APIs and event contracts. Use a shared PostgreSQL instance with service-owned schemas during the first milestone.
+Start with the service foundation, then extract Zalo Gateway, Management API, and Web Platform in that order. Use a shared PostgreSQL instance with service-owned schemas during the first milestone.
 
 ## Risks
 - Splitting the runtime before contract coverage may cause account session regressions.
@@ -32,12 +29,10 @@ Create an independently deployable Zalo Gateway first, then adapt the Management
 - Browser-facing access to the Zalo Gateway would bypass management authorization.
 
 ## Steps
-1. Approve the proposed service topology and ownership boundaries.
-2. Define service-to-service authentication and contract versioning.
-3. Create service workspaces, schema boundaries, health endpoints, and deployment definitions.
-4. Extract Zalo runtime and persistence behind the Gateway contract.
-5. Adapt Management API, BFF, and Web Platform.
-6. Verify independent builds, starts, health checks, and preserved workflows.
+1. Approve the exact migration plan.
+2. Execute and verify Phase 1 only.
+3. Approve Phase 2 extraction after Phase 1 report.
+4. Continue sequentially through later phases.
 
 ## Verification Plan
 - Build and start every service independently.
@@ -45,5 +40,4 @@ Create an independently deployable Zalo Gateway first, then adapt the Management
 - Run account onboarding, account administration, and chat smoke flows.
 
 ## Approval Needed
-- Approval of `reorg/proposal.md`.
-- Service-to-service authentication selection.
+- Approval of `reorg/migration_plan.md` and Phase 1 execution.

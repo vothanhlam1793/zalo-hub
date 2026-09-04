@@ -1,18 +1,20 @@
 # Handoff
 
 ## Current State
-The independent-service direction is confirmed. The repository has been checkpointed on branch `chore/platform-reorg-baseline` at commit `bed2343`.
+The independent-service direction and signed internal JWT approach are confirmed. The implementation branch is `feat/independent-services-foundation`, created from checkpoint `bed2343`.
 
 ## Completed
 - Reviewed the existing backend, BFF, frontend, deployment files, and current worktree.
 - Created a Git checkpoint before reorganization.
 - Confirmed the first milestone: independently runnable service framework.
 - Confirmed that services should be independent from the start.
+- Created and committed the independent-service architecture proposal at `b233c0f`.
+- Produced `reorg/migration_plan.md` for phased extraction.
+- Completed and verified Phase 1 service workspace, contract, health, and internal JWT foundation.
 
 ## Pending
-- Approve the three-service proposal.
-- Produce an exact migration plan with file moves, compatibility adapters, schemas, and deployment changes.
-- Execute the extraction in incremental checkpoints.
+- Commit the verified Phase 1 foundation.
+- Approve Phase 2 Zalo Gateway extraction.
 
 ## Recommended Next Skill
 - gold-sprint (REORG)
@@ -21,7 +23,8 @@ The independent-service direction is confirmed. The repository has been checkpoi
 - workflow/brief.md
 - workflow/repo_assessment.md
 - reorg/proposal.md
+- reorg/migration_plan.md
+- reorg/verification.md
 
 ## Open Questions
-- Choose service-to-service authentication: mTLS, signed internal JWT, or network-isolated static credentials.
 - Confirm whether message retention/deletion policy must be included in the first milestone.

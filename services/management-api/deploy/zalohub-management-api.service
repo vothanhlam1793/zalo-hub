@@ -1,0 +1,14 @@
+[Unit]
+Description=ZaloHub Management API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/zalohub
+EnvironmentFile=/etc/zalohub/management-api.env
+ExecStart=/usr/bin/npm run start --workspace=@zalohub/management-api
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

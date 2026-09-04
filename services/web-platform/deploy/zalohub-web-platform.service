@@ -1,0 +1,14 @@
+[Unit]
+Description=ZaloHub Web Platform
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/zalohub
+EnvironmentFile=/etc/zalohub/web-platform.env
+ExecStart=/usr/bin/npm run start --workspace=@zalohub/web-platform
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
