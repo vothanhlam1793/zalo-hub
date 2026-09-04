@@ -1,164 +1,141 @@
+# Independent Service Proposal
+
 ## Proposed Structure
 
-Muc tieu cua sprint REORG dau tien la chuan bi repo cho viec phat trien tiep theo theo 3 capability ro rang:
-
-- `admin`: quan ly user, account, session dang nhap, van hanh he thong
-- `chat`: giao dien hoi thoai, realtime, conversation, message, attachment
-- `automation`: API va integration cho n8n va cac he thong tu dong hoa nhan/gui tin
-
-Quyet dinh da chot:
-
-- Giai doan chuyen tiep: `backend/src/admin` la source of truth cho admin UI
-- Backend duoc phep tao khung `automation` ngay trong sprint REORG dau tien
-- Muc tieu sprint: giam roi de vao cac sprint/gold moi, khong uu tien doi hanh vi nguoi dung
-- Archive/legacy khong la trong tam cua sprint nay, chi can quan ly duoc
-
-### Target Structure
-
-Day la cau truc dich de huong toi. Sprint dau tien khong can dat duoc toan bo, nhung moi thay doi nen di theo huong nay.
-
 ```text
-frontend/                     # chat-web
-  src/
-    app/
-    features/
-      chat/
-      accounts/
-      realtime/
-      auth/
-    shared/
-      api/
-      ui/
-      lib/
-      types/
+services/
+  zalo-gateway/                 # Module 1
+    src/
+      application/              # QR onboarding, sessions, messaging, sync
+      domain/                   # ZaloAccount, Contact, Group, Conversation, Message
+      infrastructure/           # Zalo adapters, PostgreSQL, MinIO
+      transport/                # authenticated internal HTTP API and event delivery
+    db/migrations/
+    deploy/
 
-backend/
-  src/
-    bootstrap/
-    http/
-      routes/
-        admin/
-        chat/
-        automation/
-      middleware/
-    services/
-      admin/
-      chat/
-      automation/
-    domain/
-      accounts/
-      auth/
-      conversations/
-      messages/
-      automation/
-    integrations/
-      zalo/
-      storage/
-    realtime/
-    persistence/
-    legacy/
-    admin/                    # source of truth tam thoi cho admin UI
+  management-api/               # Module 2
+    src/
+      identity/                 # ZaloHub users, password sessions, roles
+      access/                   # user-to-Zalo-account memberships and policies
+      administration/           # bot configuration, audit, management workflows
+      integrations/zalo-gateway/
+    db/migrations/
+    deploy/
 
-docs/
-  architecture/
-  integrations/
-  ops/
+  web-platform/                 # Module 3
+    bff/                        # cookie session gateway and browser-facing API
+    app/                        # React Router SSR routes
+    src/features/
+      admin/                    # administration UI
+      chat/                     # chat UI
+      accounts/                 # Zalo onboarding/status UI
+    deploy/
 
-reorg/
-  proposal.md
-  migration_plan.md
-  analysis.md
+packages/
+  contracts/                    # versioned HTTP/event DTOs only
+  config/                       # non-secret shared configuration helpers
 ```
 
-## Changes Explained
+## Service Ownership
 
-### 1. Chat UI va Admin UI duoc tach theo capability
+| Service | Owns | Must not own |
+|---|---|---|
+| Zalo Gateway | Zalo QR/session credentials, account runtime, contacts, groups, conversations, messages, attachments, Zalo synchronization | ZaloHub users, browser cookies, memberships, admin policy, Dify policy |
+| Management API | ZaloHub users, browser-independent authentication, roles, account membership, bots, policies, audit records | Zalo credentials, runtime objects, direct message persistence |
+| Web Platform | Browser routes, SSR, chat/admin presentation, cookie handling, API composition | Credentials, authorization decisions, direct database access |
 
-- FROM: `frontend` dang vua co chat, vua co mot phan admin
-- TO: `frontend` tap trung vao chat; `backend/src/admin` tiep tuc la goc admin trong giai doan chuyen tiep
-- WHY: Chat va admin co muc tieu san pham khac nhau. Tiep tuc de chung se lam roi sprint sau, nhat la khi them integration `n8n`
-- RISK: Co the dang ton tai mot so flow admin o `frontend` chua duoc doi chieu day du
+## Data Boundary
 
-### 2. Frontend duoc doi tu folder theo kieu ky thuat sang feature-oriented
+Start with one PostgreSQL instance but separate service-owned schemas:
 
-- FROM: `frontend/src/App.tsx` va cac component/store/api dang om nhieu concern
-- TO: `frontend/src/app`, `frontend/src/features/*`, `frontend/src/shared/*`
-- WHY: Giam do phinh cua `App.tsx`, de them sprint moi ma khong tiep tuc don logic vao mot entrypoint
-- RISK: Di chuyen file co the gay vo import neu lam qua rong trong mot sprint
+```text
+zalo_gateway.*
+management.*
+```
 
-### 3. Backend duoc tach route theo capability
+Each service runs only its own migrations and has a separate database credential restricted to its schema. The services never query the other schema. This permits a later physical database split without changing application contracts.
 
-- FROM: route layer lon, nhat la `backend/src/server/routes/accounts.ts`, vua nhan request vua dieu phoi nghiep vu va broadcast
-- TO: `http/routes/chat`, `http/routes/admin`, `http/routes/automation` va `services/*`
-- WHY: Chuan bi nen cho API-first, dac biet cho automation va n8n
-- RISK: Neu vua tach file vua sua logic runtime trong cung sprint se de gay regression
+Zalo Gateway owns the message content because it ingests, deduplicates, synchronizes, and normalizes it. Management API references `zalo_account_id` but does not persist or modify messages.
 
-### 4. Tao boundary rieng cho automation
+## Interaction Model
 
-- FROM: chua co cho ro rang de dat webhook, API token, outbound send, inbound event, audit
-- TO: `domain/automation`, `services/automation`, `http/routes/automation`
-- WHY: Day la huong phat trien tiep theo cua du an, can cho dat logic ro truoc khi viet tinh nang
-- RISK: Neu tao qua nhieu placeholder khong can thiet se tang boilerplate
+```text
+Browser
+  -> Web Platform (SSR + BFF)
+  -> Management API: identity and access decision
+  -> Zalo Gateway: authorized account operation or chat query
 
-### 5. Legacy va archive khong dua vao trung tam sprint dau
+Zalo Gateway
+  -> versioned event: account.ready, session.changed, message.received,
+                        message.updated, sync.completed
+  -> Management API: membership provisioning, policy/bot processing, audit
+  -> Web Platform realtime relay: authorized delivery only
+```
 
-- FROM: archive/legacy dang ton tai gan code active
-- TO: tam thoi giu nguyen, chi tranh de logic moi tiep tuc phu thuoc vao no
-- WHY: Uu tien sprint nay la mo duong cho chat/admin/automation, khong phai don dep lich su
-- RISK: Engineer van co the tiep tuc tham chieu code cu neu khong dat boundary ro
+Management API is the policy decision point. It authenticates the user and then calls Zalo Gateway using a signed internal identity containing the approved `userId`, `accountId`, requested operation, and expiry. Zalo Gateway validates that credential but never accepts browser cookies or public browser traffic.
 
-## Risk Assessment
+## Public/Internal API Boundary
+
+| Caller | Target | Allowed interface |
+|---|---|---|
+| Browser | Web Platform | Public HTTPS and WebSocket |
+| Web Platform | Management API | Internal HTTPS using service credentials |
+| Management API | Zalo Gateway | Internal HTTPS using short-lived signed credentials |
+| Zalo Gateway | Management API / Web Platform | Versioned internal events |
+
+Initial Zalo Gateway internal operations:
+
+```text
+POST   /internal/v1/onboarding
+GET    /internal/v1/onboarding/:id/qr
+GET    /internal/v1/accounts/:id/status
+POST   /internal/v1/accounts/:id/reconnect
+DELETE /internal/v1/accounts/:id
+POST   /internal/v1/accounts/:id/sync-directory
+GET    /internal/v1/accounts/:id/contacts
+GET    /internal/v1/accounts/:id/groups
+GET    /internal/v1/accounts/:id/conversations
+GET    /internal/v1/accounts/:id/conversations/:conversationId/messages
+POST   /internal/v1/accounts/:id/messages
+```
+
+## Migration Phases
+
+### Phase 1: Service foundation
+- Create `services/` and `packages/contracts/` workspaces.
+- Establish independent manifests, environment validation, health/readiness endpoints, database credentials, migrations, and service deployment units.
+- Define signed internal request and event envelopes.
+
+### Phase 2: Extract Zalo Gateway
+- Move and adapt the current runtime, Zalo protocol helpers, store repositories, media store, and account lifecycle into `services/zalo-gateway`.
+- Preserve behavior behind Gateway internal routes.
+- Remove Dify and browser WebSocket dependencies from the runtime.
+
+### Phase 3: Extract Management API
+- Move system auth, user/role/membership, Dify configuration, and management policies into `services/management-api`.
+- Replace direct runtime access with Gateway client calls and events.
+
+### Phase 4: Adapt Web Platform
+- Consolidate `frontend/` and `bff/` under `services/web-platform`.
+- Remove direct backend/JWT client paths and legacy backend admin SPA.
+- Route account onboarding through Management API to Gateway.
+
+### Phase 5: Data migration and cutover
+- Copy current tables to owned schemas without cross-schema reads.
+- Perform a staged production cutover with rollback checkpoints.
+- Archive superseded monolith code only after smoke verification.
+
+## Risks and Mitigations
 
 | Risk | Severity | Mitigation |
-|------|----------|------------|
-| Admin logic bi chia doi giua `frontend` va `backend/src/admin` | High | Lap inventory cac man hinh/flow admin truoc khi di chuyen |
-| Tach `frontend/src/App.tsx` gay vo flow chat/realtime | High | Chi tach theo shell/feature, khong doi behavior trong sprint dau |
-| Tach backend route lam anh huong unread/send/realtime | High | Tach route -> service truoc, khong cham sau vao runtime core |
-| Tao khung automation qua som dan toi boilerplate | Medium | Chi tao boundary va module toi thieu can cho sprint API tiep theo |
-| Legacy/compatibility tiep tuc len vao code moi | Medium | Dua code moi vao capability moi, khong them logic moi vao khu vuc legacy |
+|---|---|---|
+| Account session interruption during runtime extraction | High | Preserve runtime behavior first; use account-by-account cutover and rollback capability |
+| Unauthorized realtime data delivery | High | Management API authorizes subscriptions; Web Platform relays only account-scoped events |
+| Cross-service auth bypass | High | Short-lived signed internal credentials, network isolation, service-specific secrets |
+| Inconsistent data during schema migration | High | Copy-verify-cutover workflow with read-only validation and rollback checkpoint |
+| No existing automated tests | High | Add contract and lifecycle smoke tests as part of each extraction phase |
+| Premature event infrastructure | Medium | Start with an authenticated internal event endpoint/outbox; introduce a broker only when needed |
 
-## If You Don't Refactor
+## Approval Requested
 
-Neu khong REORG bay gio:
-
-- Sprint tiep theo de roi vao tinh trang them API automation bang cach chen vao route/chat flow hien co
-- Admin va chat se tiep tuc dan vao nhau, kho biet dau la source of truth
-- `frontend/src/App.tsx` va backend route lon se tiep tuc la diem xung dot khi them tinh nang moi
-- Viec tich hop `n8n` co nguy co tro thanh patchwork thay vi thanh capability rieng
-
-## Phased Approach
-
-### Phase 1: Inventory + boundaries (safe, low risk)
-
-- Liet ke toan bo flow admin hien co o `frontend` va `backend/src/admin`
-- Xac dinh man hinh nao con song, man hinh nao se bo
-- Xac dinh boundary cho 3 capability: `admin`, `chat`, `automation`
-- Tao khung folder moi cho frontend feature-oriented va backend capability-oriented
-
-### Phase 2: Frontend chat reorg (medium risk)
-
-- Tach `frontend/src/App.tsx` thanh:
-  - `app/`
-  - shell desktop/mobile
-  - route layer
-  - feature hooks cho chat/accounts/realtime
-- Di chuyen `api`, `types`, `stores`, `components` vao `features/*` va `shared/*`
-- Khong doi hanh vi UI
-
-### Phase 3: Backend route/service split (medium risk)
-
-- Tach `accounts.ts` thanh route nho hon theo capability chat
-- Dua orchestration sang `services/chat/*`
-- Tao `http/routes/automation` va `services/automation` o muc toi thieu
-- Chua dong vao runtime core tru khi can noi adapter
-
-### Phase 4: Admin consolidation preparation (medium to high risk)
-
-- Dat `backend/src/admin` la source of truth tam thoi
-- Loai bo dan cac admin flow trung lap ben `frontend`
-- Ghi ro target dai han: co the tach thanh `admin-web` rieng khi can
-
-### Phase 5: Optional deeper backend cleanup (high risk, later sprint)
-
-- Sau khi route/service on dinh, moi xem xet tach sau `runtime`, `listener`, va persistence hotspot
-- Phase nay khong thuoc sprint REORG dau tien
+Approve this topology and phased direction before creating the exact migration plan. The remaining decision is the internal authentication mechanism: signed short-lived JWT is recommended for the first milestone; mTLS can be added at the infrastructure layer later.
