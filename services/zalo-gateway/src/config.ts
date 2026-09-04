@@ -6,6 +6,7 @@ function requiredSecret(name: string, developmentValue: string): string {
 }
 
 export const config = {
+  host: process.env.ZALO_GATEWAY_HOST ?? '127.0.0.1',
   port: Number(process.env.ZALO_GATEWAY_PORT ?? 3502),
   internalJwtSecret: requiredSecret('INTERNAL_JWT_SECRET', 'development-internal-jwt-secret'),
   databaseUrl: process.env.ZALO_GATEWAY_DATABASE_URL ?? 'postgresql://zalohub:zalohub@localhost:5432/zalohub',

@@ -11,7 +11,7 @@ npm run migrate --workspace=@zalohub/zalo-gateway
 npm run start --workspace=@zalohub/zalo-gateway
 ```
 
-The default schema is `zalo_gateway`. Set `ZALO_GATEWAY_DB_SCHEMA` to override it.
+The default schema is `zalo_gateway`. Infrastructure must provision it and assign its ownership to the Gateway database role before the service starts. Set `ZALO_GATEWAY_DB_SCHEMA` to override it.
 
 ## Internal API
 

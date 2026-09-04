@@ -1,12 +1,13 @@
 [Unit]
 Description=ZaloHub Zalo Gateway
-After=network.target
+After=network.target docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/zalohub
+User=leco
+WorkingDirectory=/home/leco/zalohub
 EnvironmentFile=/etc/zalohub/zalo-gateway.env
-ExecStart=/usr/bin/npm run start --workspace=@zalohub/zalo-gateway
+ExecStart=/home/leco/.nvm/versions/node/v22.22.2/bin/node services/zalo-gateway/dist/index.js
 Restart=always
 RestartSec=5
 

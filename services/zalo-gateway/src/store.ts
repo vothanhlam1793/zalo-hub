@@ -28,7 +28,6 @@ export class GatewayStore {
   }
 
   async migrate() {
-    await this.knex.raw(`CREATE SCHEMA IF NOT EXISTS ${this.schema}`);
     await this.knex.raw(`CREATE TABLE IF NOT EXISTS ${this.schema}.accounts (
       account_id TEXT PRIMARY KEY,
       display_name TEXT,

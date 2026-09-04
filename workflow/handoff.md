@@ -12,9 +12,9 @@ The independent-service direction and signed internal JWT approach are confirmed
 - Produced `reorg/migration_plan.md` for phased extraction.
 - Completed and verified Phase 1 service workspace, contract, health, and internal JWT foundation.
 - Added and verified Gateway QR onboarding, persisted session credential, reconnect, status, and logout vertical slice.
+- Deployed `zalohub-zalo-gateway.service` on `leco`, bound to `127.0.0.1:16002` with an isolated `zalohub_gateway` PostgreSQL role and `zalo_gateway` schema.
 
 ## Pending
-- Commit the verified Gateway QR/session vertical slice.
 - Plan the next Gateway increment for contacts/groups, account-ready events, and runtime ownership.
 
 ## Recommended Next Skill

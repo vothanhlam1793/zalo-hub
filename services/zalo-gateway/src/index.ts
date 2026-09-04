@@ -93,8 +93,8 @@ async function main() {
     res.status(204).end();
   });
 
-  app.listen(config.port, () => {
-    console.log(`[zalo-gateway] listening on :${config.port}`);
+  app.listen(config.port, config.host, () => {
+    console.log(`[zalo-gateway] listening on ${config.host}:${config.port}`);
   });
 }
 

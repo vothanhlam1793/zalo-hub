@@ -37,3 +37,14 @@ Pass. Phase 1 service foundation is ready for a separate Phase 2 decision on Zal
 | Internal authorization | Pass | An onboarding status request without the Management-issued JWT returned HTTP 401. |
 
 The QR/session slice does not yet replace the monolith listener, contact/group sync, chat send/receive, media, or browser realtime paths.
+
+## Independent Deployment
+
+| Check | Result | Evidence |
+|---|---|---|
+| Separate process | Pass | `zalohub-zalo-gateway.service` is enabled and running independently of existing `zalohub*.service` units. |
+| Dedicated port | Pass | Gateway listens only on `127.0.0.1:16002`. |
+| Service health | Pass | Live `/health` and `/ready` checks passed after systemd deployment. |
+| Database isolation | Pass | `zalohub_gateway` can query `zalo_gateway.accounts` but is denied read access to `public.system_users`. |
+
+The Gateway remains local-only by design. It must not be exposed through public Nginx routes before Management API is deployed as the authorization boundary.
