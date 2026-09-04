@@ -9,3 +9,5 @@ The services in this directory are independently deployable boundaries. They are
 | `@zalohub/zalo-gateway` | 3502 | Zalo sessions, data, and runtime |
 
 `INTERNAL_JWT_SECRET` must match between Management API and Zalo Gateway. `SERVICE_AUTH_KEY` is required by callers of the Management API internal token endpoint. Development defaults exist only outside production; production startup fails without explicit secrets.
+
+The Gateway also requires `ZALO_GATEWAY_DATABASE_URL` and uses the `zalo_gateway` schema by default. It creates its owned onboarding/session tables during startup; production deployment should run `npm run migrate --workspace=@zalohub/zalo-gateway` before restarting the service.

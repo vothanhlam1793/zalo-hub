@@ -25,3 +25,15 @@ No existing runtime, database tables, BFF, SSR route, or browser flow was moved.
 ## Result
 
 Pass. Phase 1 service foundation is ready for a separate Phase 2 decision on Zalo Gateway extraction.
+
+## Phase 2 QR/Session Vertical Slice
+
+| Check | Result | Evidence |
+|---|---|---|
+| Independent Gateway build | Pass | `npm run build:foundation` passed after adding Gateway-owned Knex and Zalo dependencies. |
+| Isolated schema | Pass | Gateway readiness passed against PostgreSQL after creating the `zalo_gateway` schema and onboarding/session tables. |
+| Real QR flow | Pass | An internally authorized onboarding request produced a `waiting_for_qr` state and a QR image payload through `zalo-api-final`. |
+| Credential boundary | Pass | Gateway persists credentials internally and returns only account/session metadata. |
+| Internal authorization | Pass | An onboarding status request without the Management-issued JWT returned HTTP 401. |
+
+The QR/session slice does not yet replace the monolith listener, contact/group sync, chat send/receive, media, or browser realtime paths.

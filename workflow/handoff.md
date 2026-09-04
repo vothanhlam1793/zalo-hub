@@ -11,10 +11,11 @@ The independent-service direction and signed internal JWT approach are confirmed
 - Created and committed the independent-service architecture proposal at `b233c0f`.
 - Produced `reorg/migration_plan.md` for phased extraction.
 - Completed and verified Phase 1 service workspace, contract, health, and internal JWT foundation.
+- Added and verified Gateway QR onboarding, persisted session credential, reconnect, status, and logout vertical slice.
 
 ## Pending
-- Commit the verified Phase 1 foundation.
-- Approve Phase 2 Zalo Gateway extraction.
+- Commit the verified Gateway QR/session vertical slice.
+- Plan the next Gateway increment for contacts/groups, account-ready events, and runtime ownership.
 
 ## Recommended Next Skill
 - gold-sprint (REORG)

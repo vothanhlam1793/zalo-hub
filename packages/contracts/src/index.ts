@@ -1,4 +1,5 @@
 export const gatewayOperations = [
+  'onboarding.manage',
   'accounts.read',
   'accounts.manage',
   'chat.read',
@@ -11,14 +12,14 @@ export type GatewayAccessClaims = {
   iss: 'management-api';
   aud: 'zalo-gateway';
   sub: string;
-  accountId: string;
+  accountId?: string;
   operation: GatewayOperation;
   jti: string;
 };
 
 export type CreateGatewayTokenRequest = {
   userId: string;
-  accountId: string;
+  accountId?: string;
   operation: GatewayOperation;
 };
 

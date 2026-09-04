@@ -14,16 +14,22 @@
 - Issued a short-lived Gateway token from Management API and verified the Gateway accepted it.
 - Verified the Gateway rejects the same internal route without a token with HTTP 401.
 - `git diff --check` passed for the Phase 1 worktree.
+- Gateway Phase 2 vertical slice built successfully with `npm run build:foundation`.
+- Gateway started against local PostgreSQL with an isolated `zalo_gateway` schema and returned a successful readiness response.
+- Management API issued an `onboarding.manage` token, and Gateway created a real QR payload through `zalo-api-final`.
+- Gateway rejected an onboarding query without the internal token with HTTP 401.
 
 ## Results
 - pass for Phase 1 service foundation
+- pass for the Phase 2 QR/session vertical slice
 
 ## Issues Found
 - No standard automated test suite exists for the existing application.
 - Phase 1 has service skeletons only; no Zalo runtime, database schema, or browser flow has migrated yet.
+- Contact/group synchronization, message listener, message persistence, media, and send operations remain in the monolith and are not yet Gateway behavior.
 
 ## Confidence
-- high for the Phase 1 foundation
+- high for the Phase 1 foundation and QR/session vertical slice
 
 ## Recommended Next Step
-Commit the Phase 1 foundation, then request approval for Phase 2 Zalo Gateway extraction.
+Checkpoint the QR/session vertical slice, then plan the next Gateway increment for directory synchronization and account-ready event delivery.

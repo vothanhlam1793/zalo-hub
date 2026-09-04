@@ -33,3 +33,20 @@ Management API now issues 60-second Gateway credentials after service-key authen
 ## Follow-up
 - Replace the Phase 1 service-key token issuer with authenticated Web Platform to Management API flow during Phase 3.
 - Add key rotation and mTLS at deployment infrastructure when services leave the trusted internal network.
+
+## Decision
+Extract QR onboarding and persisted Zalo session recovery as the first Gateway vertical slice, before moving the full listener, sync, message, and media runtime.
+
+## Why
+The existing `GoldRuntime` constructs all Zalo capabilities together. Moving that closure immediately would combine database migration, message delivery, media, browser realtime, and Dify decoupling in one high-risk change. QR/session is a real independently runnable Gateway capability and establishes the correct security and data boundary.
+
+## Alternatives Considered
+- Move the full `GoldRuntime` source closure in one Phase 2 change.
+- Import the existing backend runtime directly from Gateway as a temporary shortcut.
+
+## Impact
+Gateway now owns `zalo_gateway.accounts` and `zalo_gateway.account_sessions`. It can create a real Zalo QR login flow and persist its credential without importing backend source or Management-owned tables.
+
+## Follow-up
+- Move contacts/groups and the account-ready event contract next.
+- Add a copy-verify migration from legacy `accounts` and `account_sessions` before production cutover.

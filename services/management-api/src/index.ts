@@ -20,7 +20,7 @@ app.post('/internal/v1/gateway-tokens', (req, res) => {
   }
 
   const body = req.body as Partial<CreateGatewayTokenRequest>;
-  if (!body.userId || !body.accountId || !body.operation || !gatewayOperations.includes(body.operation)) {
+  if (!body.userId || !body.operation || !gatewayOperations.includes(body.operation)) {
     res.status(400).json({ error: 'Invalid gateway token request' });
     return;
   }
