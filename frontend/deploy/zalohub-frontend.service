@@ -1,0 +1,19 @@
+[Unit]
+Description=ZaloHub Frontend (React Router SSR)
+After=network.target
+
+[Service]
+Type=simple
+User=leco
+WorkingDirectory=/home/leco/zalohub/frontend
+ExecStart=/usr/bin/npx react-router-serve ./build/server/index.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=FE_PORT=3400
+Environment=BFF_URL=http://127.0.0.1:3401
+StandardOutput=append:/tmp/zalohub-frontend.log
+StandardError=append:/tmp/zalohub-frontend.log
+
+[Install]
+WantedBy=multi-user.target

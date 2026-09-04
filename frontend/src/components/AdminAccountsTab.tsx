@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { useState } from 'react';
-import { api } from '../api';
+import { bff } from '../bff-api';
 import type { AccountSummary } from '../types';
 import { getAccountDisplayName, getInitial } from '../utils';
 
@@ -35,20 +35,20 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
 
   const handleLogout = async (accountId: string) => {
     if (!confirm('Logout tai khoan nay?')) return;
-    try { await api.adminLogoutAccount(accountId); setStatus('Da logout'); onRefresh(); }
+    try { await bff.adminLogoutAccount(accountId); setStatus('Da logout'); onRefresh(); }
     catch (err) { setError(err instanceof Error ? err.message : 'Logout that bai'); }
   };
 
   const handleDelete = async (accountId: string) => {
     if (!confirm('XOA VINH VIEN tai khoan nay?')) return;
-    try { await api.adminDeleteAccount(accountId); setStatus('Da xoa'); onRefresh(); }
+    try { await bff.adminDeleteAccount(accountId); setStatus('Da xoa'); onRefresh(); }
     catch (err) { setError(err instanceof Error ? err.message : 'Xoa that bai'); }
   };
 
   const handleMobileSync = async (accountId: string) => {
     setStatus('Dang dong bo Mobile (req_18)...');
     try {
-      const r = await api.accountMobileSync(accountId);
+      const r = await bff.accountMobileSync(accountId);
       setStatus(`Mobile sync xong: ${r.requ18Received} tin tu req_18 + ${r.historySynced} cuoc tro chuyen qua history (tong ${r.requ18Inserted + (r.results?.reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0) || 0)} tin)`);
     } catch (err) { setError(err instanceof Error ? err.message : 'Mobile sync that bai'); }
   };
@@ -56,7 +56,7 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
   const handleSync = async (accountId: string) => {
     setStatus('Dang dong bo...');
     try {
-      const r = await api.accountSyncAll(accountId);
+      const r = await bff.accountSyncAll(accountId);
       setStatus(`Dong bo xong: ${r.synced} cuoc tro chuyen`);
     } catch (err) { setError(err instanceof Error ? err.message : 'Dong bo that bai'); }
   };
@@ -64,7 +64,7 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
   const handleSyncProfile = async (accountId: string) => {
     setStatus('Dang dong bo profile account...');
     try {
-      await api.adminSyncAccountProfile(accountId);
+      await bff.adminSyncAccountProfile(accountId);
       setStatus('Da dong bo profile account');
       onRefresh();
     } catch (err) {
@@ -87,7 +87,7 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
     if (!editingAccountId || savingAlias) return;
     setSavingAlias(true);
     try {
-      await api.adminUpdateAccount(editingAccountId, { hubAlias: aliasValue.trim() || undefined });
+      await bff.adminUpdateAccount(editingAccountId, { hubAlias: aliasValue.trim() || undefined });
       setStatus('Da cap nhat alias account');
       closeAliasDialog();
       onRefresh();

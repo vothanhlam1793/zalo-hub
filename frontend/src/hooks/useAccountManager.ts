@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { api, type AccountStatusSummary } from '../api';
+import { bff, type AccountStatusSummary } from '../bff-api';
 import type { AccountSummary, Contact, ConversationSummary, Group, SessionStatus } from '../types';
 
 function toAccountSummary(account: AccountStatusSummary): AccountSummary {
@@ -30,17 +30,13 @@ export function useAccountManager() {
     if (!status?.sessionActive) return;
     try {
       const refresh = Boolean(options.refresh);
-      const [ct, gp, cv] = await Promise.all([
-        api.accountContacts(accountId, refresh),
-        api.accountGroups(accountId, refresh),
-        api.accountConversations(accountId),
-      ]);
-      setContacts(ct.contacts);
-      setGroups(gp.groups);
-      replaceAccountConversations(accountId, cv.conversations);
+      const result = await bff.workspaceLoadAccount(accountId, refresh);
+      if (result.contacts) setContacts(result.contacts.contacts);
+      if (result.groups) setGroups(result.groups.groups);
+      if (result.conversations) replaceAccountConversations(accountId, result.conversations.conversations);
       setLoadError('');
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Không tải được dữ liệu');
+      setLoadError(error instanceof Error ? error.message : 'Khong tai duoc du lieu');
     }
   }, []);
 
@@ -57,7 +53,7 @@ export function useAccountManager() {
     activeConversationIdRef: React.MutableRefObject<string>,
     selectionTokenRef: React.MutableRefObject<number>,
   ) => {
-    await api.logout().catch(() => {});
+    await bff.authLogout().catch(() => {});
     setStatus(null);
     resetAll();
     clearComposer();
@@ -66,11 +62,13 @@ export function useAccountManager() {
     clearCache();
     setLoadError('');
     unsubscribe();
-    setStatusMsg('Đã đăng xuất.');
-    api.status().then(setStatus).catch(() => {});
-    api.accounts().then((result) => {
-      setKnownAccounts(result.accounts.map(toAccountSummary));
-      setSelectedAccountId(result.activeAccountId ?? '');
+    setStatusMsg('Da dang xuat.');
+    bff.workspaceInit().then((result) => {
+      if (result.status) setStatus(result.status);
+      if (result.accounts) {
+        setKnownAccounts(result.accounts.accounts.map(toAccountSummary));
+        setSelectedAccountId(result.accounts.activeAccountId ?? '');
+      }
     }).catch(() => {});
   }, []);
 
@@ -92,7 +90,7 @@ export function useAccountManager() {
     selectionTokenRef: React.MutableRefObject<number>,
   ) => {
     setSelectedAccountId(accountId);
-    setStatusMsg('Đang chuyển tài khoản...');
+    setStatusMsg('Dang chuyen tai khoan...');
     setLoadError('');
     selectionTokenRef.current += 1;
     activeConversationIdRef.current = '';
@@ -104,27 +102,29 @@ export function useAccountManager() {
     unsubscribe();
 
     try {
-      const result = await api.activateAccount(accountId);
+      const result = await bff.activateAccount(accountId);
       setStatus(result.status);
-      const accountsResult = await api.accounts();
-      setKnownAccounts(accountsResult.accounts.map(toAccountSummary));
-      setSelectedAccountId(accountsResult.activeAccountId ?? accountId);
+      const accountsResult = await bff.workspaceInit();
+      if (accountsResult.accounts) {
+        setKnownAccounts(accountsResult.accounts.accounts.map(toAccountSummary));
+        setSelectedAccountId(accountsResult.accounts.activeAccountId ?? accountId);
+      }
 
       if (result.status?.sessionActive) {
         await loadData(accountId, result.status, { refresh: true });
-        setStatusMsg('Đã chuyển tài khoản.');
+        setStatusMsg('Da chuyen tai khoan.');
       } else {
-        setStatusMsg('Tài khoản chưa active. Nhấn để đăng nhập lại bằng QR.');
+        setStatusMsg('Tai khoan chua active. Nhan de dang nhap lai bang QR.');
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Không chuyển được tài khoản');
+      setLoadError(error instanceof Error ? error.message : 'Khong chuyen duoc tai khoan');
       setStatusMsg('');
-      api.status().then((s) => {
-        setStatus(s);
-        setSelectedAccountId(s?.account?.userId ?? accountId);
-      }).catch(() => {});
-      api.accounts().then((result) => {
-        setKnownAccounts(result.accounts.map(toAccountSummary));
+      bff.workspaceInit().then((r) => {
+        if (r.status) setStatus(r.status);
+        if (r.accounts) {
+          setKnownAccounts(r.accounts.accounts.map(toAccountSummary));
+          setSelectedAccountId(r.accounts.activeAccountId ?? accountId);
+        }
       }).catch(() => {});
     }
   }, []);

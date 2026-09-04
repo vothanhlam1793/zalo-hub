@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api } from '../api';
+import { bff } from '../bff-api';
 
 interface SystemUser {
   id: string;
@@ -11,87 +11,47 @@ interface SystemUser {
 
 interface AuthState {
   user: SystemUser | null;
-  token: string | null;
   isLoading: boolean;
   isChecking: boolean;
 
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   checkSession: () => Promise<void>;
+  setUser: (user: SystemUser) => void;
 }
 
-function decodeJwt(token: string): { userId: string; exp: number } | null {
-  try {
-    const payload = token.split('.')[1];
-    const decoded = JSON.parse(atob(payload));
-    return { userId: decoded.userId, exp: decoded.exp };
-  } catch {
-    return null;
-  }
-}
+export const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  isLoading: false,
+  isChecking: true,
 
-function loadFromStorage(): { user: SystemUser | null; token: string | null } {
-  try {
-    const token = localStorage.getItem('auth_token');
-    if (!token) return { user: null, token: null };
-    const jwt = decodeJwt(token);
-    if (!jwt || jwt.exp * 1000 < Date.now()) {
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_user');
-      return { user: null, token: null };
+  login: async (email, password) => {
+    set({ isLoading: true });
+    try {
+      const data = await bff.authLogin(email, password);
+      set({ user: data.user as SystemUser, isLoading: false, isChecking: false });
+      return { ok: true };
+    } catch (err) {
+      set({ isLoading: false, isChecking: false });
+      return { ok: false, error: err instanceof Error ? err.message : 'Login failed' };
     }
-    const raw = localStorage.getItem('auth_user');
-    const user: SystemUser | null = raw ? JSON.parse(raw) : null;
-    return { user, token };
-  } catch {
-    return { user: null, token: null };
-  }
-}
+  },
 
-export const useAuthStore = create<AuthState>((set, get) => {
-  const stored = loadFromStorage();
-  return {
-    user: stored.user,
-    token: stored.token,
-    isLoading: false,
-    isChecking: stored.token ? false : true,
+  logout: async () => {
+    try {
+      await bff.authLogout();
+    } catch { /* ignore */ }
+    set({ user: null });
+  },
 
-    login: async (email, password) => {
-      set({ isLoading: true });
-      try {
-        const r = await api.authLogin(email, password);
-        localStorage.setItem('auth_token', r.token);
-        localStorage.setItem('auth_user', JSON.stringify(r.user));
-        set({ user: r.user, token: r.token, isLoading: false, isChecking: false });
-        return { ok: true };
-      } catch (err) {
-        set({ isLoading: false, isChecking: false });
-        return { ok: false, error: err instanceof Error ? err.message : 'Login failed' };
-      }
-    },
+  checkSession: async () => {
+    try {
+      const data = await bff.authMe();
+      set({ user: data.user as SystemUser, isChecking: false });
+    } catch {
+      set({ user: null, isChecking: false });
+    }
+  },
 
-    logout: () => {
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_user');
-      set({ user: null, token: null });
-    },
-
-    checkSession: async () => {
-      const stored = loadFromStorage();
-      if (!stored.token) {
-        set({ isChecking: false });
-        return;
-      }
-      try {
-        const r = await api.authMe(stored.token);
-        localStorage.setItem('auth_token', r.token);
-        localStorage.setItem('auth_user', JSON.stringify(r.user));
-        set({ user: r.user, token: r.token, isChecking: false });
-      } catch {
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('auth_user');
-        set({ user: null, token: null, isChecking: false });
-      }
-    },
-  };
-});
+  setUser: (user) => set({ user, isChecking: false }),
+}));

@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { api } from '@/api';
+import { bff } from '@/bff-api';
 import {
   Dialog,
   DialogContent,
@@ -201,7 +201,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
 
   const loadBots = async () => {
     try {
-      const data = await api.adminBots();
+      const data = await bff.adminBots();
       setBots(data.bots);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load bots');
@@ -212,7 +212,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
 
   const loadAccounts = async () => {
     try {
-      const data = await api.accounts();
+      const data = await bff.accounts();
       setAccounts(data.accounts);
     } catch { /* ignore */ }
   };
@@ -224,7 +224,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
     setLoadingEntities(true);
     setEntitiesLoaded(false);
     try {
-      const data = await api.adminAccountEntities(accountId);
+      const data = await bff.adminAccountEntities(accountId);
       setEntities(data.entities);
       setEntitiesLoaded(true);
       const nameMap: Record<string, string> = {};
@@ -291,10 +291,10 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
         send_groups: formSendGroups,
       };
       if (editingBot) {
-        await api.adminBotUpdate(editingBot.id, payload);
+        await bff.adminBotUpdate(editingBot.id, payload);
         setStatus('Đã cập nhật bot');
       } else {
-        await api.adminBotCreate(payload);
+        await bff.adminBotCreate(payload);
         setStatus('Đã tạo bot mới');
       }
       resetForm();
@@ -310,7 +310,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Xóa bot "${name}"?`)) return;
     try {
-      await api.adminBotDelete(id);
+      await bff.adminBotDelete(id);
       setStatus(`Đã xóa bot "${name}"`);
       loadBots();
     } catch (err) {
@@ -320,7 +320,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
 
   const handleToggleEnabled = async (bot: DifyBot) => {
     try {
-      await api.adminBotUpdate(bot.id, { enabled: !bot.enabled });
+      await bff.adminBotUpdate(bot.id, { enabled: !bot.enabled });
       setBots(bots.map((b) => (b.id === bot.id ? { ...b, enabled: !b.enabled } : b)));
       setStatus(`Bot "${bot.name}" đã ${!bot.enabled ? 'bật' : 'tắt'}`);
     } catch (err) {
@@ -343,7 +343,7 @@ export default function DifyBotsTab({ setError, setStatus }: Props) {
     allAccountIds.forEach((accountId) => {
       if (accountId && !entityNames[accountId + '__loaded']) {
         setEntityNames((prev) => ({ ...prev, [accountId + '__loaded']: '1' }));
-        api.adminAccountEntities(accountId)
+        bff.adminAccountEntities(accountId)
           .then((data) => {
             const nameMap: Record<string, string> = {};
             for (const e of data.entities) {

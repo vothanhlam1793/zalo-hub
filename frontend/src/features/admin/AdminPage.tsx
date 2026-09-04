@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { api } from '@/api';
+import { bff } from '@/bff-api';
 import { useAuthStore } from '@/stores/auth-store';
 import { MyAccountsTab } from '@/features/accounts/components/MyAccountsTab';
 import { AdminUsersTab } from './AdminUsersTab';
@@ -29,7 +29,7 @@ export default function AdminPage() {
 
   const loadData = async () => {
     try {
-      const [u, a] = await Promise.all([api.adminUsers(), api.accounts()]);
+      const [u, a] = await Promise.all([bff.adminUsers(), bff.accounts()]);
       setUsers(u.users);
       setAccounts(a.accounts);
     } catch { /* ignore */ }
@@ -116,7 +116,7 @@ function SuperAdminAccountsTab({ accounts, onRefresh, setError, setStatus }: { a
   const [allAccounts, setAllAccounts] = useState<Array<any>>([]);
 
   useEffect(() => {
-    api.adminAllAccounts().then((r: any) => setAllAccounts(r.accounts)).catch(() => {});
+    bff.adminAllAccounts().then((r: any) => setAllAccounts(r.accounts)).catch(() => {});
   }, []);
 
   return (

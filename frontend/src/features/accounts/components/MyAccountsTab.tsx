@@ -7,7 +7,7 @@ import { Card, CardTitle, CardDescription, CardContent } from '@/components/ui/c
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { api } from '@/api';
+import { bff } from '@/bff-api';
 
 interface MyAccount {
   accountId: string;
@@ -48,7 +48,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
 
   const loadAccounts = async () => {
     try {
-      const res = await api.myAccounts();
+      const res = await bff.myAccounts();
       setAccounts(res.accounts);
     } catch { setError('Không thể tải danh sách tài khoản'); }
     setLoading(false);
@@ -56,9 +56,9 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
 
   const loadMembers = async (accountId: string) => {
     try {
-      const res = await api.adminUsers();
+      const res = await bff.adminUsers() as { users: Array<{ id: string; displayName: string; email: string; memberships: Array<{ account_id: string; role: string }> }> };
       const allUsers = res.users;
-      const members_ = allUsers.filter((u) => u.memberships.some((m) => m.account_id === accountId))
+      const members_: Array<{ userId: string; displayName: string; email: string; role: string }> = allUsers.filter((u) => u.memberships.some((m) => m.account_id === accountId))
         .map((u) => ({
           userId: u.id,
           displayName: u.displayName,
@@ -81,7 +81,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
   const handleAddMember = async () => {
     if (!selectedAccount || !memberEmail) return;
     try {
-      await api.adminAddMember(selectedAccount.accountId, memberEmail, memberRole);
+      await bff.adminAddMember(selectedAccount.accountId, memberEmail, memberRole);
       setStatus('Đã thêm thành viên');
       setMemberEmail('');
       setAddOpen(false);
@@ -92,7 +92,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
   const handleRemoveMember = async (userId: string) => {
     if (!selectedAccount) return;
     try {
-      await api.adminRemoveMember(selectedAccount.accountId, userId);
+      await bff.adminRemoveMember(selectedAccount.accountId, userId);
       setStatus('Đã xóa thành viên');
       loadMembers(selectedAccount.accountId);
     } catch (e: any) { setError(e.message || 'Xóa thất bại'); }
@@ -101,7 +101,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
   const handleChangeRole = async (userId: string, newRole: string) => {
     if (!selectedAccount) return;
     try {
-      await api.adminUpdateMemberRole(selectedAccount.accountId, userId, newRole);
+      await bff.adminUpdateMemberRole(selectedAccount.accountId, userId, newRole);
       setStatus('Đã cập nhật quyền');
       loadMembers(selectedAccount.accountId);
       loadAccounts();
@@ -111,10 +111,10 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
   const handleTransferMaster = async () => {
     if (!selectedAccount || !transferEmail) return;
     try {
-      const res = await api.adminUsers();
+      const res = await bff.adminUsers() as { users: Array<{ id: string; email: string }> };
       const targetUser = res.users.find((u) => u.email === transferEmail);
       if (!targetUser) { setError('Không tìm thấy user'); return; }
-      await api.adminTransferMaster(selectedAccount.accountId, targetUser.id);
+      await bff.adminTransferMaster(selectedAccount.accountId, targetUser.id);
       setStatus('Đã chuyển quyền master. Bạn hiện là admin.');
       setTransferOpen(false);
       setTransferEmail('');
@@ -126,7 +126,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
   const handleToggleVisible = async (acc: MyAccount) => {
     const newVal = !acc.visible;
     try {
-      await api.setAccountVisible(acc.accountId, newVal);
+      await bff.setAccountVisible(acc.accountId, newVal);
       setAccounts(accts => accts.map(a => a.accountId === acc.accountId ? { ...a, visible: newVal } : a));
     } catch { setError('Cập nhật visible thất bại'); }
   };
@@ -312,7 +312,7 @@ function AccountCard({
                 size="sm"
                 className="h-6 text-[10px] px-2 border-[rgba(255,255,255,0.1)] text-muted-foreground"
                 onClick={async () => {
-                  try { await api.restartAccount(acc.accountId); }
+                  try { await bff.restartAccount(acc.accountId); }
                   catch { /* ignore */ }
                 }}
               >

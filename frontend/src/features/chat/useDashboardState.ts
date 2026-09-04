@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, type AccountStatusSummary } from '@/api';
+import { bff, type AccountStatusSummary } from '@/bff-api';
 import { useWebSocket } from '@/useWebSocket';
 import { directConversationId, getContactDisplayName, groupConversationId } from '@/utils';
 import { useAuthStore } from '@/stores/auth-store';
@@ -114,13 +114,13 @@ export function useDashboardState() {
     },
     onSyncStatus: ({ accountId, status: syncStatus, requ18Received, historySynced, historyMsgs }) => {
       if (accountId !== resolveWorkspaceId()) return;
-      if (syncStatus === 'loading') composer.setStatusMsg('Đang tự động đồng bộ contacts & groups...');
-      else if (syncStatus === 'syncing') composer.setStatusMsg('Đang tự động đồng bộ lịch sử chat...');
+      if (syncStatus === 'loading') composer.setStatusMsg('Dang tu dong dong bo contacts & groups...');
+      else if (syncStatus === 'syncing') composer.setStatusMsg('Dang tu dong dong bo lich su chat...');
       else if (syncStatus === 'done') {
-        composer.setStatusMsg(`Tự động đồng bộ xong: ${requ18Received ?? 0} tin req_18 + ${historySynced ?? 0} cuộc trò chuyện (${historyMsgs ?? 0} tin)`);
+        composer.setStatusMsg(`Tu dong dong bo xong: ${requ18Received ?? 0} tin req_18 + ${historySynced ?? 0} cuoc tro chuyen (${historyMsgs ?? 0} tin)`);
         loadData(accountId, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
       } else if (syncStatus === 'error') {
-        composer.setLoadError('Tự động đồng bộ thất bại');
+        composer.setLoadError('Tu dong dong bo that bai');
       }
     },
   });
@@ -129,15 +129,17 @@ export function useDashboardState() {
     if (initialBootstrapDoneRef.current) return;
     initialBootstrapDoneRef.current = true;
 
-    api.status().then(setStatus).catch(() => {});
-    api.accounts().then((result) => {
-      workspace.setKnownAccounts(result.accounts.map(mapAccountStatusToSummary));
-      if (result.activeAccountId) workspace.setSelectedAccountId(result.activeAccountId);
-    }).catch(() => {});
-    api.myAccounts().then((res) => {
-      const map = new Map<string, boolean>();
-      res.accounts.forEach((a) => map.set(a.accountId, a.visible));
-      setMyAccountsMap(map);
+    bff.workspaceInit().then((result) => {
+      if (result.status) setStatus(result.status);
+      if (result.accounts) {
+        workspace.setKnownAccounts(result.accounts.accounts.map(mapAccountStatusToSummary));
+        if (result.accounts.activeAccountId) workspace.setSelectedAccountId(result.accounts.activeAccountId);
+      }
+      if (result.myAccounts) {
+        const map = new Map<string, boolean>();
+        result.myAccounts.accounts.forEach((a) => map.set(a.accountId, a.visible));
+        setMyAccountsMap(map);
+      }
     }).catch(() => {});
   }, [mapAccountStatusToSummary, workspace]);
 
@@ -179,17 +181,17 @@ export function useDashboardState() {
 
   const onSelectConversation = useCallback((conversationId: string) => {
     const accountId = resolveWorkspaceId();
-    if (!accountId) { composer.setLoadError('Chưa có tài khoản workspace được chọn'); return; }
+    if (!accountId) { composer.setLoadError('Chua co tai khoan workspace duoc chon'); return; }
     const readAt = new Date().toISOString();
     chat.markConversationReadLocal(accountId, conversationId, readAt);
-    void api.accountUpdateReadState(accountId, conversationId, readAt)
+    void bff.updateReadState(accountId, conversationId, readAt)
       .then((result) => {
         if (result?.ok) {
           chat.clearPendingReadAt(accountId, conversationId, result.readAt);
         }
       })
       .catch((error) => {
-        composer.setLoadError(error instanceof Error ? error.message : 'Lưu trạng thái đã đọc thất bại');
+        composer.setLoadError(error instanceof Error ? error.message : 'Luu trang thai da doc that bai');
       });
     void selectConversation(
       conversationId, accountId, subscribe, messageCache.getCachedMessages,
@@ -210,7 +212,7 @@ export function useDashboardState() {
     if (!convs.find((e) => e.id === conversationId)) {
       chat.replaceAccountConversations(accountId, [{
         id: conversationId, accountId, threadId: contact.userId, type: 'direct', title: displayName,
-        avatar: contact.avatar, lastMessageText: 'Nhấn để mở chat', lastMessageKind: 'text',
+        avatar: contact.avatar, lastMessageText: 'Nhan de mo chat', lastMessageKind: 'text',
         lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0, unreadCount: 0,
       }, ...convs]);
     }
@@ -224,7 +226,7 @@ export function useDashboardState() {
     if (!convs.find((e) => e.id === conversationId)) {
       chat.replaceAccountConversations(accountId, [{
         id: conversationId, accountId, threadId: group.groupId, type: 'group', title: group.displayName,
-        avatar: group.avatar, lastMessageText: 'Nhấn để mở nhóm chat', lastMessageKind: 'text',
+        avatar: group.avatar, lastMessageText: 'Nhan de mo nhom chat', lastMessageKind: 'text',
         lastMessageTimestamp: new Date(0).toISOString(), lastDirection: 'incoming', messageCount: 0, unreadCount: 0,
       }, ...convs]);
     }
@@ -273,8 +275,8 @@ export function useDashboardState() {
   const onReactMessage = useCallback(async (message: import('@/types').Message, reaction: import('@/types').MessageReactionOption) => {
     const accountId = resolveWorkspaceId();
     if (!accountId || !message.providerMessageId) {
-      if (message.providerMessageId) composer.setStatusMsg('Chưa chọn account để gửi reaction');
-      else composer.setStatusMsg('Tin nhắn này chưa có ID để gửi reaction');
+      if (message.providerMessageId) composer.setStatusMsg('Chua chon account de gui reaction');
+      else composer.setStatusMsg('Tin nhan nay chua co ID de gui reaction');
       return;
     }
 
@@ -299,9 +301,9 @@ export function useDashboardState() {
     }
 
     try {
-      await api.accountAddReaction(accountId, message.conversationId, message.providerMessageId, cliMsgId, reaction.icon);
+      await bff.sendReaction(accountId, message.conversationId, message.providerMessageId, cliMsgId, reaction.icon);
     } catch (err) {
-      composer.setLoadError(err instanceof Error ? err.message : 'Gửi reaction thất bại');
+      composer.setLoadError(err instanceof Error ? err.message : 'Gui reaction that bai');
     }
   }, [resolveWorkspaceId, composer]);
 
@@ -313,15 +315,15 @@ export function useDashboardState() {
   const onRenameAccount = useCallback(async (nextDisplayName: string) => {
     const accountId = resolveWorkspaceId();
     if (!accountId) {
-      throw new Error('Chưa có account được chọn');
+      throw new Error('Chua co account duoc chon');
     }
 
-    const result = await api.updateAccountProfile(accountId, { hubAlias: nextDisplayName });
+    const result = await bff.updateAccountProfile(accountId, { hubAlias: nextDisplayName });
     const updatedAccount = result.account;
     if (updatedAccount) {
       workspace.addOrUpdateAccount(updatedAccount);
     }
-    composer.setStatusMsg('Đã cập nhật alias account.');
+    composer.setStatusMsg('Da cap nhat alias account.');
   }, [resolveWorkspaceId, workspace, composer]);
 
   const visibleConversations = useMemo(() => chat.getAccountConversations(resolveWorkspaceId()), [chat, resolveWorkspaceId, workspace.selectedAccountId, chat.conversationsByAccount]);
@@ -340,7 +342,7 @@ export function useDashboardState() {
   const activeAvatar = activeContact?.avatar ?? activeGroup?.avatar ?? activeConversation?.avatar;
   const activeSubtitle = activeContact?.status?.trim()
     || activeContact?.phoneNumber?.trim()
-    || (activeGroup?.memberCount ? `${activeGroup.memberCount} thành viên` : '')
+    || (activeGroup?.memberCount ? `${activeGroup.memberCount} thanh vien` : '')
     || activeConversation?.threadId
     || activeConversation?.id
     || chat.activeConversationId;
@@ -376,7 +378,7 @@ export function useDashboardState() {
     if (visibleAccountIds.length === 0) return;
     void Promise.all(visibleAccountIds.map(async (accountId) => {
       try {
-        const result = await api.accountConversations(accountId);
+        const result = await bff.chatGetConversations(accountId);
         chat.setSidebarConversationsForAccount(accountId, result.conversations);
       } catch {
         // Ignore per-account sidebar unread preload failures.

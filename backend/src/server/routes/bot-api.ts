@@ -143,6 +143,46 @@ export function createBotApiRouter(
     }
   });
 
+  // POST /api/bot/send-file — gui file attachment qua Zalo
+  router.post('/send-file', async (req: Request, res: Response) => {
+    const bot = req.difyBot!;
+    const { conversationId, fileName, mimeType, data: dataB64, caption } = req.body;
+
+    if (!conversationId || !fileName || !dataB64) {
+      res.status(400).json({ error: 'conversationId, fileName, and data (base64) are required' });
+      return;
+    }
+
+    const sendGroups: string[] = (bot.send_groups && Array.isArray(bot.send_groups)) ? bot.send_groups : [];
+    if (sendGroups.length > 0 && !sendGroups.includes(conversationId)) {
+      res.status(403).json({
+        error: 'Bot khong duoc phep gui file vao group nay',
+        conversationId,
+        allowed_groups: sendGroups,
+      });
+      return;
+    }
+
+    try {
+      const runtime = accountManager.getRuntime(bot.account_id);
+      if (!runtime) {
+        res.status(503).json({ error: 'Account not online or session not active' });
+        return;
+      }
+
+      const fileBuffer = Buffer.from(dataB64, 'base64');
+      const result = await runtime.sendFile(conversationId, {
+        fileBuffer,
+        fileName: String(fileName).trim(),
+        mimeType: (mimeType || 'application/octet-stream').trim(),
+        caption: caption?.trim() || undefined,
+      });
+      res.json({ ok: true, method: result.method, kind: result.kind });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to send file' });
+    }
+  });
+
   // GET /api/bot/conversations/:conversationId/messages — get messages in a conversation
   router.get('/conversations/:conversationId/messages', async (req: Request, res: Response) => {
     const bot = req.difyBot!;

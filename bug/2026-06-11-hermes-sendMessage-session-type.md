@@ -136,23 +136,17 @@ router.post('/send-message', async (req, res) => {
 - Trong `sender.ts`, nếu `sendMessage` và `sendMsg` đều không có, thử fallback sang `sendVideo`/`sendVoice` pattern hoặc gọi qua Zalo WS protocol
 - Rủi ro: workaround có thể không ổn định
 
-### Option C: Dùng chung account
-- Cho bot Hermes dùng account 222364... (Lâm) thay vì 623490... (0869)
-- Đơn giản nhất nhưng trộn lẫn personal và bot
+### Option C: Dùng chung account — REJECTED
+- Không cho ALTA dùng account PERSONAL `222364...`.
+- Cách này trộn identity và phạm vi dữ liệu, nên bị cấm dù kỹ thuật có thể gửi được.
 
 ---
 
-## 6. Workaround tạm thời
+## 6. Historical workaround — REMOVED/PROHIBITED
 
-Dùng personal token (account 2223644954053185337, `~/gtd-vault/tokens/personal.txt`) để gửi message. Token này có session đầy đủ, hoạt động bình thường.
+Incident cũ từng dùng PERSONAL khi ALTA không gửi được. Cách này đã bị loại bỏ vì vượt ranh giới identity.
 
-```bash
-TOKEN=$(cat ~/gtd-vault/tokens/personal.txt)
-curl -s -X POST 'https://hub.besen.vn/api/bot/send-message' \
-  -H "X-Bot-Token: $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"conversationId":"group:1533316465603451045","text":"nội dung"}'
-```
+Quy tắc hiện tại: sửa ALTA hoặc dừng và báo lỗi. Không fallback sang PERSONAL, không giữ command mẫu để tránh bị copy lại.
 
 ---
 

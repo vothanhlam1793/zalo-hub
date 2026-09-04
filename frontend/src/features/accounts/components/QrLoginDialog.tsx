@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { api } from '@/api';
+import { bff } from '@/bff-api';
 
 interface Props {
   open: boolean;
@@ -26,12 +26,12 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
     setStatus('Đang tạo QR...');
 
     const startFn = isReconnect
-      ? () => api.reconnectStart(accountId!)
-      : () => api.loginStart();
+      ? () => bff.reconnectStart(accountId!)
+      : () => bff.loginStart();
 
     const qrFn = isReconnect
-      ? () => api.reconnectQr(accountId!)
-      : () => api.loginQr();
+      ? () => bff.reconnectQr(accountId!)
+      : () => bff.loginQr();
 
     startFn().then(() => {
       timerRef.current = setInterval(async () => {
@@ -41,7 +41,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
             setQrCode(qr.qrCode);
             setStatus(isReconnect ? 'Quét mã QR bằng Zalo để đăng nhập lại' : 'Quét mã QR bằng Zalo để thêm tài khoản');
           }
-          const st = await api.accountStatus(accountId ?? '');
+          const st = await bff.accountStatus(accountId ?? '');
           if (st.loggedIn && st.sessionActive) {
             if (timerRef.current) clearInterval(timerRef.current);
             timerRef.current = null;

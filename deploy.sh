@@ -4,16 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
+BFF_DIR="$ROOT_DIR/bff"
 STATE_FILE="$ROOT_DIR/.deploy-state"
 FRONTEND_ARCHIVE="/tmp/zalohub-frontend-dist.tgz"
 REMOTE_HOST="root@svr12.creta.vn"
-REMOTE_FRONTEND_DIR="/var/www/zalohub-frontend"
 LOCAL_STATUS_URL="http://127.0.0.1:3399/api/status"
 UPSTREAM_STATUS_URL="http://10.7.0.21:3399/api/status"
 PUBLIC_STATUS_URL="https://zalo.camerangochoang.com/api/status"
+BFF_HEALTH_URL="http://127.0.0.1:3401/bff/health"
+FRONTEND_HEALTH_URL="http://127.0.0.1:3400"
 
 DEPLOY_BACKEND=0
 DEPLOY_FRONTEND=0
+DEPLOY_BFF=0
 VERIFY_AFTER=1
 AUTO_MODE=1
 AUTO_MODE_EXPLICIT=0
@@ -44,7 +47,7 @@ confirm() {
 
 usage() {
   cat <<'EOF'
-Usage: ./deploy.sh [--backend] [--frontend] [--all] [--auto] [--manual] [--no-verify]
+Usage: ./deploy.sh [--backend] [--frontend] [--bff] [--all] [--auto] [--manual] [--no-verify]
 
 Without flags, the script asks:
 1. Auto-detect deploy mode from git diff, or manual mode
@@ -63,9 +66,15 @@ while [[ $# -gt 0 ]]; do
       DEPLOY_FRONTEND=1
       FORCED_MODE=1
       ;;
+    --bff)
+      DEPLOY_FRONTEND=1
+      DEPLOY_BFF=1
+      FORCED_MODE=1
+      ;;
     --all)
       DEPLOY_BACKEND=1
       DEPLOY_FRONTEND=1
+      DEPLOY_BFF=1
       FORCED_MODE=1
       ;;
     --auto)
@@ -158,21 +167,29 @@ if [[ $FORCED_MODE -eq 0 && $AUTO_MODE -eq 1 ]]; then
       backend/src/*|backend/package.json|backend/package-lock.json|backend/tsconfig.json|backend/knexfile.js|backend/knexfile.ts|backend/start-server.sh|backend/src/admin/*)
         DEPLOY_BACKEND=1
         ;;
-      frontend/src/*|frontend/package.json|frontend/package-lock.json|frontend/tsconfig.json|frontend/vite.config.*|frontend/index.html|frontend/public/*)
+      frontend/src/*|frontend/package.json|frontend/package-lock.json|frontend/tsconfig.json|frontend/vite.config.*|frontend/index.html|frontend/public/*|frontend/app/*|frontend/react-router.config.*)
         DEPLOY_FRONTEND=1
+        DEPLOY_BFF=1
         ;;
+      bff/src/*|bff/package.json|bff/package-lock.json|bff/tsconfig.json)
+        DEPLOY_BFF=1
+        ;; 
     esac
   done
 
   blue "Detected changes:"
   printf '  %s\n' "${CHANGED_FILES[@]}"
 
-  if [[ $DEPLOY_BACKEND -eq 1 && $DEPLOY_FRONTEND -eq 1 ]]; then
-    yellow "Will deploy: BACKEND + FRONTEND"
+  if [[ $DEPLOY_BACKEND -eq 1 && $DEPLOY_FRONTEND -eq 1 && $DEPLOY_BFF -eq 1 ]]; then
+    yellow "Will deploy: BACKEND + FRONTEND + BFF"
+  elif [[ $DEPLOY_BACKEND -eq 1 && $DEPLOY_FRONTEND -eq 1 ]]; then
+    yellow "Will deploy: BACKEND + FRONTEND (BFF included)"
   elif [[ $DEPLOY_BACKEND -eq 1 ]]; then
     yellow "Will deploy: BACKEND only"
   elif [[ $DEPLOY_FRONTEND -eq 1 ]]; then
-    yellow "Will deploy: FRONTEND only"
+    yellow "Will deploy: FRONTEND + BFF"
+  elif [[ $DEPLOY_BFF -eq 1 ]]; then
+    yellow "Will deploy: BFF only"
   else
     yellow "Changes detected, but none match backend/frontend deploy rules."
     if confirm "Deploy FRONTEND anyway? [Y/n]: " "Y"; then
@@ -183,7 +200,7 @@ if [[ $FORCED_MODE -eq 0 && $AUTO_MODE -eq 1 ]]; then
     fi
   fi
 
-  if [[ $DEPLOY_BACKEND -eq 0 && $DEPLOY_FRONTEND -eq 0 ]]; then
+  if [[ $DEPLOY_BACKEND -eq 0 && $DEPLOY_FRONTEND -eq 0 && $DEPLOY_BFF -eq 0 ]]; then
     green "Nothing selected for deploy."
     exit 0
   fi
@@ -198,12 +215,13 @@ if [[ $FORCED_MODE -eq 0 && $AUTO_MODE -eq 0 ]]; then
   if confirm "Deploy BACKEND? (build + restart) [y/N]: " "N"; then
     DEPLOY_BACKEND=1
   fi
-  if confirm "Deploy FRONTEND? (build + push len svr12) [Y/n]: " "Y"; then
+  if confirm "Deploy FRONTEND + BFF? (build frontend + build BFF + push len svr12) [Y/n]: " "Y"; then
     DEPLOY_FRONTEND=1
+    DEPLOY_BFF=1
   fi
 fi
 
-if [[ $DEPLOY_BACKEND -eq 0 && $DEPLOY_FRONTEND -eq 0 ]]; then
+if [[ $DEPLOY_BACKEND -eq 0 && $DEPLOY_FRONTEND -eq 0 && $DEPLOY_BFF -eq 0 ]]; then
   green "Nothing selected for deploy."
   exit 0
 fi
@@ -217,17 +235,27 @@ if [[ $FORCED_MODE -eq 0 ]]; then
 fi
 
 deploy_frontend() {
-  blue "[frontend] Building frontend"
+  blue "[frontend] Building frontend (React Router SSR)"
   npm run build --prefix "$FRONTEND_DIR"
 
-  blue "[frontend] Packaging dist"
-  tar -C "$FRONTEND_DIR" -czf "$FRONTEND_ARCHIVE" dist
+  blue "[frontend] Restarting frontend via systemd"
+  if systemctl is-active --quiet zalohub-frontend.service; then
+    sudo systemctl restart zalohub-frontend.service
+  else
+    sudo systemctl start zalohub-frontend.service
+  fi
 
-  blue "[frontend] Uploading archive to $REMOTE_HOST"
-  scp -o StrictHostKeyChecking=accept-new "$FRONTEND_ARCHIVE" "$REMOTE_HOST:/tmp/zalohub-frontend-dist.tgz"
+  blue "[frontend] Waiting for :3400"
+  for _ in $(seq 1 10); do
+    if curl -fsS http://127.0.0.1:3400/ >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
 
-  blue "[frontend] Replacing remote dist"
-  ssh "$REMOTE_HOST" "set -e; mkdir -p '$REMOTE_FRONTEND_DIR'; rm -rf '$REMOTE_FRONTEND_DIR/dist.bak'; if [ -d '$REMOTE_FRONTEND_DIR/dist' ]; then mv '$REMOTE_FRONTEND_DIR/dist' '$REMOTE_FRONTEND_DIR/dist.bak'; fi; if ! tar -xzf /tmp/zalohub-frontend-dist.tgz -C '$REMOTE_FRONTEND_DIR'; then rm -rf '$REMOTE_FRONTEND_DIR/dist'; if [ -d '$REMOTE_FRONTEND_DIR/dist.bak' ]; then mv '$REMOTE_FRONTEND_DIR/dist.bak' '$REMOTE_FRONTEND_DIR/dist'; fi; exit 1; fi; test -f '$REMOTE_FRONTEND_DIR/dist/index.html'"
+  red "Frontend did not become ready on :3400 within 10 seconds."
+  red "Check log: /tmp/zalohub-frontend.log"
+  exit 1
 }
 
 deploy_backend() {
@@ -249,12 +277,40 @@ deploy_backend() {
     sleep 1
   done
 
-  red "Backend did not become ready on :3399 within 20 seconds."
-  red "Check log: /tmp/zalohub-backend-prod.log"
+    red "Backend did not become ready on :3399 within 20 seconds."
+    red "Check log: /tmp/zalohub-backend-prod.log"
+    exit 1
+}
+
+deploy_bff() {
+  blue "[bff] Building BFF"
+  npm run build --prefix "$BFF_DIR"
+
+  blue "[bff] Restarting BFF via systemd"
+  if systemctl is-active --quiet zalohub-bff.service; then
+    sudo systemctl restart zalohub-bff.service
+  else
+    sudo systemctl start zalohub-bff.service
+  fi
+
+  blue "[bff] Waiting for :3401"
+  for _ in $(seq 1 10); do
+    if curl -fsS "$BFF_HEALTH_URL" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  red "BFF did not become ready on :3401 within 10 seconds."
+  red "Check log: /tmp/zalohub-bff.log"
   exit 1
 }
 
 verify_all() {
+  blue '[verify] Frontend health'
+  curl -fsS "$FRONTEND_HEALTH_URL" || true
+  printf '\n'
+
   blue '[verify] Local backend status'
   curl -fsS "$LOCAL_STATUS_URL"
   printf '\n'
@@ -271,6 +327,11 @@ verify_all() {
 if [[ $DEPLOY_FRONTEND -eq 1 ]]; then
   deploy_frontend
   green "[frontend] Deploy complete"
+fi
+
+if [[ $DEPLOY_BFF -eq 1 ]]; then
+  deploy_bff
+  green "[bff] Deploy complete"
 fi
 
 if [[ $DEPLOY_BACKEND -eq 1 ]]; then

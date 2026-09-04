@@ -299,8 +299,22 @@ export class GoldSessionAuth {
       throw new Error('Session verification failed: getAllFriends unavailable');
     }
 
+    const api = this.state.session.api;
+    const hasSendMessage = typeof api.sendMessage === 'function';
+    const hasSendMsg = typeof api.sendMsg === 'function';
+    if (!hasSendMessage && !hasSendMsg) {
+      this.state.logger.error('verify_session_missing_send_api', {
+        hasSendMessage: false,
+        hasSendMsg: false,
+        hint: 'Session thieu sendMessage/sendMsg — co the la session tu QR login. Hay login lai bang mat khau.',
+      });
+    }
+
     await this.state.session.api.getAllFriends(1, 1);
-    this.state.logger.info('verify_session_succeeded');
+    this.state.logger.info('verify_session_succeeded', {
+      hasSendMessage,
+      hasSendMsg,
+    });
   }
 
   async fetchAccountInfo() {

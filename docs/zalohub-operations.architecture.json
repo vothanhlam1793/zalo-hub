@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZaloHub - So do van hanh",
+    "output": "zalohub-operations.architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [1120, 720],
+    "views": [
+      {
+        "id": "web-chat",
+        "label": "Web chat va realtime",
+        "focus": ["users", "nginx", "frontend", "bff", "backend", "postgres"],
+        "note": "Truy cap SSR, goi BFF bang cookie HttpOnly, sau do doc/ghi qua backend va PostgreSQL."
+      },
+      {
+        "id": "zalo-runtime",
+        "label": "Tin nhan Zalo hai chieu",
+        "focus": ["bff", "backend", "zalo", "postgres", "minio"],
+        "note": "Backend duy tri Zalo runtime, luu tin nhan, mirror media va day cap nhat realtime qua WebSocket."
+      },
+      {
+        "id": "automation",
+        "label": "Agent va Dify",
+        "focus": ["agents", "nginx", "backend", "dify", "zalo"],
+        "note": "Agent doc du lieu qua Monitor API; Dify nhan webhook va co the gui cau tra loi tro lai Zalo."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "users",
+      "type": "external",
+      "label": "Nguoi dung",
+      "sublabel": "Trinh duyet web",
+      "pos": [30, 265],
+      "size": [130, 66]
+    },
+    {
+      "id": "agents",
+      "type": "external",
+      "label": "Agent / Dify Tool",
+      "sublabel": "Monitor va Bot API",
+      "pos": [30, 485],
+      "size": [130, 66]
+    },
+    {
+      "id": "nginx",
+      "type": "security",
+      "label": "NGINX SVR12",
+      "sublabel": "TLS va reverse proxy",
+      "tag": "HTTPS :443",
+      "pos": [230, 265],
+      "size": [145, 70]
+    },
+    {
+      "id": "frontend",
+      "type": "frontend",
+      "label": "React Router SSR",
+      "sublabel": "Frontend :3400",
+      "tag": "systemd",
+      "pos": [455, 105],
+      "size": [150, 72]
+    },
+    {
+      "id": "bff",
+      "type": "backend",
+      "label": "ZaloHub BFF",
+      "sublabel": "REST + WS gateway :3401",
+      "tag": "HttpOnly cookie",
+      "pos": [455, 262],
+      "size": [150, 76]
+    },
+    {
+      "id": "backend",
+      "type": "backend",
+      "label": "Express + Zalo Runtime",
+      "sublabel": "API, listener, sync :3399",
+      "tag": "multi-account",
+      "pos": [700, 262],
+      "size": [165, 76]
+    },
+    {
+      "id": "zalo",
+      "type": "external",
+      "label": "Zalo Platform",
+      "sublabel": "Realtime, history, send",
+      "pos": [935, 80],
+      "size": [150, 70]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "Tin nhan, account, quyen",
+      "tag": "localhost :5433",
+      "pos": [935, 245],
+      "size": [150, 72]
+    },
+    {
+      "id": "minio",
+      "type": "cloud",
+      "label": "MinIO",
+      "sublabel": "Anh va tep da mirror",
+      "tag": "S3 :9000",
+      "pos": [935, 410],
+      "size": [150, 72]
+    },
+    {
+      "id": "dify",
+      "type": "external",
+      "label": "Dify Workflows",
+      "sublabel": "Bot webhook tren Orion",
+      "pos": [700, 545],
+      "size": [165, 72]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "SVR12 - public edge",
+      "wraps": ["nginx"],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "leco 10.7.0.21 - application host",
+      "wraps": ["frontend", "bff", "backend", "postgres", "minio"],
+      "pad": 28
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-edge",
+      "from": "users",
+      "to": "nginx",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "edge-ssr",
+      "from": "nginx",
+      "to": "frontend",
+      "label": "/ -> :3400"
+    },
+    {
+      "id": "edge-bff",
+      "from": "nginx",
+      "to": "bff",
+      "label": "/bff, /ws -> :3401",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight",
+      "labelAt": [415, 355]
+    },
+    {
+      "id": "ssr-bff",
+      "from": "frontend",
+      "to": "bff",
+      "label": "serverFetch + cookie",
+      "labelAt": [530, 191]
+    },
+    {
+      "id": "bff-backend",
+      "from": "bff",
+      "to": "backend",
+      "label": "JWT REST + WS relay",
+      "variant": "emphasis",
+      "labelAt": [653, 355]
+    },
+    {
+      "id": "backend-zalo",
+      "from": "backend",
+      "to": "zalo",
+      "label": "Zalo WS hai chieu",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "backend-db",
+      "from": "backend",
+      "to": "postgres",
+      "label": "Knex SQL"
+    },
+    {
+      "id": "backend-media",
+      "from": "backend",
+      "to": "minio",
+      "label": "mirror va stream media"
+    },
+    {
+      "id": "agent-edge",
+      "from": "agents",
+      "to": "nginx",
+      "label": "Monitor / Bot API"
+    },
+    {
+      "id": "edge-api",
+      "from": "nginx",
+      "to": "backend",
+      "label": "/api -> :3399",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [[302.5, 390], [782.5, 390]],
+      "labelAt": [540, 400]
+    },
+    {
+      "id": "backend-dify",
+      "from": "backend",
+      "to": "dify",
+      "label": "webhook + bot reply",
+      "variant": "dashed",
+      "labelAt": [780, 470]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "Trang thai tai lieu",
+      "items": [
+        "SSR va BFF duoc ve theo worktree hien tai, chua commit",
+        "README va vault van con mo ta frontend tinh cu tren SVR12"
+      ]
+    }
+  ]
+}

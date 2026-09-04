@@ -1,5 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { api } from '../api';
+import { bff } from '../bff-api';
 import type { AccountSummary } from '../types';
 
 interface AdminUser {
@@ -26,7 +26,7 @@ const ROLE_OPTIONS = [
 export function AdminMatrixTab({ users, accounts, onRefresh, setError, setStatus }: Props) {
   const handleChange = async (userId: string, accountId: string, role: string) => {
     try {
-      await api.adminUpdateMembership(userId, accountId, role === 'none' ? '' : role);
+      await bff.adminUpdateMembership(userId, accountId, role === 'none' ? '' : role);
       onRefresh();
     } catch (err) { setError(err instanceof Error ? err.message : 'Cap nhat that bai'); }
   };

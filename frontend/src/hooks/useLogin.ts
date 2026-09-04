@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { api } from '../api';
+import { bff } from '../bff-api';
 import type { AccountSummary, SessionStatus } from '../types';
 
 export function useLogin() {
@@ -9,7 +9,7 @@ export function useLogin() {
 
   const refreshQr = useCallback(async () => {
     try {
-      const r = await api.loginQr();
+      const r = await bff.loginQr();
       setQrCode(r.qrCode ?? '');
     } catch {
       setQrCode('');
@@ -30,15 +30,15 @@ export function useLogin() {
     setLoadError('');
     setStatusMsg(targetAccountId ? 'Đang mở QR đăng nhập lại...' : 'Đang mở QR thêm tài khoản...');
     const knownAccountIds = new Set(knownAccounts.map((account) => account.accountId));
-    await api.loginStart();
+    await bff.loginStart();
     await refreshQr();
     if (loginPollRef.current) clearInterval(loginPollRef.current);
     setLoginPolling(true);
     loginPollRef.current = setInterval(async () => {
       try {
-        const s = await api.status();
+        const s = await bff.status();
         setStatus(s);
-        api.accounts().then((result) => {
+        bff.accounts().then((result) => {
           setKnownAccounts(result.accounts);
           const newlyReadyAccount = result.accounts.find((account) => account.sessionActive && !knownAccountIds.has(account.accountId));
           const targetBecameReady = targetAccountId
@@ -50,7 +50,7 @@ export function useLogin() {
             setLoginPolling(false);
             const readyId = newlyReadyAccount?.accountId ?? targetBecameReady!.accountId;
             setSelectedAccountId(readyId);
-            api.activateAccount(readyId).catch(() => {});
+            bff.activateAccount(readyId).catch(() => {});
             setStatusMsg(newlyReadyAccount ? 'Đã thêm tài khoản mới.' : 'Đã đăng nhập lại tài khoản.');
             onAccountReady(readyId, s);
             return;

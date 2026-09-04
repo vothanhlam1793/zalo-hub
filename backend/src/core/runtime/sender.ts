@@ -33,20 +33,53 @@ export class GoldSender {
     this._getActiveAccountId = deps.getActiveAccountId;
   }
 
+  private async ensureSessionReady(context: string) {
+    if (this.state.listenerState.needsRelogin) {
+      this.state.logger.info('ensure_session_needs_relogin', { context });
+      await this._loginWithStoredCredential?.();
+    }
+    if (!this.state.session) {
+      await this._loginWithStoredCredential?.();
+    }
+  }
+
+  private buildSentMessagePayload(
+    conversationId: string,
+    target: { threadId: string; type: GoldConversationType },
+    text: string,
+    kind: GoldMessageKind,
+    result: any,
+    method: string,
+  ): GoldConversationMessage {
+    return {
+      id: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
+      providerMessageId: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
+      cliMsgId: result?.message?.cliMsgId ? String(result.message.cliMsgId) : undefined,
+      conversationId,
+      threadId: target.threadId,
+      conversationType: target.type,
+      text,
+      kind,
+      attachments: [],
+      direction: 'outgoing' as const,
+      isSelf: true,
+      timestamp: new Date().toISOString(),
+      rawMessageJson: JSON.stringify(result ?? {}),
+    };
+  }
+
+  private buildApiKeysReport(): string {
+    const api = this.state.session?.api;
+    const apiKeys = api && typeof api === 'object' ? Object.keys(api).sort() : [];
+    return apiKeys.join(', ');
+  }
+
   async sendText(conversationId: string, text: string) {
     if (!conversationId || !text) {
       throw new Error('conversationId va text la bat buoc');
     }
 
-    // If Zalo listener flagged needsRelogin, attempt to refresh session before sending
-    if (this.state.listenerState.needsRelogin) {
-      this.state.logger.info('send_text_needs_relogin', { conversationId });
-      await this._loginWithStoredCredential?.();
-    }
-
-    if (!this.state.session) {
-      await this._loginWithStoredCredential?.();
-    }
+    await this.ensureSessionReady(`sendText:${conversationId}`);
 
     const api = this.state.session?.api;
     const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
@@ -59,60 +92,44 @@ export class GoldSender {
           target.threadId,
           target.type === 'group' ? ThreadType.Group : ThreadType.User,
         );
-        await this._appendConversationMessage?.({
-          id: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
-          providerMessageId: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
-          cliMsgId: result?.message?.cliMsgId ? String(result.message.cliMsgId) : undefined,
-          conversationId,
-          threadId: target.threadId,
-          conversationType: target.type,
-          text,
-          kind: 'text',
-          attachments: [],
-          direction: 'outgoing',
-          isSelf: true,
-          timestamp: new Date().toISOString(),
-          rawMessageJson: JSON.stringify(result ?? {}),
-        });
+        await this._appendConversationMessage?.(
+          this.buildSentMessagePayload(conversationId, target, text, 'text', result, 'sendMessage'),
+        );
         this.state.logger.info('send_text_succeeded', { method: 'sendMessage', conversationId, result });
         return { method: 'sendMessage', result };
       } catch (error) {
         this.state.logger.error('send_method_failed', { method: 'sendMessage', conversationId, error });
-        console.error('[gold-1] send method sendMessage failed', error);
+        throw error;
       }
     }
 
     if (typeof api?.sendMsg === 'function') {
       try {
         const result = await api.sendMsg({ msg: text }, target.threadId);
-        await this._appendConversationMessage?.({
-          id: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
-          providerMessageId: String(result?.message?.msgId ?? result?.msgId ?? result?.messageId ?? randomUUID()),
-          cliMsgId: result?.message?.cliMsgId ? String(result.message.cliMsgId) : undefined,
-          conversationId,
-          threadId: target.threadId,
-          conversationType: target.type,
-          text,
-          kind: 'text',
-          attachments: [],
-          direction: 'outgoing',
-          isSelf: true,
-          timestamp: new Date().toISOString(),
-          rawMessageJson: JSON.stringify(result ?? {}),
-        });
+        await this._appendConversationMessage?.(
+          this.buildSentMessagePayload(conversationId, target, text, 'text', result, 'sendMsg'),
+        );
         this.state.logger.info('send_text_succeeded', { method: 'sendMsg', conversationId, result });
         return { method: 'sendMsg', conversationId, result };
       } catch (error) {
         this.state.logger.error('send_method_failed', { method: 'sendMsg', conversationId, error });
-        console.error('[gold-1] send method sendMsg failed', error);
+        throw error;
       }
     }
 
-    const apiKeys = api && typeof api === 'object' ? Object.keys(api).sort() : [];
+    const apiKeys = this.buildApiKeysReport();
     this.state.logger.error('send_method_not_found', { conversationId, apiKeys });
     throw new Error(
-      `Khong tim thay send API phu hop tren session. Available methods: ${apiKeys.join(', ')}`,
+      `Khong tim thay send API phu hop tren session. Available methods: ${apiKeys}`,
     );
+  }
+
+  private findAttachmentSendMethod(): string | undefined {
+    const api = this.state.session?.api;
+    if (typeof api?.sendMessage === 'function') return 'sendMessage';
+    if (typeof api?.sendFile === 'function') return 'sendFile';
+    if (typeof api?.sendVideo === 'function') return 'sendVideo';
+    return undefined;
   }
 
   async sendAttachment(conversationId: string, options: {
@@ -125,19 +142,14 @@ export class GoldSender {
     if (!options.fileBuffer?.length) throw new Error('fileBuffer la bat buoc');
     if (!options.fileName.trim()) throw new Error('fileName la bat buoc');
 
-    // If Zalo listener flagged needsRelogin, attempt to refresh session before sending
-    if (this.state.listenerState.needsRelogin) {
-      this.state.logger.info('send_attachment_needs_relogin', { conversationId });
-      await this._loginWithStoredCredential?.();
-    }
-
-    if (!this.state.session) {
-      await this._loginWithStoredCredential?.();
-    }
+    await this.ensureSessionReady(`sendAttachment:${conversationId}`);
 
     const api = this.state.session?.api;
-    if (typeof api?.sendMessage !== 'function') {
-      throw new Error('Session khong ho tro sendMessage (Vui long login lai bang Mat khau thay vi QR code)');
+    const sendMethod = this.findAttachmentSendMethod();
+
+    if (!sendMethod) {
+      const apiKeys = this.buildApiKeysReport();
+      throw new Error(`Session khong ho tro send attachment (sendMessage/sendFile/sendVideo deu thieu). Available methods: ${apiKeys}`);
     }
 
     const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
@@ -163,13 +175,18 @@ export class GoldSender {
     writeFileSync(tempFilePath, options.fileBuffer);
 
     try {
-      const result = await api.sendMessage(
-        { msg: caption, attachments: [tempFilePath] },
-        target.threadId,
-        target.type === 'group' ? ThreadType.Group : ThreadType.User,
-      );
+      let result: any;
+      if (sendMethod === 'sendMessage') {
+        result = await api.sendMessage(
+          { msg: caption, attachments: [tempFilePath] },
+          target.threadId,
+          target.type === 'group' ? ThreadType.Group : ThreadType.User,
+        );
+      } else {
+        result = await api[sendMethod](tempFilePath, target.threadId);
+      }
 
-      this.state.logger.info('send_attachment_api_result', { conversationId, result });
+      this.state.logger.info('send_attachment_api_result', { conversationId, method: sendMethod, result });
 
       const att = result?.attachment?.[0];
       const msgResult = result?.message;
@@ -215,8 +232,8 @@ export class GoldSender {
         rawMessageJson: JSON.stringify(result ?? {}),
       });
 
-      this.state.logger.info('send_attachment_succeeded', { conversationId, kind, messageId });
-      return { method: 'sendMessage', kind, result };
+      this.state.logger.info('send_attachment_succeeded', { conversationId, kind, messageId, method: sendMethod });
+      return { method: sendMethod, kind, result };
     } finally {
       try { unlinkSync(tempFilePath); } catch { /* ignore */ }
     }

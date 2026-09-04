@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { api } from '../api';
+import { bff } from '../bff-api';
 import type { ConversationSummary, Message } from '../types';
 
 export function useComposer() {
@@ -25,7 +25,7 @@ export function useComposer() {
     const trimmedText = text.trim();
     if (!activeConversationId || (!trimmedText && !attachFile)) return;
     if (!accountId) {
-      setStatusMsg('Chưa có tài khoản workspace được chọn');
+      setStatusMsg('Chua co tai khoan workspace duoc chon');
       return;
     }
 
@@ -64,15 +64,26 @@ export function useComposer() {
     });
 
     try {
+      const params: {
+        accountId: string; conversationId: string;
+        text?: string; type?: string; caption?: string;
+      } = {
+        accountId,
+        conversationId: activeConversationId,
+      };
+
       if (attachFile) {
-        const result: any = await api.accountSendAttachment(accountId, activeConversationId, attachFile, trimmedText || undefined);
+        params.type = 'attachment';
+        if (trimmedText) params.caption = trimmedText;
+        const result: any = await bff.send(params, attachFile);
         const resId = result?.message?.msgId ?? result?.msgId;
         if (resId) {
           pendingMsg.id = String(resId);
           pendingMsg.providerMessageId = String(resId);
         }
       } else {
-        const result: any = await api.accountSendText(accountId, activeConversationId, trimmedText);
+        params.text = trimmedText;
+        const result: any = await bff.send(params);
         const resId = result?.message?.msgId ?? result?.msgId;
         if (resId) {
           pendingMsg.id = String(resId);
@@ -81,8 +92,8 @@ export function useComposer() {
       }
       setLoadError('');
     } catch (err) {
-      setStatusMsg(err instanceof Error ? err.message : 'Gửi thất bại');
-      setLoadError(err instanceof Error ? err.message : 'Gửi thất bại');
+      setStatusMsg(err instanceof Error ? err.message : 'Gui that bai');
+      setLoadError(err instanceof Error ? err.message : 'Gui that bai');
     } finally {
       setSending(false);
     }

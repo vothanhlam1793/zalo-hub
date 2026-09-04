@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { api } from '@/api';
+import { bff } from '@/bff-api';
 import type { AccountSummary } from '@/types';
 
 interface AdminUser {
@@ -28,7 +28,7 @@ export function AdminUsersTab({ users, accounts, onRefresh, setError, setStatus 
 
   const handleRoleChange = async (userId: string, role: string) => {
     try {
-      await api.adminUpdateUser(userId, { role });
+      await bff.adminUpdateUser(userId, { role });
       onRefresh();
       setStatus('Cap nhat role thanh cong');
     } catch (err) { setError(err instanceof Error ? err.message : 'Loi cap nhat role'); }
@@ -36,7 +36,7 @@ export function AdminUsersTab({ users, accounts, onRefresh, setError, setStatus 
 
   const handleDelete = async (userId: string) => {
     if (!confirm('Xoa nguoi dung nay?')) return;
-    try { await api.adminDeleteUser(userId); onRefresh(); setStatus('Xoa thanh cong'); }
+    try { await bff.adminDeleteUser(userId); onRefresh(); setStatus('Xoa thanh cong'); }
     catch (err) { setError(err instanceof Error ? err.message : 'Xoa that bai'); }
   };
 
@@ -50,7 +50,7 @@ export function AdminUsersTab({ users, accounts, onRefresh, setError, setStatus 
       if (form.type !== editUser.type) updates.type = form.type;
       if (form.password) updates.password = form.password;
       if (Object.keys(updates).length === 0) { setEditUser(null); return; }
-      await api.adminUpdateUser(editUser.id, updates);
+      await bff.adminUpdateUser(editUser.id, updates);
       setEditUser(null);
       onRefresh();
       setStatus('Cap nhat nguoi dung thanh cong');
@@ -61,7 +61,7 @@ export function AdminUsersTab({ users, accounts, onRefresh, setError, setStatus 
     e.preventDefault();
     if (!form.email || !form.password || !form.displayName) return;
     try {
-      await api.adminCreateUser(form.email, form.password, form.displayName);
+      await bff.adminCreateUser(form.email, form.password, form.displayName);
       setShowAdd(false);
       setForm({ email: '', password: '', displayName: '', role: 'user', type: 'human' });
       onRefresh();

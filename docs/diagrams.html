@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZaloHub — Kiến trúc hệ thống</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d2991d;
+    --red: #f85149;
+    --purple: #a371f7;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 32px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+  header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  header h1 span.badge {
+    background: var(--accent);
+    color: #000;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-weight: 700;
+  }
+  header p { color: var(--muted); margin-top: 4px; font-size: 0.9rem; }
+
+  nav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    display: flex;
+    gap: 4px;
+    position: sticky;
+    top: 88px;
+    z-index: 99;
+  }
+  nav a {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 12px 16px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  nav a:hover, nav a.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  main { max-width: 1280px; margin: 0 auto; padding: 40px 32px; }
+
+  section {
+    margin-bottom: 56px;
+    scroll-margin-top: 160px;
+  }
+  section h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  section h2 .dot {
+    width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+  }
+  section h2 .arch { background: var(--accent); }
+  section h2 .flow { background: var(--green); }
+  section h2 .module { background: var(--purple); }
+  section h2 .db { background: var(--orange); }
+  section > p { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
+
+  .diagram-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    overflow-x: auto;
+  }
+  .diagram-box .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .legend strong { color: var(--text); }
+
+  footer {
+    text-align: center;
+    padding: 32px;
+    color: var(--muted);
+    font-size: 0.8rem;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ZaloHub <span class="badge">v1.0.2</span></h1>
+  <p>Sơ đồ kiến trúc hệ thống — Multi-user, Multi-account Zalo Chat Platform</p>
+</header>
+
+<nav>
+  <a href="#architecture" class="active">Kiến trúc</a>
+  <a href="#dataflow">Data Flow</a>
+  <a href="#modules">Modules</a>
+  <a href="#database">Database</a>
+</nav>
+
+<main>
+
+<section id="architecture">
+  <h2><span class="dot arch"></span> 1. Kiến trúc tổng quan</h2>
+  <p>Triển khai 2-host: App host (10.7.0.21) chạy Node.js + Docker, Proxy host (svr12.creta.vn) SSL termination.</p>
+  <div class="diagram-box">
+    <div class="mermaid">
+flowchart TB
+    subgraph Users["🧑 Người dùng"]
+        Browser["Trình duyệt / Mobile"]
+        DifyAgent["🤖 Dify Agent / Bot external"]
+        ZaloApp["📱 Zalo App (mobile)"]
+    end
+
+    subgraph Proxy["🌐 Proxy Host — svr12.creta.vn"]
+        Nginx["🔐 Nginx SSL<br/>zalo.camerangochoang.com<br/>hub.besen.vn"]
+    end
+
+    subgraph AppHost["🖥️ App Host — 10.7.0.21"]
+        subgraph Frontend["Frontend"]
+            ChatSPA["💬 Chat SPA<br/>React 19 + Vite<br/>:3400"]
+            AdminSPA["⚙️ Admin SPA<br/>React + Vite<br/>built → /admin"]
+        end
+
+        subgraph Backend["Backend :3399"]
+            Express["🚂 Express Server"]
+            subgraph Routes["Routes"]
+                AuthR["🔑 Auth<br/>JWT login/logout"]
+                AccountsR["👤 Accounts<br/>CRUD + send + sync"]
+                BotApiR["🤖 Bot API<br/>send-message / messages"]
+                MonitorR["📡 Monitor<br/>Agent discovery API"]
+                AdminR["🛡️ Admin<br/>Users / Memberships"]
+                DifyBotsR["🔧 Dify Bots<br/>CRUD management"]
+                WS["📶 WebSocket<br/>realtime chat + badge"]
+            end
+            subgraph Core["Core Runtime Engine"]
+                AccMgr["AccountRuntimeManager<br/>watchdog 30s"]
+                Runtime1["GoldRuntime #1<br/>auth • listener • sender • sync"]
+                Runtime2["GoldRuntime #2<br/>auth • listener • sender • sync"]
+                DifyExec["DifyBotExecutor<br/>webhook dispatch"]
+            end
+        end
+
+        subgraph Storage["💾 Storage"]
+            PG[("🐘 PostgreSQL 16<br/>:5432")]
+            MinIO[("🪣 MinIO S3<br/>:9000")]
+        end
+    end
+
+    subgraph External["🌍 External"]
+        ZaloAPI["🔗 Zalo WebSocket API<br/>via zalo-api-final"]
+        DifyPlatform["☁️ Dify Platform"]
+    end
+
+    Browser -->|"HTTPS :443"| Nginx
+    DifyAgent -->|"HTTPS /api/bot"| Nginx
+    ZaloApp -->|"QR Scan"| Backend
+    Nginx -->|"proxy_pass :3399"| Express
+
+    Express --> Routes
+    Express --> Core
+    Express --> Storage
+    Express --> WS
+
+    ChatSPA -.->|"Vite proxy dev"| Express
+    AdminSPA -->|"built → /admin"| Express
+
+    AccMgr --> Runtime1
+    AccMgr --> Runtime2
+    DifyExec --> DifyPlatform
+    Runtime1 <-->|"Zalo WS"| ZaloAPI
+
+    style Users fill:#1a1f2e,stroke:#30363d
+    style Proxy fill:#1a1f2e,stroke:#30363d
+    style AppHost fill:#0d1117,stroke:#30363d
+    style Frontend fill:#1a1f2e,stroke:#30363d
+    style Backend fill:#161b22,stroke:#30363d
+    style Core fill:#1a1f2e,stroke:#58a6ff
+    style Routes fill:#1a1f2e,stroke:#3fb950
+    style Storage fill:#1a1f2e,stroke:#d2991d
+    style External fill:#1a1f2e,stroke:#a371f7
+    </div>
+  </div>
+  <div class="legend">
+    <strong>Ghi chú:</strong> Frontend dev (:3400) proxy trực tiếp qua Vite. Production: cả Chat SPA &amp; Admin SPA được build vào static, Nginx serve. Admin SPA được mount tại path <code>/admin</code> trên Express.
+  </div>
+</section>
+
+<section id="dataflow">
+  <h2><span class="dot flow"></span> 2. Data Flow — Vòng đời tin nhắn</h2>
+  <p>Cách một tin nhắn Zalo đi từ realtime WebSocket đến frontend hiển thị, lưu DB, và forward cho Dify bot.</p>
+  <div class="diagram-box">
+    <div class="mermaid">
+sequenceDiagram
+    participant Z as 🔗 Zalo WS
+    participant L as 👂 GoldListener
+    participant N as 🔄 Normalizer
+    participant M as 📥 appendMsg()
+    participant Cache as 🗂️ In-Memory Map
+    participant DB as 🐘 PostgreSQL
+    participant D as 🤖 DifyBotExecutor
+    participant WS as 📶 WebSocket Server
+    participant F as 💬 React Frontend
+
+    Z->>L: message event (raw)
+    L->>N: normalize (text, kind, attachments, reactions)
+    N-->>L: GoldConversationMessage
+    L->>M: appendConversationMessage(msg)
+    M->>M: dedup check (seenMessageKeys + 15s window)
+    alt is duplicate
+        M-->>L: ignored
+    else new message
+        M->>Cache: push + sort
+        M->>DB: replaceConversationMessagesByAccount()
+        M->>D: onConversationMessage() callback
+        D-->>D: matchesFilter? POST webhook → Dify
+        M->>WS: broadcast to listeners
+        WS->>F: realtime update (Zustand store)
+    end
+
+    Note over L,Z: Listener auto-retry on error<br/>5 close in 10min → needsRelogin<br/>Watchdog 30s: restart / relogin
+    Note over D: Bot filter: enabled + direction<br/>+ receive_groups whitelist<br/>→ if match: POST to webhook URL
+    </div>
+  </div>
+  <div class="legend">
+    <strong>Luồng:</strong> Zalo WS → Listener → Normalize → Append (dedup) → Cache + DB + WebSocket broadcast → Frontend. Bot Executor nhận message qua <code>onConversationMessage</code> callback, nếu filter match thì POST webhook đến Dify Platform.
+  </div>
+</section>
+
+<section id="modules">
+  <h2><span class="dot module"></span> 3. Module Dependency Graph</h2>
+  <p>Cây phụ thuộc giữa các module trong <code>backend/src/core/</code> và <code>backend/src/server/</code>.</p>
+  <div class="diagram-box">
+    <div class="mermaid">
+flowchart LR
+    subgraph Entry["🚂 server/index.ts"]
+        express["Express App"]
+        wsHandler["WebSocket Handler"]
+    end
+
+    subgraph Server["📦 server/"]
+        AccMgr["AccountRuntimeManager<br/>Map accountId → Runtime<br/>Watchdog 30s"]
+        subgraph RoutesS["Routes"]
+            AccountsRoute["/api/accounts"]
+            BotApiRoute["/api/bot"]
+            MonitorRoute["/api/accounts/monitor"]
+            AdminRoute["/api/admin"]
+            DifyBotsRoute["/api/admin/bots"]
+            AuthRoute["/api/auth"]
+            SystemAuth["/api/system-auth"]
+        end
+        subgraph Services["Services"]
+            DifyBotService["DifyBotService<br/>CRUD dify_bots"]
+            DifyBotExecutor["DifyBotExecutor<br/>filter + webhook dispatch"]
+        end
+    end
+
+    subgraph Core["🧠 core/"]
+        GoldRuntime["GoldRuntime<br/>orchestrator"]
+        subgraph RuntimeModules["Runtime Modules"]
+            SessionAuth["GoldSessionAuth<br/>login credential / QR<br/>verifySession<br/>fetchAccountInfo"]
+            Listener["GoldListener<br/>WebSocket listener<br/>message/reaction events<br/>history sync"]
+            Sender["GoldSender<br/>sendText / sendAttachment<br/>sendSticker / addReaction<br/>getUnreadMark / markRead"]
+            Sync["GoldSync<br/>conversation sync<br/>mobile sync<br/>media backfill"]
+        end
+        subgraph Infra["Infrastructure"]
+            Store["GoldStore<br/>PostgreSQL via Knex<br/>accounts/messages/groups<br/>contacts/dify_bots"]
+            Logger["GoldLogger<br/>structured JSON file logs"]
+            MediaStore["GoldMediaStore<br/>MinIO S3 mirror + save"]
+            Normalizer["Normalizer<br/>message/attachment/reaction<br/>parsing & normalization"]
+            Types["Types<br/>GoldConversationMessage<br/>SharedState • ListenerState"]
+        end
+    end
+
+    express --> AccMgr
+    express --> RoutesS
+    express --> Services
+
+    AccMgr --> GoldRuntime
+    AccMgr --> DifyBotExecutor
+
+    RoutesS --> AccMgr
+    RoutesS --> Store
+    BotApiRoute --> DifyBotService
+    DifyBotExecutor --> DifyBotService
+
+    GoldRuntime --> SessionAuth
+    GoldRuntime --> Listener
+    GoldRuntime --> Sender
+    GoldRuntime --> Sync
+    GoldRuntime --> Store
+    GoldRuntime --> Logger
+    GoldRuntime --> MediaStore
+    GoldRuntime --> Types
+
+    SessionAuth --> Store
+    SessionAuth --> Logger
+    SessionAuth --> Normalizer
+
+    Listener --> Store
+    Listener --> Logger
+    Listener --> Normalizer
+
+    Sender --> Store
+    Sender --> Logger
+    Sender --> MediaStore
+
+    Sync --> Store
+    Sync --> Logger
+    Sync --> MediaStore
+    Sync --> Normalizer
+
+    style Entry fill:#1a1f2e,stroke:#58a6ff
+    style Server fill:#161b22,stroke:#3fb950
+    style Core fill:#0d1117,stroke:#a371f7
+    style Services fill:#1a2e1a,stroke:#3fb950
+    style Infra fill:#1a1f2e,stroke:#d2991d
+    style GoldRuntime fill:#0d2e4a,stroke:#58a6ff
+    </div>
+  </div>
+  <div class="legend">
+    <strong>Pattern:</strong> <code>GoldRuntime</code> là orchestrator — nó khởi tạo SessionAuth, Listener, Sender, Sync và wire các dependency qua <code>init()</code>. Các module không gọi nhau trực tiếp mà qua shared <code>SharedState</code> object.
+  </div>
+</section>
+
+<section id="database">
+  <h2><span class="dot db"></span> 4. Database Schema</h2>
+  <p>13 bảng PostgreSQL 16. Quan hệ chính: <code>accounts</code> là trung tâm, mọi dữ liệu Zalo đều gắn với một account.</p>
+  <div class="diagram-box">
+    <div class="mermaid">
+erDiagram
+    accounts ||--o{ account_sessions : "1:1 session"
+    accounts ||--o{ friends : "1:N contacts"
+    accounts ||--o{ conversations : "1:N"
+    accounts ||--o{ messages : "1:N"
+    accounts ||--o{ groups : "1:N"
+    accounts ||--o{ dify_bots : "1:N bots"
+    accounts ||--o{ zalo_account_memberships : "1:N members"
+    system_users ||--o{ zalo_account_memberships : "1:N members"
+    system_users ||--o{ system_sessions : "1:N sessions"
+    messages ||--o{ attachments : "1:N attachments"
+
+    accounts {
+        text account_id PK
+        varchar hub_alias
+        varchar display_name
+        varchar phone_number
+        text avatar
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz last_login_at
+    }
+
+    account_sessions {
+        text account_id PK_FK
+        jsonb cookie_json
+        varchar imei
+        text user_agent
+        int is_active
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    friends {
+        text id PK
+        text account_id FK
+        text friend_id
+        text display_name
+        text zalo_name
+        text hub_alias
+        text avatar
+        text status
+        text phone_number
+        timestamptz last_sync_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    conversations {
+        text id PK
+        text account_id FK
+        text thread_id
+        varchar type
+        text title
+        text avatar
+        text friend_id
+        text display_name_snapshot
+        text last_message_text
+        text last_message_kind
+        text last_direction
+        text last_message_timestamp
+        int message_count
+        int unread_count
+        text last_read_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    conversation_read_state {
+        text account_id PK_FK
+        text conversation_id PK
+        text last_read_at
+        timestamptz updated_at
+    }
+
+    messages {
+        text id PK
+        text conversation_id FK
+        text account_id FK
+        text thread_id
+        text conversation_type
+        text friend_id
+        text provider_message_id
+        text sender_id
+        text sender_name
+        text direction
+        text kind
+        text text
+        text image_url
+        int is_self
+        text timestamp
+        jsonb raw_message_json
+        jsonb reactions_json
+        timestamptz created_at
+    }
+
+    groups {
+        text id PK
+        text account_id FK
+        text group_id
+        text display_name
+        text avatar
+        int member_count
+        jsonb members_json
+        timestamptz last_sync_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    attachments {
+        text id PK
+        text message_id FK
+        text type
+        text url
+        text source_url
+        text local_path
+        text thumbnail_url
+        text thumbnail_source_url
+        text thumbnail_local_path
+        text file_name
+        text mime_type
+        int size
+        int width
+        int height
+        int duration
+        timestamptz created_at
+    }
+
+    system_users {
+        text id PK
+        text email UK
+        text password_hash
+        text display_name
+        varchar role
+        text avatar
+        varchar type
+        timestamptz created_at
+    }
+
+    system_sessions {
+        text token PK
+        text user_id FK
+        timestamptz expires_at
+        timestamptz created_at
+    }
+
+    zalo_account_memberships {
+        text user_id PK_FK
+        text account_id PK
+        varchar role
+        int visible
+        timestamptz created_at
+    }
+
+    dify_bots {
+        uuid id PK
+        text account_id
+        text name
+        text dify_api_key
+        text dify_webhook_url
+        boolean enabled
+        varchar bot_token UK
+        jsonb receive_groups
+        jsonb send_groups
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    app_meta {
+        text key PK
+        text value
+    }
+    </div>
+  </div>
+  <div class="legend">
+    <strong>Diễn giải:</strong>
+    <code>accounts</code> — mỗi dòng là 1 tài khoản Zalo được quản lý.
+    <code>messages</code> — trung tâm dữ liệu, indexed theo (account_id, conversation_id, timestamp) cho query nhanh.
+    <code>dify_bots</code> — mỗi account có thể có nhiều bot, mỗi bot có whitelist group riêng.
+    <code>zalo_account_memberships</code> — phân quyền user ↔ account (viewer / editor / master).
+  </div>
+</section>
+
+</main>
+
+<footer>
+  ZaloHub v1.0.2 — Multi-user, Multi-account Zalo Chat Platform — Generated 2026-06-20
+</footer>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#58a6ff',
+      primaryTextColor: '#e6edf3',
+      primaryBorderColor: '#30363d',
+      lineColor: '#8b949e',
+      secondaryColor: '#161b22',
+      tertiaryColor: '#0d1117',
+    },
+    flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+    er: { useMaxWidth: true },
+    sequence: { useMaxWidth: true, mirrorActors: false },
+  });
+
+  const sections = document.querySelectorAll('section');
+  const navLinks = document.querySelectorAll('nav a');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navLinks.forEach(l => l.classList.remove('active'));
+        const link = document.querySelector(`nav a[href="#${entry.target.id}"]`);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-160px 0px -70% 0px' });
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

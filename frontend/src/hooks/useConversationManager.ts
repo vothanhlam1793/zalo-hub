@@ -1,16 +1,16 @@
 import { useCallback } from 'react';
-import { api } from '../api';
-import type { ConversationSummary, HistorySyncResult, Message, Contact, Group } from '../types';
+import { bff } from '../bff-api';
+import type { ConversationSummary, HistorySyncResult, Message, Contact, Group, SessionStatus } from '../types';
 
 function buildHistoryStatus(result: HistorySyncResult) {
   if (result.timedOut && result.remoteCount === 0) {
-    return 'Đồng bộ lịch sử bị timeout. Có thể điện thoại hoặc nguồn sync của Zalo chưa phản hồi.';
+    return 'Dong bo lich su bi timeout. Co the dien thoai hoac nguon sync cua Zalo chua phan hoi.';
   }
-  const batchInfo = (result.batchCount && result.batchCount > 1) ? ` (${result.batchCount} đợt)` : '';
+  const batchInfo = (result.batchCount && result.batchCount > 1) ? ` (${result.batchCount} dot)` : '';
   if (result.remoteCount === 0) {
-    return 'Zalo không trả thêm lịch sử cũ cho cuộc trò chuyện này.';
+    return 'Zalo khong tra them lich su cu cho cuoc tro chuyen nay.';
   }
-  return `Đồng bộ lịch sử: nhận ${result.remoteCount} tin, thêm mới ${result.insertedCount}, bỏ trùng ${result.dedupedCount}${batchInfo}.`;
+  return `Dong bo lich su: nhan ${result.remoteCount} tin, them moi ${result.insertedCount}, bo trung ${result.dedupedCount}${batchInfo}.`;
 }
 
 export function useConversationManager() {
@@ -24,7 +24,7 @@ export function useConversationManager() {
     messagesEndRef: React.MutableRefObject<HTMLDivElement | null>,
   ) => {
     const token = selectionTokenRef.current;
-    const r = await api.accountMessages(accountId, conversationId, { limit: 40 });
+    const r = await bff.chatGetMessages(accountId, conversationId, { limit: 40 });
     const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
     mergeMessagesIntoConversation(accountId, conversationId, r.messages, 'replace');
     if (stillActive) {
@@ -54,12 +54,12 @@ export function useConversationManager() {
       setSyncingHistory(true);
     }
     try {
-      const result = await api.accountSyncHistory(accountId, conversationId, { beforeMessageId, timeoutMs: 15000 });
+      const result = await bff.syncHistory(accountId, conversationId, { beforeMessageId, timeoutMs: 15000 });
       if (readAt) {
-        await api.accountUpdateReadState(accountId, conversationId, readAt);
+        await bff.updateReadState(accountId, conversationId, readAt);
       }
       await refreshConversationMessages(accountId, conversationId);
-      const cv = await api.accountConversations(accountId);
+      const cv = await bff.chatGetConversations(accountId);
       if (token === selectionTokenRef.current) {
         replaceAccountConversations(accountId, cv.conversations);
       }
@@ -105,13 +105,12 @@ export function useConversationManager() {
 
     void (async () => {
       try {
-        // Fetch messages from DB immediately in parallel with metadata sync.
-        // This shows messages as fast as possible without waiting for heavy backend work.
-        const [r] = await Promise.all([
+        const [messagesRes, metadataRes] = await Promise.all([
           refreshConversationMessages(accountId, conversationId),
-          api.accountSyncConversationMetadata(accountId, conversationId)
-            .then((synced) => {
-              if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
+          bff.chatOpenConversation(accountId, conversationId).then((res) => {
+            if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
+            if (res.metadata) {
+              const synced = res.metadata;
               if (synced.conversationId !== conversationId) {
                 setActiveConversationId(synced.conversationId);
                 activeConversationIdRef.current = synced.conversationId;
@@ -119,21 +118,20 @@ export function useConversationManager() {
                 conversationId = synced.conversationId;
               }
               mergeMessagesIntoConversation(accountId, conversationId, synced.messages, 'replace');
-            })
-            .catch(() => { /* metadata sync failure should not block message display */ }),
+            }
+          }).catch(() => {}),
         ]);
 
         if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
-        if (r) {
-          setMessages(r.messages);
-          const hasMore = Boolean(r.hasMore);
+        if (messagesRes) {
+          setMessages(messagesRes.messages);
+          const hasMore = Boolean(messagesRes.hasMore);
           setHasMoreHistory(hasMore);
 
-          // Nếu ít tin trong DB (< 10) và Zalo còn lịch sử → auto sync ngay, không cần scroll
-          if (hasMore && r.messages.length < 10) {
-            setStatusMsg('Đang tải lịch sử...');
+          if (hasMore && messagesRes.messages.length < 10) {
+            setStatusMsg('Dang tai lich su...');
             try {
-              const syncResult = await syncConversationHistory(accountId, conversationId, r.messages[0]?.providerMessageId, new Date().toISOString());
+              const syncResult = await syncConversationHistory(accountId, conversationId, messagesRes.messages[0]?.providerMessageId, new Date().toISOString());
               if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
               if (syncResult.insertedCount > 0) {
                 const next = await refreshConversationMessages(accountId, conversationId);
@@ -149,7 +147,7 @@ export function useConversationManager() {
         }
       } catch (error) {
         if (token === selectionTokenRef.current) {
-          setLoadError(error instanceof Error ? error.message : 'Không tải được history');
+          setLoadError(error instanceof Error ? error.message : 'Khong tai duoc history');
         }
       }
     })();
@@ -181,13 +179,13 @@ export function useConversationManager() {
 
     setLoadingOlder(true);
     try {
-      const r = await api.accountMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
+      const r = await bff.chatGetMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
       if (r.messages.length > 0) {
         prependMessages(accountId, activeConversationId, r.messages);
       } else {
         const syncResult = await syncConversationHistory(accountId, activeConversationId, messages[0]?.providerMessageId, new Date().toISOString());
         if (syncResult.insertedCount > 0) {
-          const next = await api.accountMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
+          const next = await bff.chatGetMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
           prependMessages(accountId, activeConversationId, next.messages);
           setHasMoreHistory(Boolean(next.messages.length >= 40 || syncResult.hasMore));
         } else {
@@ -203,7 +201,7 @@ export function useConversationManager() {
         container.scrollTop = nextHeight - previousHeight;
       });
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Không tải được lịch sử cũ hơn');
+      setLoadError(error instanceof Error ? error.message : 'Khong tai duoc lich su cu hon');
     } finally {
       setLoadingOlder(false);
     }

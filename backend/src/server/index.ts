@@ -86,6 +86,16 @@ async function main() {
     next();
   });
 
+  app.get('/admin/diagrams', (_req, res) => {
+    const diagramsPath = path.resolve(__dirname, '../../../docs/diagrams.html');
+    if (fs.existsSync(diagramsPath)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.sendFile(diagramsPath);
+    } else {
+      res.status(404).send('Diagrams not found');
+    }
+  });
+
   app.use('/admin', express.static(adminDir));
   app.get('/admin', (_req, res) => {
     res.sendFile(path.join(adminDir, 'index.html'));
