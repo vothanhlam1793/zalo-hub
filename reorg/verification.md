@@ -43,8 +43,8 @@ The QR/session slice does not yet replace the monolith listener, contact/group s
 | Check | Result | Evidence |
 |---|---|---|
 | Separate process | Pass | `zalohub-zalo-gateway.service` is enabled and running independently of existing `zalohub*.service` units. |
-| Dedicated port | Pass | Gateway listens only on `127.0.0.1:16002`. |
+| Dedicated port | Pass | Gateway listens on `0.0.0.0:16002` for private-network remote operations. |
 | Service health | Pass | Live `/health` and `/ready` checks passed after systemd deployment. |
 | Database isolation | Pass | `zalohub_gateway` can query `zalo_gateway.accounts` but is denied read access to `public.system_users`. |
 
-The Gateway remains local-only by design. It must not be exposed through public Nginx routes before Management API is deployed as the authorization boundary.
+The Gateway is reachable on the private network at port `16002`. It must not be exposed through public Nginx routes before Management API is deployed as the authorization boundary.

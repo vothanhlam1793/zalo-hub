@@ -18,7 +18,7 @@
 - Gateway started against local PostgreSQL with an isolated `zalo_gateway` schema and returned a successful readiness response.
 - Management API issued an `onboarding.manage` token, and Gateway created a real QR payload through `zalo-api-final`.
 - Gateway rejected an onboarding query without the internal token with HTTP 401.
-- Deployed the standalone Gateway as `zalohub-zalo-gateway.service` on `leco` at `127.0.0.1:16002`.
+- Deployed the standalone Gateway as `zalohub-zalo-gateway.service` on `leco` at `0.0.0.0:16002` for private-network access.
 - Verified live `/health` and `/ready` responses after systemd start.
 - Verified the Gateway database role can query `zalo_gateway.accounts` and cannot read `public.system_users`.
 
