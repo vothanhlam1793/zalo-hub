@@ -81,7 +81,7 @@ export const bff = {
     if (params.type === 'sticker' && params.stickerId && params.catId) {
       return api.accountSendSticker(params.accountId, params.conversationId, params.stickerId, params.catId);
     }
-    return api.accountSend(params.accountId, params.conversationId, params.text || '');
+    return api.accountSendText(params.accountId, params.conversationId, params.text || '');
   },
 
   sendTyping: (accountId: string, conversationId: string, isTyping: boolean) =>

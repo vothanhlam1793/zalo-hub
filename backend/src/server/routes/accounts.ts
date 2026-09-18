@@ -192,19 +192,29 @@ export function createAccountsRouter(
           res.status(401).json({ error: 'Account chua active session' });
           return;
         }
-        const refresh = req.query.refresh === '1';
         const groupCache = await targetRuntime.getGroupCache();
-        const groups = refresh || groupCache.length === 0
-          ? await targetRuntime.listGroups().catch(async (error) => {
-              logger.error('account_groups_refresh_failed', {
-                accountId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              const fallbackGroups = await targetRuntime.getGroupCache();
-              if (fallbackGroups.length > 0) return fallbackGroups;
-              throw error;
-            })
-          : groupCache;
+        const refresh = req.query.refresh === '1';
+
+        // DB-First: return cached groups immediately if present
+        if (groupCache.length > 0 && !refresh) {
+          res.json({ groups: groupCache, count: groupCache.length });
+          return;
+        }
+
+        // Fetch from Zalo with timeout protection
+        const groups = await Promise.race([
+          targetRuntime.listGroups(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Fetch groups timeout')), 7000)),
+        ]).catch(async (error) => {
+          logger.error('account_groups_refresh_failed', {
+            accountId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          const fallbackGroups = await targetRuntime.getGroupCache();
+          if (fallbackGroups.length > 0) return fallbackGroups;
+          return [];
+        });
+
         res.json({ groups, count: groups.length });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Tai groups that bai' });

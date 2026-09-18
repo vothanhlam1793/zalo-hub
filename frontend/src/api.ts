@@ -24,7 +24,11 @@ async function req<T>(url: string, options: RequestInit = {}): Promise<T> {
 }
 
 async function upload(url: string, formData: FormData) {
-  const res = await fetch(url, { method: 'POST', body: formData });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { ...getAuthHeaders() },
+    body: formData,
+  });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
   return body;
