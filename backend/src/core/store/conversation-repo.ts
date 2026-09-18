@@ -134,12 +134,12 @@ export class GoldConversationRepo {
     const rows = (await this.knex.raw(`
       SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_timestamp, c.message_count
            , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
-           , c.id, c.thread_id, c.type, c.title, c.avatar
+           , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
       FROM conversations c
       LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
       WHERE c.account_id = ?
       ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
-    `, [resolvedAccountId])).rows as RawConversationRow[];
+    `, [resolvedAccountId])).rows as (RawConversationRow & { labels_json?: any })[];
 
     const unreadMap = new Map<string, number>();
     if (rows.length > 0) {
@@ -165,6 +165,13 @@ export class GoldConversationRepo {
       const threadOrFriend = row.thread_id ?? row.friend_id;
       const effectiveLastReadAt = row.last_read_at;
 
+      let parsedLabels: any = undefined;
+      if (row.labels_json) {
+        try {
+          parsedLabels = typeof row.labels_json === 'string' ? JSON.parse(row.labels_json) : row.labels_json;
+        } catch { /* ignore */ }
+      }
+
       summaries.push({
         id: `${resolvedType}:${threadOrFriend}`,
         accountId: resolvedAccountId,
@@ -187,6 +194,7 @@ export class GoldConversationRepo {
         messageCount: row.message_count,
         unreadCount: unreadMap.get(row.id) ?? 0,
         lastReadAt: effectiveLastReadAt,
+        labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
       } satisfies GoldConversationSummary);
     }
     return summaries;

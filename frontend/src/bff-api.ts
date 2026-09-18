@@ -59,6 +59,13 @@ export const bff = {
   chatGetMessages: (accountId: string, conversationId: string, options: { since?: string; before?: string; limit?: number } = {}) =>
     api.accountMessages(accountId, conversationId, options),
 
+  tagsList: (accountId?: string) => api.listTags(accountId),
+  tagCreate: (data: { name: string; color?: string; emoji?: string; source?: string; accountId?: string }) => api.createTag(data),
+  tagDelete: (tagId: string) => api.deleteTag(tagId),
+  tagAssign: (conversationId: string, tagId: string, accountId?: string) => api.assignTag(conversationId, tagId, accountId),
+  tagUnassign: (conversationId: string, tagId: string, accountId?: string) => api.unassignTag(conversationId, tagId, accountId),
+  tagsSync: (accountId: string) => api.syncTags(accountId),
+
   chatGetConversations: (accountId: string) =>
     api.accountConversations(accountId),
 

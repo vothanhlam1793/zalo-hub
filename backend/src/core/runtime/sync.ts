@@ -888,4 +888,37 @@ export class GoldSync {
       });
     }
   }
+
+  async syncLabels() {
+    if (!this.state.session) {
+      await this._loginWithStoredCredential?.();
+    }
+    const api = this.state.session?.api as { getLabels?: () => Promise<any> } | undefined;
+    if (typeof api?.getLabels !== 'function') {
+      return [];
+    }
+
+    try {
+      const response = await api.getLabels();
+      const rawLabels = response?.labelData || [];
+      const formatted = rawLabels.map((l: any) => ({
+        id: Number(l.id),
+        text: String(l.text || l.textKey || ''),
+        color: String(l.color || '#1890ff'),
+        emoji: l.emoji ? String(l.emoji) : undefined,
+        conversations: Array.isArray(l.conversations) ? l.conversations.map(String) : [],
+      }));
+
+      const boundAccId = this.state.boundAccountId || '';
+      await this.state.store.tagRepo.syncZaloLabels(boundAccId, formatted);
+      this.state.logger.info('zalo_labels_synced', { accountId: boundAccId, count: formatted.length });
+      return await this.state.store.tagRepo.listTags(boundAccId);
+    } catch (error) {
+      this.state.logger.error('zalo_labels_sync_failed', {
+        accountId: this.state.boundAccountId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return await this.state.store.tagRepo.listTags(this.state.boundAccountId);
+    }
+  }
 }

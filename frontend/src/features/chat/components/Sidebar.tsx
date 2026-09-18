@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { getAccountDisplayName, getContactDisplayName, getInitial, directConversationId, groupConversationId } from '@/utils';
-import type { Contact, ConversationSummary, Group } from '@/types';
+import type { Contact, ConversationSummary, Group, TagItem } from '@/types';
 
 type SidebarTab = 'conversations' | 'contacts' | 'groups';
 
@@ -25,6 +25,10 @@ interface SidebarProps {
   accountAvatar?: string;
   accountPhoneNumber?: string;
   className?: string;
+  tags?: TagItem[];
+  selectedTagId?: string | null;
+  onSelectTag?: (tagId: string | null) => void;
+  onSyncTags?: () => void;
   onRenameAccount: (nextDisplayName: string) => Promise<void>;
   onSelectConversation: (id: string) => void;
   onOpenDirectConversation: (contact: Contact) => void;
@@ -46,6 +50,10 @@ export function Sidebar({
   accountAvatar,
   accountPhoneNumber,
   className,
+  tags = [],
+  selectedTagId,
+  onSelectTag,
+  onSyncTags,
   onRenameAccount,
   onSelectConversation,
   onOpenDirectConversation,
@@ -147,13 +155,55 @@ export function Sidebar({
         </TabsList>
       </Tabs>
 
-      <div className="px-3.5 pb-2.5">
+      <div className="px-3.5 pb-2.5 space-y-2">
         <Input
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={sidebarTab === 'conversations' ? 'Tìm cuộc trò chuyện...' : sidebarTab === 'contacts' ? 'Tìm bạn bè...' : 'Tìm nhóm...'}
           className="h-10"
         />
+
+        {sidebarTab === 'conversations' && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
+            <button
+              type="button"
+              onClick={() => onSelectTag?.(null)}
+              className={cn(
+                'px-2.5 py-1 rounded-full whitespace-nowrap font-medium text-[11px] transition-colors',
+                !selectedTagId ? 'bg-white/20 text-white font-semibold' : 'bg-white/5 text-muted-foreground hover:bg-white/10'
+              )}
+            >
+              Tất cả
+            </button>
+            {tags.map((tag) => (
+              <button
+                key={tag.id}
+                type="button"
+                onClick={() => onSelectTag?.(selectedTagId === tag.id ? null : tag.id)}
+                className={cn(
+                  'px-2.5 py-1 rounded-full whitespace-nowrap font-medium text-[11px] transition-colors flex items-center gap-1',
+                  selectedTagId === tag.id
+                    ? 'text-white ring-1 ring-white/50'
+                    : 'bg-white/5 text-[#ccc] hover:bg-white/10'
+                )}
+                style={selectedTagId === tag.id ? { backgroundColor: tag.color || '#3b82f6' } : {}}
+              >
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tag.color || '#3b82f6' }} />
+                <span>{tag.emoji ? `${tag.emoji} ` : ''}{tag.name}</span>
+              </button>
+            ))}
+            {onSyncTags && (
+              <button
+                type="button"
+                onClick={onSyncTags}
+                className="px-2 py-1 rounded-full whitespace-nowrap text-[11px] text-muted-foreground hover:text-white bg-white/5 hover:bg-white/10 transition-colors shrink-0"
+                title="Đồng bộ nhãn từ Zalo"
+              >
+                🔄 Sync
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -198,6 +248,19 @@ export function Sidebar({
                     {entry.lastMessageKind !== 'text' ? `[${entry.lastMessageKind}] ` : ''}
                     {entry.lastMessageText}
                   </div>
+                  {Array.isArray(entry.labels) && entry.labels.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {entry.labels.map((lbl) => (
+                        <span
+                          key={lbl.id}
+                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium leading-none text-white shrink-0"
+                          style={{ backgroundColor: lbl.color || '#3b82f6' }}
+                        >
+                          {lbl.emoji ? `${lbl.emoji} ` : ''}{lbl.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );

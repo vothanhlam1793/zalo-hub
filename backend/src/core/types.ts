@@ -112,6 +112,19 @@ export interface GoldConversationSummary {
   messageCount: number;
   unreadCount: number;
   lastReadAt?: string;
+  labels?: GoldTagItem[];
+}
+
+export type GoldTagSource = 'zalo' | 'system' | 'ai';
+
+export interface GoldTagItem {
+  id: string;
+  name: string;
+  color: string;
+  emoji?: string;
+  source: GoldTagSource;
+  zaloLabelId?: number;
+  accountId?: string;
 }
 
 export interface GoldState {

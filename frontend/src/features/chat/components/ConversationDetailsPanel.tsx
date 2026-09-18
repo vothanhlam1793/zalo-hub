@@ -2,7 +2,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { getAccountDisplayName, getContactDisplayName, getInitial } from '@/utils';
-import type { AccountSummary, Contact, ConversationSummary, Group } from '@/types';
+import type { AccountSummary, Contact, ConversationSummary, Group, TagItem } from '@/types';
 
 interface ConversationDetailsPanelProps {
   open: boolean;
@@ -10,6 +10,10 @@ interface ConversationDetailsPanelProps {
   contact?: Contact;
   group?: Group;
   workspaceAccount?: AccountSummary;
+  allTags?: TagItem[];
+  onAssignTag?: (tagId: string) => void;
+  onUnassignTag?: (tagId: string) => void;
+  onCreateTag?: (name: string, color: string) => void;
   onClose: () => void;
 }
 
@@ -32,6 +36,9 @@ export function ConversationDetailsPanel({
   contact,
   group,
   workspaceAccount,
+  allTags = [],
+  onAssignTag,
+  onUnassignTag,
   onClose,
 }: ConversationDetailsPanelProps) {
   if (!open || !conversation) {
@@ -75,6 +82,61 @@ export function ConversationDetailsPanel({
           <DetailRow label="Thread ID" value={conversation.threadId} />
           <DetailRow label="Tin nhắn gần nhất" value={conversation.lastMessageText} />
           <DetailRow label="Số tin nhắn local" value={conversation.messageCount} />
+        </div>
+
+        <Separator />
+
+        <div className="space-y-3">
+          <div className="text-sm font-semibold text-[#eef2ff] flex items-center justify-between">
+            <span>Nhãn hội thoại (Tags)</span>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {Array.isArray(conversation.labels) && conversation.labels.length > 0 ? (
+              conversation.labels.map((lbl) => (
+                <span
+                  key={lbl.id}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium text-white shadow-sm"
+                  style={{ backgroundColor: lbl.color || '#3b82f6' }}
+                >
+                  <span>{lbl.emoji ? `${lbl.emoji} ` : ''}{lbl.name}</span>
+                  {onUnassignTag && (
+                    <button
+                      type="button"
+                      onClick={() => onUnassignTag(lbl.id)}
+                      className="hover:opacity-75 font-bold leading-none ml-0.5"
+                    >
+                      ×
+                    </button>
+                  )}
+                </span>
+              ))
+            ) : (
+              <div className="text-xs text-muted-foreground italic">Chưa gắn nhãn nào</div>
+            )}
+          </div>
+
+          {allTags.length > 0 && onAssignTag && (
+            <div className="pt-2">
+              <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground mb-1.5">Gắn thêm nhãn:</div>
+              <div className="flex flex-wrap gap-1">
+                {allTags
+                  .filter((t) => !conversation.labels?.some((cl) => cl.id === t.id))
+                  .map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => onAssignTag(t.id)}
+                      className="px-2 py-1 rounded text-[11px] bg-white/5 hover:bg-white/10 text-white/90 border border-white/10 transition-colors flex items-center gap-1"
+                    >
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color || '#3b82f6' }} />
+                      <span>{t.emoji ? `${t.emoji} ` : ''}{t.name}</span>
+                      <span className="text-muted-foreground">+</span>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {contact && (

@@ -288,6 +288,34 @@ export const api = {
       method: 'POST',
     }),
 
+  // Tags API
+  listTags: (accountId?: string) =>
+    req<{ tags: import('./types').TagItem[] }>(`/api/tags${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ''}`),
+
+  createTag: (data: { name: string; color?: string; emoji?: string; source?: string; accountId?: string }) =>
+    req<{ ok: boolean; tag: import('./types').TagItem }>('/api/tags', { method: 'POST', body: JSON.stringify(data) }),
+
+  deleteTag: (tagId: string) =>
+    req<{ ok: boolean; deleted: boolean }>(`/api/tags/${encodeURIComponent(tagId)}`, { method: 'DELETE' }),
+
+  assignTag: (conversationId: string, tagId: string, accountId?: string) =>
+    req<{ ok: boolean; conversationId: string; tags: import('./types').TagItem[] }>('/api/tags/assign', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, tagId, accountId }),
+    }),
+
+  unassignTag: (conversationId: string, tagId: string, accountId?: string) =>
+    req<{ ok: boolean; conversationId: string; tags: import('./types').TagItem[] }>('/api/tags/unassign', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, tagId, accountId }),
+    }),
+
+  syncTags: (accountId: string) =>
+    req<{ ok: boolean; tags: import('./types').TagItem[]; count: number }>(`/api/tags/sync/${encodeURIComponent(accountId)}`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
   // Dify Bots
   adminBots: () => req<{ bots: Array<any> }>('/api/admin/bots'),
   adminBotCreate: (data: any) => req<any>('/api/admin/bots', { method: 'POST', body: JSON.stringify(data) }),

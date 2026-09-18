@@ -493,6 +493,10 @@ export class GoldRuntime {
     return this.sync.listGroups();
   }
 
+  async syncLabels() {
+    return this.sync.syncLabels();
+  }
+
   async sendText(conversationId: string, text: string) {
     return this.sender.sendText(conversationId, text);
   }

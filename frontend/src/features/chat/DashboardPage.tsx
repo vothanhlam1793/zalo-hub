@@ -42,6 +42,12 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
     onSend,
     onReactMessage,
     onRenameAccount,
+    tags,
+    selectedTagId,
+    setSelectedTagId,
+    onSyncTags,
+    onAssignTag,
+    onUnassignTag,
   } = dashboard;
 
   return (
@@ -69,6 +75,10 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           accountDisplayName={workspaceAccount?.displayName ?? status?.account?.displayName}
           accountAvatar={workspaceAccount?.avatar ?? status?.account?.avatar}
           accountPhoneNumber={workspaceAccount?.phoneNumber ?? status?.account?.phoneNumber}
+          tags={tags}
+          selectedTagId={selectedTagId}
+          onSelectTag={setSelectedTagId}
+          onSyncTags={onSyncTags}
           onRenameAccount={onRenameAccount}
           onSelectConversation={onSelectConversation}
           onOpenDirectConversation={onOpenDirectConversation}
@@ -103,14 +113,17 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             onReactMessage={onReactMessage}
             showDisconnectBanner={status ? !status.sessionActive && !status.loginInProgress && !!workspace.selectedAccountId : false}
           />
-          <ConversationDetailsPanel
-            open={detailsOpen}
-            conversation={activeConversation}
-            contact={activeContact}
-            group={activeGroup}
-            workspaceAccount={workspaceAccount}
-            onClose={() => setDetailsOpen(false)}
-          />
+        <ConversationDetailsPanel
+          open={detailsOpen}
+          conversation={activeConversation}
+          contact={activeContact}
+          group={activeGroup}
+          workspaceAccount={workspaceAccount}
+          allTags={tags}
+          onAssignTag={onAssignTag}
+          onUnassignTag={onUnassignTag}
+          onClose={() => setDetailsOpen(false)}
+        />
         </div>
       </div>
     </TooltipProvider>
@@ -150,6 +163,10 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
     onSend,
     onReactMessage,
     onRenameAccount,
+    tags,
+    selectedTagId,
+    setSelectedTagId,
+    onSyncTags,
   } = dashboard;
   const [screen, setScreen] = useState<'list' | 'chat'>('list');
 
@@ -222,6 +239,10 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               accountDisplayName={workspaceAccount?.displayName ?? status?.account?.displayName}
               accountAvatar={workspaceAccount?.avatar ?? status?.account?.avatar}
               accountPhoneNumber={workspaceAccount?.phoneNumber ?? status?.account?.phoneNumber}
+              tags={tags}
+              selectedTagId={selectedTagId}
+              onSelectTag={setSelectedTagId}
+              onSyncTags={onSyncTags}
               onRenameAccount={onRenameAccount}
               onSelectConversation={handleSelectConversation}
               onOpenDirectConversation={handleOpenDirectConversation}

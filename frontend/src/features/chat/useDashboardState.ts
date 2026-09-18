@@ -40,6 +40,8 @@ export function useDashboardState() {
   const composer = useComposerStore();
   const { user } = useAuthStore();
   const [myAccountsMap, setMyAccountsMap] = useState<Map<string, boolean>>(new Map());
+  const [tags, setTags] = useState<import('@/types').TagItem[]>([]);
+  const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
 
   useEffect(() => {
     activeConversationIdRef.current = chat.activeConversationId;
@@ -309,8 +311,63 @@ export function useDashboardState() {
 
   const onRefresh = useCallback(() => {
     const id = resolveWorkspaceId();
-    if (id) loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
+    if (id) {
+      loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
+      bff.tagsList(id).then((r) => setTags(r.tags)).catch(() => {});
+    }
   }, [resolveWorkspaceId, status, loadData, chat, composer]);
+
+  useEffect(() => {
+    const id = resolveWorkspaceId();
+    if (id) {
+      bff.tagsList(id).then((r) => setTags(r.tags)).catch(() => {});
+    }
+  }, [resolveWorkspaceId]);
+
+  const onSyncTags = useCallback(async () => {
+    const id = resolveWorkspaceId();
+    if (!id) return;
+    try {
+      composer.setStatusMsg('Đang đồng bộ nhãn từ Zalo...');
+      const res = await bff.tagsSync(id);
+      setTags(res.tags);
+      const convs = await bff.chatGetConversations(id);
+      chat.replaceAccountConversations(id, convs.conversations);
+      composer.setStatusMsg(`Đã đồng bộ ${res.count} nhãn từ Zalo.`);
+    } catch (err) {
+      composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ nhãn thất bại');
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
+  const onAssignTag = useCallback(async (tagId: string) => {
+    const id = resolveWorkspaceId();
+    const convId = chat.activeConversationId;
+    if (!id || !convId) return;
+    try {
+      const res = await bff.tagAssign(convId, tagId, id);
+      const currentConvs = chat.getAccountConversations(id);
+      const updated = currentConvs.map((c) => c.id === convId ? { ...c, labels: res.tags } : c);
+      chat.replaceAccountConversations(id, updated);
+      composer.setStatusMsg('Đã gắn nhãn.');
+    } catch (err) {
+      composer.setLoadError(err instanceof Error ? err.message : 'Gắn nhãn thất bại');
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
+  const onUnassignTag = useCallback(async (tagId: string) => {
+    const id = resolveWorkspaceId();
+    const convId = chat.activeConversationId;
+    if (!id || !convId) return;
+    try {
+      const res = await bff.tagUnassign(convId, tagId, id);
+      const currentConvs = chat.getAccountConversations(id);
+      const updated = currentConvs.map((c) => c.id === convId ? { ...c, labels: res.tags } : c);
+      chat.replaceAccountConversations(id, updated);
+      composer.setStatusMsg('Đã gỡ nhãn.');
+    } catch (err) {
+      composer.setLoadError(err instanceof Error ? err.message : 'Gỡ nhãn thất bại');
+    }
+  }, [resolveWorkspaceId, chat, composer]);
 
   const onRenameAccount = useCallback(async (nextDisplayName: string) => {
     const accountId = resolveWorkspaceId();
@@ -388,10 +445,13 @@ export function useDashboardState() {
 
   const filteredConversations = useMemo(() => {
     const q = workspace.query.trim().toLowerCase();
-    const conversations = resolveConversationSummaries(visibleConversations);
+    let conversations = resolveConversationSummaries(visibleConversations);
+    if (selectedTagId) {
+      conversations = conversations.filter((c) => c.labels?.some((l) => l.id === selectedTagId));
+    }
     if (!q) return conversations;
     return conversations.filter((e) => e.title.toLowerCase().includes(q));
-  }, [visibleConversations, workspace.query, resolveConversationSummaries]);
+  }, [visibleConversations, workspace.query, selectedTagId, resolveConversationSummaries]);
 
   const filteredContacts = useMemo(() => {
     const q = workspace.query.trim().toLowerCase();
@@ -439,6 +499,11 @@ export function useDashboardState() {
     onSend,
     onReactMessage,
     onRenameAccount,
-    onRefresh,
+    tags,
+    selectedTagId,
+    setSelectedTagId,
+    onSyncTags,
+    onAssignTag,
+    onUnassignTag,
   };
 }

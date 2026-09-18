@@ -22,6 +22,7 @@ import { AccountRuntimeManager } from './account-manager.js';
 import { DifyBotService } from './services/dify-bot-service.js';
 import { DifyBotExecutor } from './services/dify-bot-executor.js';
 import { CaseStationWebhook } from './services/case-station-webhook.js';
+import { createTagsRouter } from './routes/tags.js';
 import { createDifyBotsRouter } from './routes/dify-bots.js';
 import { createBotApiRouter } from './routes/bot-api.js';
 import { createWsHandler } from './ws/handler.js';
@@ -168,6 +169,7 @@ async function main() {
   app.use('/api/accounts', createAccountsRouter(logger, accountManager, broadcast, upload, knex, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api/accounts', createMonitorRouter(logger, loginStore, accountManager, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
+  app.use('/api/tags', createTagsRouter(loginStore, accountManager, broadcast, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
   app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
   app.use('/api/bot', createBotApiRouter(accountManager, difyBotService, loginStore));

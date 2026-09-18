@@ -289,6 +289,7 @@ export class AccountRuntimeManager {
 
       await runtime.listFriends().catch(() => undefined);
       await runtime.listGroups().catch(() => undefined);
+      await runtime.syncLabels().catch(() => undefined);
       this.logger.info('account_auto_sync_loaded_contacts', { accountId });
 
       // Refresh conversation list summaries without deep history hammering

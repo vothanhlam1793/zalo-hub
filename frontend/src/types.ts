@@ -71,6 +71,16 @@ export interface HistorySyncResult {
   batchCount?: number;
 }
 
+export interface TagItem {
+  id: string;
+  name: string;
+  color: string;
+  emoji?: string;
+  source: 'zalo' | 'system' | 'ai';
+  zaloLabelId?: number;
+  accountId?: string;
+}
+
 export interface ConversationSummary {
   id: string;
   accountId: string;
@@ -85,6 +95,7 @@ export interface ConversationSummary {
   messageCount: number;
   unreadCount: number;
   lastReadAt?: string;
+  labels?: TagItem[];
 }
 
 export interface Contact {
