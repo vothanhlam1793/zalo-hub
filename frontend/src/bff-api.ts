@@ -80,10 +80,10 @@ export const bff = {
     api.accountSendTyping(accountId, conversationId, isTyping),
 
   sendReaction: (accountId: string, conversationId: string, messageId: string, cliMsgId: string, icon: string) =>
-    api.accountSendReaction(accountId, conversationId, messageId, cliMsgId, icon),
+    api.accountAddReaction(accountId, conversationId, messageId, cliMsgId, icon),
 
   updateReadState: (accountId: string, conversationId: string, readAt: string) =>
-    api.accountReadState(accountId, conversationId, readAt),
+    api.accountUpdateReadState(accountId, conversationId, readAt),
 
   forwardMessage: (accountId: string, conversationId: string, messageId: string, toThreadId: string, toType: string) =>
     api.accountForwardMessage(accountId, conversationId, messageId, toThreadId, toType),
