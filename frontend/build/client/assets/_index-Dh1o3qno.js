@@ -1,0 +1,1 @@
+import{O as e,t}from"./jsx-runtime-0LPVyEnC.js";import{n,t as r}from"./useHydrate-C0ACoHYL.js";var i=t(),a=e(function(){return r(),(0,i.jsx)(n,{mobileMode:!1})});export{a as default};

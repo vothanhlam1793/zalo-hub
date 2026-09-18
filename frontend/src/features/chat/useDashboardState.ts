@@ -200,7 +200,7 @@ export function useDashboardState() {
       (aid, s, opts) => loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError),
       (aid, cid) => refreshConversationMessages(aid, cid, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
       (aid, cid, bmid, readAt) => syncConversationHistory(aid, cid, bmid, readAt, (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef), chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.replaceAccountConversations, selectionTokenRef, activeConversationIdRef),
-      selectionTokenRef, activeConversationIdRef,
+      selectionTokenRef, activeConversationIdRef, messageCache.loadFromDb,
     );
   }, [resolveWorkspaceId, selectConversation, subscribe, messageCache, refreshConversationMessages, syncConversationHistory, loadData, chat, composer]);
 

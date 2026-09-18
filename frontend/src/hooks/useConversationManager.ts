@@ -1,17 +1,7 @@
 import { useCallback } from 'react';
 import { bff } from '../bff-api';
-import type { ConversationSummary, HistorySyncResult, Message, Contact, Group, SessionStatus } from '../types';
-
-function buildHistoryStatus(result: HistorySyncResult) {
-  if (result.timedOut && result.remoteCount === 0) {
-    return 'Dong bo lich su bi timeout. Co the dien thoai hoac nguon sync cua Zalo chua phan hoi.';
-  }
-  const batchInfo = (result.batchCount && result.batchCount > 1) ? ` (${result.batchCount} dot)` : '';
-  if (result.remoteCount === 0) {
-    return 'Zalo khong tra them lich su cu cho cuoc tro chuyen nay.';
-  }
-  return `Dong bo lich su: nhan ${result.remoteCount} tin, them moi ${result.insertedCount}, bo trung ${result.dedupedCount}${batchInfo}.`;
-}
+import type { ConversationSummary, HistorySyncResult, Message, SessionStatus } from '../types';
+import { clientDb } from '../lib/client-db';
 
 export function useConversationManager() {
   const refreshConversationMessages = useCallback(async (
@@ -24,16 +14,20 @@ export function useConversationManager() {
     messagesEndRef: React.MutableRefObject<HTMLDivElement | null>,
   ) => {
     const token = selectionTokenRef.current;
-    const r = await bff.chatGetMessages(accountId, conversationId, { limit: 40 });
-    const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
-    mergeMessagesIntoConversation(accountId, conversationId, r.messages, 'replace');
-    if (stillActive) {
-      setHasMoreHistory(Boolean(r.hasMore));
+    try {
+      const r = await bff.chatGetMessages(accountId, conversationId, { limit: 40 });
+      const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
+      if (r.messages && r.messages.length > 0) {
+        mergeMessagesIntoConversation(accountId, conversationId, r.messages, 'replace');
+        if (stillActive) {
+          setHasMoreHistory(Boolean(r.hasMore));
+          requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
+        }
+      }
+      return r;
+    } catch {
+      return { messages: [], count: 0, hasMore: false };
     }
-    if (stillActive) {
-      requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
-    }
-    return r;
   }, []);
 
   const syncConversationHistory = useCallback(async (
@@ -54,20 +48,30 @@ export function useConversationManager() {
       setSyncingHistory(true);
     }
     try {
-      const result = await bff.syncHistory(accountId, conversationId, { beforeMessageId, timeoutMs: 15000 });
+      const result = await bff.syncHistory(accountId, conversationId, { beforeMessageId, timeoutMs: 8000 });
       if (readAt) {
-        await bff.updateReadState(accountId, conversationId, readAt);
+        void bff.updateReadState(accountId, conversationId, readAt).catch(() => {});
       }
       await refreshConversationMessages(accountId, conversationId);
-      const cv = await bff.chatGetConversations(accountId);
-      if (token === selectionTokenRef.current) {
+      const cv = await bff.chatGetConversations(accountId).catch(() => ({ conversations: [] }));
+      if (token === selectionTokenRef.current && cv.conversations?.length > 0) {
         replaceAccountConversations(accountId, cv.conversations);
+        void clientDb.saveConversations(accountId, cv.conversations);
       }
       if (activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
-        setStatusMsg(buildHistoryStatus(result));
         setHasMoreHistory(result.hasMore || result.insertedCount > 0);
       }
       return result;
+    } catch (err) {
+      return {
+        conversationId,
+        threadId: '',
+        type: 'direct',
+        remoteCount: 0,
+        insertedCount: 0,
+        dedupedCount: 0,
+        hasMore: false,
+      } as HistorySyncResult;
     } finally {
       if (activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
         setSyncingHistory(false);
@@ -75,6 +79,7 @@ export function useConversationManager() {
     }
   }, []);
 
+  // INSTANT OPEN CONVERSATION: 0ms render from Cache/IndexedDB, then background non-blocking refresh
   const selectConversation = useCallback(async (
     conversationId: string,
     accountId: string,
@@ -91,64 +96,65 @@ export function useConversationManager() {
     syncConversationHistory: (accountId: string, conversationId: string, beforeMessageId?: string, readAt?: string) => Promise<HistorySyncResult>,
     selectionTokenRef: React.MutableRefObject<number>,
     activeConversationIdRef: React.MutableRefObject<string>,
+    loadFromDb?: (accountId: string, conversationId: string, limit?: number) => Promise<Message[]>,
   ) => {
     const token = selectionTokenRef.current + 1;
     selectionTokenRef.current = token;
     setActiveConversationId(conversationId);
     activeConversationIdRef.current = conversationId;
-    const cached = getCachedMessages(accountId, conversationId);
-    setMessages(cached);
-    setHasMoreHistory(false);
     setLoadError('');
     setStatusMsg('');
     subscribe(accountId, conversationId);
 
+    // Save active state to localStorage for instant F5 restoration
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('zalohub_active_conversation', conversationId);
+    }
+
+    // Step 1 (0ms): Check RAM cache first
+    let cached = getCachedMessages(accountId, conversationId);
+    if (cached.length > 0) {
+      setMessages(cached);
+      setHasMoreHistory(true);
+    } else if (loadFromDb) {
+      // Step 2 (1~5ms): Fallback to IndexedDB
+      const dbMsgs = await loadFromDb(accountId, conversationId, 50);
+      if (token === selectionTokenRef.current && activeConversationIdRef.current === conversationId) {
+        if (dbMsgs.length > 0) {
+          cached = dbMsgs;
+          setMessages(dbMsgs);
+          setHasMoreHistory(true);
+        }
+      }
+    }
+
+    // Step 3 (Non-blocking background refresh): Query latest from server
     void (async () => {
       try {
-        const [messagesRes, metadataRes] = await Promise.all([
-          refreshConversationMessages(accountId, conversationId),
-          bff.chatOpenConversation(accountId, conversationId).then((res) => {
-            if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
-            if (res.metadata) {
-              const synced = res.metadata;
-              if (synced.conversationId !== conversationId) {
-                setActiveConversationId(synced.conversationId);
-                activeConversationIdRef.current = synced.conversationId;
-                subscribe(accountId, synced.conversationId);
-                conversationId = synced.conversationId;
-              }
-              mergeMessagesIntoConversation(accountId, conversationId, synced.messages, 'replace');
-            }
-          }).catch(() => {}),
-        ]);
+        const latestTime = cached.length > 0 ? cached[cached.length - 1]?.timestamp : undefined;
+        const messagesRes = await bff.chatGetMessages(accountId, conversationId, {
+          since: latestTime,
+          limit: 50,
+        }).catch(() => null);
 
         if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
-        if (messagesRes) {
-          setMessages(messagesRes.messages);
-          const hasMore = Boolean(messagesRes.hasMore);
-          setHasMoreHistory(hasMore);
 
-          if (hasMore && messagesRes.messages.length < 10) {
-            setStatusMsg('Dang tai lich su...');
-            try {
-              const syncResult = await syncConversationHistory(accountId, conversationId, messagesRes.messages[0]?.providerMessageId, new Date().toISOString());
-              if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
-              if (syncResult.insertedCount > 0) {
-                const next = await refreshConversationMessages(accountId, conversationId);
-                if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
-                if (next) setMessages(next.messages);
-                setHasMoreHistory(Boolean(syncResult.hasMore || (next?.messages.length ?? 0) >= 40));
-              }
-              setStatusMsg('');
-            } catch {
-              setStatusMsg('');
+        if (messagesRes && messagesRes.messages) {
+          if (messagesRes.messages.length > 0) {
+            const { next } = mergeMessagesIntoConversation(accountId, conversationId, messagesRes.messages, cached.length > 0 ? 'append' : 'replace');
+            setMessages(next);
+            setHasMoreHistory(Boolean(messagesRes.hasMore || next.length >= 40));
+          } else if (cached.length === 0) {
+            // Empty locally and no delta: fetch initial page
+            const initialRes = await refreshConversationMessages(accountId, conversationId);
+            if (token === selectionTokenRef.current && activeConversationIdRef.current === conversationId && initialRes) {
+              setMessages(initialRes.messages || []);
+              setHasMoreHistory(Boolean(initialRes.hasMore));
             }
           }
         }
       } catch (error) {
-        if (token === selectionTokenRef.current) {
-          setLoadError(error instanceof Error ? error.message : 'Khong tai duoc history');
-        }
+        // Non-blocking: silence errors so user keeps reading local messages
       }
     })();
   }, []);
@@ -179,22 +185,27 @@ export function useConversationManager() {
 
     setLoadingOlder(true);
     try {
+      // Step A: First check IndexedDB before calling network
+      const dbOlder = await clientDb.getMessages(accountId, activeConversationId, 40, oldest);
+      if (dbOlder.length > 0) {
+        prependMessages(accountId, activeConversationId, dbOlder);
+        setHasMoreHistory(true);
+        requestAnimationFrame(() => {
+          if (!container) return;
+          container.scrollTop = container.scrollHeight - previousHeight;
+        });
+        return;
+      }
+
+      // Step B: If IndexedDB reached the top, request server
       const r = await bff.chatGetMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
       if (r.messages.length > 0) {
         prependMessages(accountId, activeConversationId, r.messages);
-      } else {
-        const syncResult = await syncConversationHistory(accountId, activeConversationId, messages[0]?.providerMessageId, new Date().toISOString());
-        if (syncResult.insertedCount > 0) {
-          const next = await bff.chatGetMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
-          prependMessages(accountId, activeConversationId, next.messages);
-          setHasMoreHistory(Boolean(next.messages.length >= 40 || syncResult.hasMore));
-        } else {
-          setHasMoreHistory(false);
-        }
-      }
-      if (r.messages.length > 0) {
         setHasMoreHistory(Boolean(r.messages.length >= 40));
+      } else {
+        setHasMoreHistory(false);
       }
+
       requestAnimationFrame(() => {
         if (!container) return;
         const nextHeight = container.scrollHeight;

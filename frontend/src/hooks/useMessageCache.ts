@@ -1,5 +1,6 @@
-import { useRef } from 'react';
+import { useRef, useCallback } from 'react';
 import type { Message } from '../types';
+import { clientDb } from '../lib/client-db';
 
 function mergeMessageList(base: Message[], incoming: Message[]) {
   const byKey = new Map<string, Message>();
@@ -23,25 +24,42 @@ export function useMessageCache() {
     messageCacheRef.current.set(getConversationCacheKey(accountId, conversationId), nextMessages);
   }
 
-  function mergeMessagesIntoConversation(
+  const mergeMessagesIntoConversation = useCallback((
     accountId: string,
     conversationId: string,
     incoming: Message[],
     mode: 'append' | 'replace' = 'append',
-  ) {
+  ) => {
     const previous = messageCacheRef.current.get(getConversationCacheKey(accountId, conversationId)) ?? [];
     const next = mode === 'replace' ? mergeMessageList([], incoming) : mergeMessageList(previous, incoming);
     setConversationCache(accountId, conversationId, next);
+
+    // Save to IndexedDB asynchronously (fire and forget)
+    if (incoming.length > 0) {
+      void clientDb.saveMessages(accountId, conversationId, incoming);
+    }
+
     return { next, previous };
-  }
+  }, []);
 
-  function prependMessages(accountId: string, conversationId: string, incoming: Message[]) {
+  const prependMessages = useCallback((accountId: string, conversationId: string, incoming: Message[]) => {
     return mergeMessagesIntoConversation(accountId, conversationId, incoming, 'append');
-  }
+  }, [mergeMessagesIntoConversation]);
 
-  function getCachedMessages(accountId: string, conversationId: string) {
+  const getCachedMessages = useCallback((accountId: string, conversationId: string) => {
     return messageCacheRef.current.get(getConversationCacheKey(accountId, conversationId)) ?? [];
-  }
+  }, []);
+
+  const loadFromDb = useCallback(async (accountId: string, conversationId: string, limit = 50, before?: string) => {
+    const dbMessages = await clientDb.getMessages(accountId, conversationId, limit, before);
+    if (dbMessages.length > 0) {
+      const current = messageCacheRef.current.get(getConversationCacheKey(accountId, conversationId)) ?? [];
+      const merged = mergeMessageList(current, dbMessages);
+      setConversationCache(accountId, conversationId, merged);
+      return merged;
+    }
+    return dbMessages;
+  }, []);
 
   function clearCache() {
     messageCacheRef.current.clear();
@@ -54,6 +72,7 @@ export function useMessageCache() {
     mergeMessagesIntoConversation,
     prependMessages,
     getCachedMessages,
+    loadFromDb,
     clearCache,
   };
 }
