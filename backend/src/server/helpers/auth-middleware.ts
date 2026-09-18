@@ -66,6 +66,14 @@ export function createAuthMiddleware(knex?: Knex) {
         return;
       }
 
+      // Check if user is super_admin (full bypass)
+      const { rows: userRows } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [userId]);
+      const user = userRows[0] as { role: string } | undefined;
+      if (user?.role === 'super_admin') {
+        next();
+        return;
+      }
+
       const { rows } = await knex.raw('SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?', [userId, accountId]);
       const mem = rows[0] as { role: string } | undefined;
       if (!mem) {
@@ -100,6 +108,15 @@ export function createAuthMiddleware(knex?: Knex) {
       res.status(500).json({ error: 'Middleware chua duoc cau hinh store' });
       return;
     }
+
+    // Check if user is super_admin (full bypass)
+    const { rows: userRows } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [userId]);
+    const user = userRows[0] as { role: string } | undefined;
+    if (user?.role === 'super_admin') {
+      next();
+      return;
+    }
+
     const { rows } = await knex.raw('SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?', [userId, accountId]);
     const mem = rows[0] as { role: string } | undefined;
     if (!mem || mem.role !== 'master') {
