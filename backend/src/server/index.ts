@@ -174,6 +174,17 @@ async function main() {
   app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
   app.use('/api/bot', createBotApiRouter(accountManager, difyBotService, loginStore));
 
+  const frontendDir = path.resolve(__dirname, '../../../frontend/dist');
+  if (fs.existsSync(frontendDir)) {
+    app.use(express.static(frontendDir));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/media') || req.path.startsWith('/ws')) {
+        return next();
+      }
+      res.sendFile(path.join(frontendDir, 'index.html'));
+    });
+  }
+
   server.listen(port, '0.0.0.0', async () => {
     console.log(`zalohub-backend running at http://localhost:${port}`);
 
