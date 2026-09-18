@@ -337,6 +337,11 @@ export class GoldMessageRepo {
             reactions_json,
             created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            reactions_json = COALESCE(EXCLUDED.reactions_json, messages.reactions_json),
+            raw_message_json = COALESCE(EXCLUDED.raw_message_json, messages.raw_message_json),
+            text = EXCLUDED.text,
+            image_url = COALESCE(EXCLUDED.image_url, messages.image_url)
         `, [
           storedMessageId,
           message.conversationId,

@@ -214,6 +214,13 @@ export function createAccountsRouter(
       try {
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
         if (!targetRuntime.isSessionActive()) {
+          try {
+            await targetRuntime.loginWithStoredCredential();
+          } catch {
+            // fallback to active check below
+          }
+        }
+        if (!targetRuntime.isSessionActive()) {
           res.status(401).json({ error: 'Account chua active session' });
           return;
         }
@@ -407,6 +414,13 @@ export function createAccountsRouter(
       }
       try {
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        if (!targetRuntime.isSessionActive()) {
+          try {
+            await targetRuntime.loginWithStoredCredential();
+          } catch {
+            // fallback to active check below
+          }
+        }
         if (!targetRuntime.isSessionActive()) {
           res.status(401).json({ error: 'Account chua active session' });
           return;

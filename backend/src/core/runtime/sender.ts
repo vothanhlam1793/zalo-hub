@@ -158,9 +158,11 @@ export class GoldSender {
     const mimeType = options.mimeType.trim();
     const kind: GoldMessageKind = mimeType.startsWith('image/') ? 'image' : 'file';
 
-    const tempDir = path.join('/tmp/opencode', 'gold-4-uploads');
+    const tempDir = path.join('/tmp', 'zalohub-uploads');
     mkdirSync(tempDir, { recursive: true });
-    const safeFileName = options.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const ext = path.extname(options.fileName) || (kind === 'image' ? '.jpg' : '');
+    const baseName = path.basename(options.fileName, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeFileName = `${baseName || 'file'}${ext}`;
     const tempFilePath = path.join(tempDir, `${Date.now()}-${randomUUID()}-${safeFileName}`);
 
     this.state.logger.info('send_attachment_started', {
