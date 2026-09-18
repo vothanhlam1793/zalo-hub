@@ -29,6 +29,7 @@ interface SidebarProps {
   selectedTagId?: string | null;
   onSelectTag?: (tagId: string | null) => void;
   onSyncTags?: () => void;
+  onReconnectAccount?: () => void;
   onRenameAccount: (nextDisplayName: string) => Promise<void>;
   onSelectConversation: (id: string) => void;
   onOpenDirectConversation: (contact: Contact) => void;
@@ -54,6 +55,7 @@ export function Sidebar({
   selectedTagId,
   onSelectTag,
   onSyncTags,
+  onReconnectAccount,
   onRenameAccount,
   onSelectConversation,
   onOpenDirectConversation,
@@ -111,6 +113,16 @@ export function Sidebar({
                 >
                   ✎
                 </button>
+                {onReconnectAccount && (
+                  <button
+                    type="button"
+                    onClick={onReconnectAccount}
+                    className="shrink-0 text-[11px] text-amber-400 hover:text-amber-300 transition-colors ml-auto flex items-center gap-0.5 bg-amber-400/10 px-1.5 py-0.5 rounded"
+                    title="Kết nối lại tài khoản Zalo"
+                  >
+                    ⚡ Reconnect
+                  </button>
+                )}
               </div>
               <div className="text-[11px] text-muted-foreground truncate mt-1">
                 {resolvedAccountSubLabel}

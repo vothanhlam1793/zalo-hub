@@ -22,6 +22,7 @@ interface ChatPanelProps {
   statusMsg: string;
   loadError: string;
   showDisconnectBanner?: boolean;
+  onReconnectAccount?: () => void;
   text: string;
   attachFile: File | null;
   sending: boolean;
@@ -52,6 +53,7 @@ export function ChatPanel({
   statusMsg,
   loadError,
   showDisconnectBanner,
+  onReconnectAccount,
   text,
   attachFile,
   sending,
@@ -217,8 +219,21 @@ export function ChatPanel({
             </div>
           )}
           {showDisconnectBanner && (
-            <div className="shrink-0 px-5 py-2.5 text-[13px] bg-[rgba(255,160,60,0.1)] text-[#ffa03c] flex items-center justify-between">
-              <span>⚠️ Tài khoản mất kết nối. Vào <a href="/admin" className="underline">Admin</a> để quét QR lại hoặc liên hệ master.</span>
+            <div className="shrink-0 px-5 py-2.5 text-[13px] bg-[rgba(255,160,60,0.1)] text-[#ffa03c] flex items-center justify-between gap-2">
+              <span>⚠️ Tài khoản mất kết nối hoặc chưa active.</span>
+              <div className="flex items-center gap-2">
+                {onReconnectAccount && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={onReconnectAccount}
+                    className="h-7 px-2.5 text-xs bg-amber-500 hover:bg-amber-600 text-black font-semibold shrink-0"
+                  >
+                    ⚡ Kết nối lại ngay
+                  </Button>
+                )}
+                <a href="/admin" className="underline text-xs shrink-0">Admin</a>
+              </div>
             </div>
           )}
 

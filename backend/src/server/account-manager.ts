@@ -59,9 +59,31 @@ export class AccountRuntimeManager {
     return this.runtimes.get(accountId);
   }
 
-  async restartRuntime(accountId: string): Promise<void> {
-    this.stopRuntime(accountId);
-    await this.ensureRuntime(accountId);
+  async restartRuntime(accountId: string): Promise<GoldRuntime> {
+    const normalizedAccountId = accountId.trim();
+    this.stopRuntime(normalizedAccountId);
+    const runtime = await this.ensureRuntime(normalizedAccountId);
+    // Broadcast updated session state
+    const status = await this.getRuntimeStatus(normalizedAccountId);
+    this.broadcast?.({
+      type: 'session_state',
+      accountId: normalizedAccountId,
+      status: {
+        hasCredential: status.hasCredential,
+        sessionActive: status.sessionActive,
+        loggedIn: status.sessionActive,
+        loginInProgress: false,
+        friendCacheCount: 0,
+        qrCodeAvailable: false,
+        account: {
+          userId: status.accountId,
+          displayName: status.displayName,
+          phoneNumber: status.phoneNumber,
+        },
+        listener: status.listener,
+      },
+    });
+    return runtime;
   }
 
   hasRuntime(accountId: string) {

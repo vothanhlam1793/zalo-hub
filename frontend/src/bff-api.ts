@@ -65,6 +65,7 @@ export const bff = {
   tagAssign: (conversationId: string, tagId: string, accountId?: string) => api.assignTag(conversationId, tagId, accountId),
   tagUnassign: (conversationId: string, tagId: string, accountId?: string) => api.unassignTag(conversationId, tagId, accountId),
   tagsSync: (accountId: string) => api.syncTags(accountId),
+  accountRestart: (accountId: string) => api.restartAccount(accountId),
 
   chatGetConversations: (accountId: string) =>
     api.accountConversations(accountId),

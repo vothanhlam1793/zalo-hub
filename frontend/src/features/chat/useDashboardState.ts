@@ -465,6 +465,21 @@ export function useDashboardState() {
     return chat.groups.filter((e) => e.displayName.toLowerCase().includes(q));
   }, [chat.groups, workspace.query]);
 
+  const onReconnectAccount = useCallback(async () => {
+    const id = resolveWorkspaceId();
+    if (!id) return;
+    try {
+      composer.setStatusMsg('Đang kết nối lại tài khoản...');
+      const res = await bff.accountRestart(id);
+      composer.setStatusMsg(res.message || 'Đã gửi lệnh kết nối lại tài khoản.');
+      setTimeout(() => {
+        onRefresh();
+      }, 1500);
+    } catch (err) {
+      composer.setLoadError(err instanceof Error ? err.message : 'Kết nối lại thất bại');
+    }
+  }, [resolveWorkspaceId, onRefresh, composer]);
+
   return {
     navigate,
     workspace,
@@ -499,6 +514,7 @@ export function useDashboardState() {
     onSend,
     onReactMessage,
     onRenameAccount,
+    onReconnectAccount,
     tags,
     selectedTagId,
     setSelectedTagId,

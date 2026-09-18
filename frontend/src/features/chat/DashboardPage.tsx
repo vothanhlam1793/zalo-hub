@@ -42,6 +42,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
     onSend,
     onReactMessage,
     onRenameAccount,
+    onReconnectAccount,
     tags,
     selectedTagId,
     setSelectedTagId,
@@ -79,6 +80,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           selectedTagId={selectedTagId}
           onSelectTag={setSelectedTagId}
           onSyncTags={onSyncTags}
+          onReconnectAccount={onReconnectAccount}
           onRenameAccount={onRenameAccount}
           onSelectConversation={onSelectConversation}
           onOpenDirectConversation={onOpenDirectConversation}
@@ -98,6 +100,8 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             syncingHistory={chat.syncingHistory}
             statusMsg={composer.statusMsg}
             loadError={composer.loadError}
+            showDisconnectBanner={Boolean(workspaceAccount?.sessionActive === false && workspaceAccount?.hasCredential)}
+            onReconnectAccount={onReconnectAccount}
             text={composer.text}
             attachFile={composer.attachFile}
             sending={composer.sending}
