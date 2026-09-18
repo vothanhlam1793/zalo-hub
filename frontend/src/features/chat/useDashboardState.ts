@@ -471,7 +471,11 @@ export function useDashboardState() {
     try {
       composer.setStatusMsg('Đang kết nối lại tài khoản...');
       const res = await bff.accountRestart(id);
-      composer.setStatusMsg(res.message || 'Đã gửi lệnh kết nối lại tài khoản.');
+      if (res.ok === false || res.error) {
+        composer.setLoadError(res.error || 'Kết nối lại thất bại. Vui lòng quét lại QR.');
+      } else {
+        composer.setStatusMsg(res.message || 'Đã kết nối lại tài khoản thành công.');
+      }
       setTimeout(() => {
         onRefresh();
       }, 1500);

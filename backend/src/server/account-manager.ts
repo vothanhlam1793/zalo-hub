@@ -59,31 +59,52 @@ export class AccountRuntimeManager {
     return this.runtimes.get(accountId);
   }
 
-  async restartRuntime(accountId: string): Promise<GoldRuntime> {
+  async restartRuntime(accountId: string): Promise<{ ok: boolean; runtime?: GoldRuntime; error?: string; needsRelogin?: boolean }> {
     const normalizedAccountId = accountId.trim();
     this.stopRuntime(normalizedAccountId);
-    const runtime = await this.ensureRuntime(normalizedAccountId);
-    // Broadcast updated session state
-    const status = await this.getRuntimeStatus(normalizedAccountId);
-    this.broadcast?.({
-      type: 'session_state',
-      accountId: normalizedAccountId,
-      status: {
-        hasCredential: status.hasCredential,
-        sessionActive: status.sessionActive,
-        loggedIn: status.sessionActive,
-        loginInProgress: false,
-        friendCacheCount: 0,
-        qrCodeAvailable: false,
-        account: {
-          userId: status.accountId,
-          displayName: status.displayName,
-          phoneNumber: status.phoneNumber,
+    try {
+      const runtime = await this.ensureRuntime(normalizedAccountId);
+      const status = await this.getRuntimeStatus(normalizedAccountId);
+      this.broadcast?.({
+        type: 'session_state',
+        accountId: normalizedAccountId,
+        status: {
+          hasCredential: status.hasCredential,
+          sessionActive: status.sessionActive,
+          loggedIn: status.sessionActive,
+          loginInProgress: false,
+          friendCacheCount: 0,
+          qrCodeAvailable: false,
+          account: {
+            userId: status.accountId,
+            displayName: status.displayName,
+            phoneNumber: status.phoneNumber,
+          },
+          listener: status.listener,
         },
-        listener: status.listener,
-      },
-    });
-    return runtime;
+      });
+      return { ok: true, runtime };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('account_runtime_manual_restart_failed', { accountId: normalizedAccountId, error: errMsg });
+      const needsRelogin = errMsg.includes('kick') || errMsg.includes('close') || errMsg.includes('credential') || errMsg.includes('login') || errMsg.includes('QR');
+      
+      this.broadcast?.({
+        type: 'session_state',
+        accountId: normalizedAccountId,
+        status: {
+          hasCredential: true,
+          sessionActive: false,
+          loggedIn: false,
+          loginInProgress: false,
+          friendCacheCount: 0,
+          qrCodeAvailable: false,
+          account: { userId: normalizedAccountId },
+          listener: { connected: false, started: false, lastError: errMsg },
+        },
+      });
+      return { ok: false, error: errMsg, needsRelogin };
+    }
   }
 
   hasRuntime(accountId: string) {

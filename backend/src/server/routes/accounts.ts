@@ -146,10 +146,22 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
-        await accountManager.restartRuntime(accountId);
-        res.json({ ok: true, message: 'Account restarted, Dify executor reattached' });
+        const result = await accountManager.restartRuntime(accountId);
+        if (!result.ok) {
+          res.status(200).json({
+            ok: false,
+            needsRelogin: result.needsRelogin ?? false,
+            error: result.error || 'Khong the khoi dong lai account Zalo. Vui long quet lai QR neu can.',
+          });
+          return;
+        }
+        res.json({ ok: true, message: 'Tai khoan da ket noi lai thanh cong.' });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Restart failed' });
+        res.status(200).json({
+          ok: false,
+          needsRelogin: true,
+          error: error instanceof Error ? error.message : 'Restart that bai',
+        });
       }
     })();
   });
