@@ -21,6 +21,7 @@ import { Client as MinioClient } from 'minio';
 import { AccountRuntimeManager } from './account-manager.js';
 import { DifyBotService } from './services/dify-bot-service.js';
 import { DifyBotExecutor } from './services/dify-bot-executor.js';
+import { CaseStationWebhook } from './services/case-station-webhook.js';
 import { createDifyBotsRouter } from './routes/dify-bots.js';
 import { createBotApiRouter } from './routes/bot-api.js';
 import { createWsHandler } from './ws/handler.js';
@@ -59,6 +60,18 @@ async function main() {
   const loginStore = new GoldStore(knex);
   const loginRuntime = new GoldRuntime(loginStore, logger);
   const accountManager = new AccountRuntimeManager(logger, knex);
+  const caseStationWebhook = new CaseStationWebhook(logger, knex);
+  accountManager.onConversationMessage(({ accountId, message }) => {
+    void caseStationWebhook.enqueue(accountId, message).catch((error) => {
+      logger.error('case_station_webhook_enqueue_failed', {
+        accountId,
+        conversationId: message.conversationId,
+        messageId: message.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
+  caseStationWebhook.start();
   const difyBotService = new DifyBotService(knex, logger);
   const difyBotExecutor = new DifyBotExecutor(difyBotService, logger);
   accountManager.setDifyBotExecutor(difyBotExecutor);
