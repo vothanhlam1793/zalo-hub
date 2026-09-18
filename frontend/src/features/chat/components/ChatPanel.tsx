@@ -22,7 +22,8 @@ interface ChatPanelProps {
   statusMsg: string;
   loadError: string;
   showDisconnectBanner?: boolean;
-  onReconnectAccount?: () => void;
+  onReconnectAccount?: (accountId?: string) => void;
+  workspaceAccountId?: string;
   text: string;
   attachFile: File | null;
   sending: boolean;
@@ -54,6 +55,7 @@ export function ChatPanel({
   loadError,
   showDisconnectBanner,
   onReconnectAccount,
+  workspaceAccountId,
   text,
   attachFile,
   sending,
@@ -226,7 +228,7 @@ export function ChatPanel({
                   <Button
                     type="button"
                     size="sm"
-                    onClick={onReconnectAccount}
+                    onClick={() => onReconnectAccount(workspaceAccountId || activeConversation?.accountId)}
                     className="h-7 px-2.5 text-xs bg-amber-500 hover:bg-amber-600 text-black font-semibold shrink-0"
                   >
                     ⚡ Kết nối lại ngay

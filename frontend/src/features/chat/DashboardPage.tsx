@@ -110,6 +110,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             loadError={composer.loadError}
             showDisconnectBanner={Boolean(workspaceAccount?.sessionActive === false && workspaceAccount?.hasCredential)}
             onReconnectAccount={onReconnectAccount}
+            workspaceAccountId={resolveWorkspaceId()}
             text={composer.text}
             attachFile={composer.attachFile}
             sending={composer.sending}
