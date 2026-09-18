@@ -286,6 +286,8 @@ export class GoldMessageRepo {
       .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
 
     const dedupedMessages = deduplicateMessagesByPreferredPayload(sortedMessages);
+    // Sort ascending by ID to guarantee consistent lock ordering in PostgreSQL and prevent deadlocks
+    dedupedMessages.sort((a, b) => a.id.localeCompare(b.id));
 
     const shouldPurge = options?.purge === true;
     await this.knex.transaction(async (trx) => {
