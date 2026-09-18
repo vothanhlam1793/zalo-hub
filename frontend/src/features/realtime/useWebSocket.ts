@@ -40,7 +40,7 @@ export function useWebSocket(handlers: WsHandlers) {
     if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}/bff/ws`);
+    const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
     ws.current = socket;
 
     socket.addEventListener('open', () => {
