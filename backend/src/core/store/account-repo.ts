@@ -58,12 +58,12 @@ export class GoldAccountRepo {
     const rows = (await this.knex.raw(`
       SELECT cookie_json, imei, user_agent, is_active
       FROM account_sessions
-      WHERE account_id = ? AND is_active = 1
+      WHERE account_id = ?
       LIMIT 1
     `, [normalizedAccountId])).rows as RawCredentialRow[];
 
     const row = rows[0];
-    if (!row) {
+    if (!row || !row.cookie_json) {
       return undefined;
     }
 

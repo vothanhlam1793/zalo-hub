@@ -127,6 +127,10 @@ export class GoldSessionAuth {
       throw new Error(`Credential dang tro toi account ${this.state.currentAccount.userId}, khong khop runtime da bind ${this.state.boundAccountId}`);
     }
     if (this.state.currentAccount?.userId) {
+      const boundId = this.state.boundAccountId || this.state.currentAccount.userId;
+      await this.state.store.getKnex()?.raw(`
+        UPDATE account_sessions SET is_active = 1, updated_at = NOW() WHERE account_id = ?
+      `, [boundId]).catch(() => undefined);
       await this.state.store.setActiveAccount({
         accountId: this.state.currentAccount.userId,
         displayName: this.state.currentAccount.displayName,
