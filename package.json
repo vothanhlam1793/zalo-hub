@@ -1,5 +1,6 @@
 {
   "name": "zalohub-platform",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "workspaces": [

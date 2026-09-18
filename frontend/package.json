@@ -1,13 +1,12 @@
 {
   "name": "zalohub-frontend",
-  "version": "1.0.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "react-router dev",
-    "build": "react-router build",
-    "start": "react-router-serve ./build/server/index.js",
-    "preview": "react-router build && node app/start.js"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@react-router/node": "^7.18.0",
