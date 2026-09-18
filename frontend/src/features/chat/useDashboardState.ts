@@ -42,6 +42,14 @@ export function useDashboardState() {
   const [myAccountsMap, setMyAccountsMap] = useState<Map<string, boolean>>(new Map());
   const [tags, setTags] = useState<import('@/types').TagItem[]>([]);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
+  const [reconnectModal, setReconnectModal] = useState<{
+    open: boolean;
+    status: 'loading' | 'success' | 'error';
+    errorMsg?: string;
+    accountId?: string;
+  }>({ open: false, status: 'loading' });
+  const [qrLoginAccountId, setQrLoginAccountId] = useState<string | null>(null);
+  const [qrLoginOpen, setQrLoginOpen] = useState(false);
 
   useEffect(() => {
     activeConversationIdRef.current = chat.activeConversationId;
@@ -465,24 +473,40 @@ export function useDashboardState() {
     return chat.groups.filter((e) => e.displayName.toLowerCase().includes(q));
   }, [chat.groups, workspace.query]);
 
-  const onReconnectAccount = useCallback(async () => {
-    const id = resolveWorkspaceId();
+  const onReconnectAccount = useCallback(async (targetAccId?: string) => {
+    const id = targetAccId || resolveWorkspaceId();
     if (!id) return;
+    setReconnectModal({ open: true, status: 'loading', accountId: id });
     try {
-      composer.setStatusMsg('Đang kết nối lại tài khoản...');
       const res = await bff.accountRestart(id);
       if (res.ok === false || res.error) {
-        composer.setLoadError(res.error || 'Kết nối lại thất bại. Vui lòng quét lại QR.');
+        setReconnectModal({
+          open: true,
+          status: 'error',
+          accountId: id,
+          errorMsg: res.error || 'Phiên Zalo đã hết hạn hoặc bị đăng xuất ở thiết bị khác.',
+        });
       } else {
-        composer.setStatusMsg(res.message || 'Đã kết nối lại tài khoản thành công.');
+        setReconnectModal({ open: true, status: 'success', accountId: id });
+        setTimeout(() => {
+          setReconnectModal((prev) => ({ ...prev, open: false }));
+          onRefresh();
+        }, 1500);
       }
-      setTimeout(() => {
-        onRefresh();
-      }, 1500);
     } catch (err) {
-      composer.setLoadError(err instanceof Error ? err.message : 'Kết nối lại thất bại');
+      setReconnectModal({
+        open: true,
+        status: 'error',
+        accountId: id,
+        errorMsg: err instanceof Error ? err.message : 'Kết nối lại thất bại',
+      });
     }
-  }, [resolveWorkspaceId, onRefresh, composer]);
+  }, [resolveWorkspaceId, onRefresh]);
+
+  const onOpenQrLogin = useCallback((accId?: string) => {
+    setQrLoginAccountId(accId ?? null);
+    setQrLoginOpen(true);
+  }, []);
 
   return {
     navigate,
@@ -519,6 +543,12 @@ export function useDashboardState() {
     onReactMessage,
     onRenameAccount,
     onReconnectAccount,
+    reconnectModal,
+    setReconnectModal,
+    qrLoginOpen,
+    setQrLoginOpen,
+    qrLoginAccountId,
+    onOpenQrLogin,
     tags,
     selectedTagId,
     setSelectedTagId,

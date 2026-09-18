@@ -5,6 +5,8 @@ import { MiniSidebar } from './components/MiniSidebar';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { ConversationDetailsPanel } from './components/ConversationDetailsPanel';
+import { ReconnectModal } from './components/ReconnectModal';
+import { QrLoginDialog } from '@/features/accounts/components/QrLoginDialog';
 import type { Contact, Group } from '@/types';
 import type { DashboardState } from './useDashboardState';
 import { useDashboardState } from './useDashboardState';
@@ -43,6 +45,12 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
     onReactMessage,
     onRenameAccount,
     onReconnectAccount,
+    reconnectModal,
+    setReconnectModal,
+    qrLoginOpen,
+    setQrLoginOpen,
+    qrLoginAccountId,
+    onOpenQrLogin,
     tags,
     selectedTagId,
     setSelectedTagId,
@@ -129,6 +137,25 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           onClose={() => setDetailsOpen(false)}
         />
         </div>
+
+        <ReconnectModal
+          open={reconnectModal.open}
+          status={reconnectModal.status}
+          errorMsg={reconnectModal.errorMsg}
+          accountId={reconnectModal.accountId}
+          onOpenQrLogin={onOpenQrLogin}
+          onClose={() => setReconnectModal((prev) => ({ ...prev, open: false }))}
+        />
+
+        <QrLoginDialog
+          open={qrLoginOpen}
+          accountId={qrLoginAccountId ?? undefined}
+          onOpenChange={setQrLoginOpen}
+          onSuccess={() => {
+            setQrLoginOpen(false);
+            window.location.reload();
+          }}
+        />
       </div>
     </TooltipProvider>
   );

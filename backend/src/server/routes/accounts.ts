@@ -41,9 +41,22 @@ export function createAccountsRouter(
         return;
       }
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session. Hay dang nhap lai bang QR.' });
+        let targetRuntime = accountManager.getRuntime(accountId);
+        if (!targetRuntime) {
+          try {
+            targetRuntime = await accountManager.ensureRuntime(accountId);
+          } catch (startErr) {
+            // If ensureRuntime failed (e.g. cookie expired or kicked)
+            logger.error('account_activate_ensure_failed', { accountId, error: startErr instanceof Error ? startErr.message : String(startErr) });
+          }
+        }
+        if (!targetRuntime || !targetRuntime.isSessionActive()) {
+          res.status(200).json({
+            ok: false,
+            needsRelogin: true,
+            accountId,
+            error: 'Tài khoản chưa active session hoặc cookie đã hết hạn. Hãy quét lại mã QR.',
+          });
           return;
         }
         await accountManager.activatePrimaryAccount(accountId);
@@ -51,7 +64,11 @@ export function createAccountsRouter(
         broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
         res.json({ ok: true, accountId, status: await getStatusForRuntime(targetRuntime) });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Kich hoat account that bai' });
+        res.status(200).json({
+          ok: false,
+          needsRelogin: true,
+          error: error instanceof Error ? error.message : 'Kich hoat account that bai',
+        });
       }
     })();
   });
