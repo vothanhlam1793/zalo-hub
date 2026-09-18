@@ -173,7 +173,7 @@ export class AccountRuntimeManager {
       hasCred: Boolean(await this.registryStore.getCredentialForAccount(account.accountId)),
     })));
     const accounts = accountCreds.filter(({ hasCred }) => hasCred).map(({ account }) => account);
-    await Promise.all(accounts.map(async (account) => {
+    for (const account of accounts) {
       try {
         await this.ensureRuntime(account.accountId);
       } catch (error) {
@@ -182,7 +182,8 @@ export class AccountRuntimeManager {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    }));
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
 
   private async watchRuntimes() {
@@ -290,21 +291,24 @@ export class AccountRuntimeManager {
       await runtime.listGroups().catch(() => undefined);
       this.logger.info('account_auto_sync_loaded_contacts', { accountId });
 
-      this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'syncing' });
-      const result = await runtime.mobileSyncAllAccountConversations({ perThreadTimeoutMs: 10_000, maxTotalTimeMs: 120_000 });
-
-      const totalHistoryMsgs = result.results?.reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0) ?? 0;
-      this.logger.info('account_auto_sync_completed', { accountId, requ18Received: result.requ18Received, historyMsgs: totalHistoryMsgs });
+      // Refresh conversation list summaries without deep history hammering
+      const summaries = await runtime.getConversationSummaries().catch(() => []);
+      this.broadcast?.({
+        type: 'conversation_summaries',
+        accountId,
+        conversations: summaries,
+      });
 
       this.broadcast?.({
         type: 'ws_sync_status',
         accountId,
         status: 'done',
-        requ18Received: result.requ18Received,
-        requ18Inserted: result.requ18Inserted,
-        historySynced: result.historySynced,
-        historyMsgs: totalHistoryMsgs,
+        requ18Received: 0,
+        requ18Inserted: 0,
+        historySynced: summaries.length,
+        historyMsgs: 0,
       });
+      this.logger.info('account_auto_sync_ready', { accountId, conversationCount: summaries.length });
     } catch (error) {
       this.logger.info('account_auto_sync_skipped', { accountId, reason: error instanceof Error ? error.message : String(error) });
       this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'error', error: error instanceof Error ? error.message : String(error) });

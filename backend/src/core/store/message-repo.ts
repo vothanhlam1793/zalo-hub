@@ -288,26 +288,17 @@ export class GoldMessageRepo {
     const dedupedMessages = deduplicateMessagesByPreferredPayload(sortedMessages);
 
     const shouldPurge = options?.purge === true;
-    if (!shouldPurge) {
-      const dbCount = await this.knex.raw(`
-        SELECT COUNT(*)::int AS cnt FROM messages
-        WHERE account_id = ? AND conversation_id = ?`,
-        [resolvedAccountId, canonicalConversationId],
-      ).then((r: any) => Number(r.rows?.[0]?.cnt ?? 0));
-      if (dbCount > 0 && dedupedMessages.length < dbCount && dedupedMessages.length <= 10) {
-        console.warn(`[zalohub] replace_conversation_messages_skip_purge conv=${canonicalConversationId} db=${dbCount} incoming=${dedupedMessages.length}`);
-        return this.listConversationMessagesByAccount(resolvedAccountId, canonicalConversationId);
-      }
-    }
     await this.knex.transaction(async (trx) => {
-      await trx.raw(`
-        DELETE FROM messages
-        WHERE account_id = ?
-          AND (
-            conversation_id = ?
-            OR (conversation_id IS NULL AND friend_id = ?)
-          )
-      `, [resolvedAccountId, canonicalConversationId, canonicalType === 'direct' ? parsedConversation.threadId : null]);
+      if (shouldPurge) {
+        await trx.raw(`
+          DELETE FROM messages
+          WHERE account_id = ?
+            AND (
+              conversation_id = ?
+              OR (conversation_id IS NULL AND friend_id = ?)
+            )
+        `, [resolvedAccountId, canonicalConversationId, canonicalType === 'direct' ? parsedConversation.threadId : null]);
+      }
 
       for (const message of dedupedMessages) {
         const messageThreadId = message.threadId || parsedConversation.threadId;
