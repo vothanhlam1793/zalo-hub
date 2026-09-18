@@ -1,22 +1,55 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuthStore } from "../stores/auth-store";
 import { MyAccountsTab } from "../components/MyAccountsTab";
+import { AdminUsersTab, type AdminUser } from "../components/AdminUsersTab";
+import { AdminAccountsTab, type AccountSummary } from "../components/AdminAccountsTab";
 import DifyBotsTab from "../components/DifyBotsTab";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { cn } from "../lib/utils";
+import { api } from "../api";
 
-type TabKey = "myaccounts" | "difybots";
+type TabKey = "myaccounts" | "users" | "allaccounts" | "difybots";
 
 export default function AdminPage() {
   const { user, logout } = useAuthStore();
   const [activeTab, setActiveTab] = useState<TabKey>("myaccounts");
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
   const isSuperAdmin = user?.role === "super_admin" || user?.role === "admin";
+
+  const loadData = async () => {
+    try {
+      const [u, a] = await Promise.all([
+        api.adminUsers().catch(() => ({ users: [] })),
+        api.adminAllAccounts().catch(() => ({ accounts: [] })),
+      ]);
+      setUsers(u.users || []);
+      setAccounts(a.accounts || []);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      void loadData();
+    }
+  }, [isSuperAdmin]);
 
   const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
     { key: "myaccounts", label: "Tài khoản của tôi", icon: "📱" },
-    { key: "difybots", label: "Dify Bots", icon: "🤖" },
   ];
+
+  if (isSuperAdmin) {
+    tabs.push(
+      { key: "users", label: "Người dùng", icon: "👤" },
+      { key: "allaccounts", label: "Tất cả Accounts", icon: "🔐" },
+      { key: "difybots", label: "Dify Bots", icon: "🤖" },
+    );
+  }
 
   return (
     <div className="flex-1 flex min-h-screen w-full bg-[#0f1117]">
@@ -34,7 +67,11 @@ export default function AdminPage() {
           {tabs.map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => {
+                setActiveTab(tab.key);
+                setError("");
+                setStatus("");
+              }}
               className={cn(
                 "flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left",
                 activeTab === tab.key
@@ -70,8 +107,35 @@ export default function AdminPage() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        <div className="p-6 max-w-4xl mx-auto w-full">
+        {(status || error) && (
+          <div
+            className={`shrink-0 px-5 py-2.5 text-[13px] ${
+              error ? "bg-[rgba(255,80,80,0.1)] text-[#ff9a9a]" : "bg-[rgba(60,200,120,0.1)] text-[#6fe0a0]"
+            }`}
+          >
+            {error || status}
+          </div>
+        )}
+
+        <div className="flex-1 p-6 max-w-5xl mx-auto w-full">
           {activeTab === "myaccounts" && <MyAccountsTab isSuperAdmin={isSuperAdmin} />}
+          {activeTab === "users" && isSuperAdmin && (
+            <AdminUsersTab
+              users={users}
+              accounts={accounts}
+              onRefresh={loadData}
+              setError={setError}
+              setStatus={setStatus}
+            />
+          )}
+          {activeTab === "allaccounts" && isSuperAdmin && (
+            <AdminAccountsTab
+              accounts={accounts}
+              onRefresh={loadData}
+              setError={setError}
+              setStatus={setStatus}
+            />
+          )}
           {activeTab === "difybots" && <DifyBotsTab isSuperAdmin={isSuperAdmin} />}
         </div>
       </div>

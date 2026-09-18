@@ -93,6 +93,15 @@ export const api = {
   adminAccountEntities: (accountId: string) =>
     req<{ accountId: string; entities: Array<{ id: string; name: string; type: "group" | "contact" | "conversation" }> }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/entities`),
 
+  adminUpdateAccount: (accountId: string, updates: { hubAlias?: string }) =>
+    req(`/api/admin/accounts/${encodeURIComponent(accountId)}`, { method: "PUT", body: JSON.stringify(updates) }),
+
+  accountMobileSync: (accountId: string) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/mobile-sync`, { method: "POST", body: "{}" }),
+
+  accountSyncAll: (accountId: string) =>
+    req(`/api/accounts/${encodeURIComponent(accountId)}/sync-all`, { method: "POST", body: "{}" }),
+
   adminBots: () => req<{ bots: Array<any> }>("/api/admin/bots"),
   adminBotCreate: (data: any) => req<any>("/api/admin/bots", { method: "POST", body: JSON.stringify(data) }),
   adminBotUpdate: (id: string, data: any) => req<any>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(data) }),
