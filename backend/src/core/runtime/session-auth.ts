@@ -120,27 +120,34 @@ export class GoldSessionAuth {
     this.state.listenerStarted = false;
     this.state.listenerAttached = false;
     await this.mergeCurrentAccountProfile();
-    await this.verifySession();
     this._ensureMessageListener?.();
-    this.state.currentAccount = await this.fetchAccountInfo().catch(() => this.mergeCurrentAccountProfile());
-    if (this.state.boundAccountId && this.state.currentAccount?.userId && this.state.currentAccount.userId !== this.state.boundAccountId) {
-      throw new Error(`Credential dang tro toi account ${this.state.currentAccount.userId}, khong khop runtime da bind ${this.state.boundAccountId}`);
-    }
-    if (this.state.currentAccount?.userId) {
-      const boundId = this.state.boundAccountId || this.state.currentAccount.userId;
+
+    // Lightweight instant activation
+    if (this.state.boundAccountId) {
+      const boundId = this.state.boundAccountId;
       await this.state.store.getKnex()?.raw(`
         UPDATE account_sessions SET is_active = 1, updated_at = NOW() WHERE account_id = ?
       `, [boundId]).catch(() => undefined);
-      await this.state.store.setActiveAccount({
-        accountId: this.state.currentAccount.userId,
-        displayName: this.state.currentAccount.displayName,
-        phoneNumber: this.state.currentAccount.phoneNumber,
-        avatar: this.state.currentAccount.avatar,
-      });
-      await this.state.store.canonicalizeConversationDataForAccount(this.state.boundAccountId);
-      await this._hydrate?.();
-      void this._backfill?.();
     }
+
+    // Run heavy background tasks asynchronously without blocking login completion
+    setImmediate(async () => {
+      try {
+        await this.verifySession().catch(() => undefined);
+        this.state.currentAccount = await this.fetchAccountInfo().catch(() => this.mergeCurrentAccountProfile());
+        if (this.state.currentAccount?.userId) {
+          await this.state.store.setActiveAccount({
+            accountId: this.state.currentAccount.userId,
+            displayName: this.state.currentAccount.displayName,
+            phoneNumber: this.state.currentAccount.phoneNumber,
+            avatar: this.state.currentAccount.avatar,
+          });
+        }
+      } catch (bgErr) {
+        this.state.logger.error('session_bg_init_failed', { error: bgErr instanceof Error ? bgErr.message : String(bgErr) });
+      }
+    });
+
     this.state.logger.info('login_with_credential_succeeded');
     return this.state.session;
   }

@@ -201,11 +201,12 @@ async function main() {
       console.log('Upgraded admin to super_admin');
     }
 
-    setTimeout(() => {
+    // Fast parallel warm-start for all accounts immediately upon server startup
+    setImmediate(() => {
       accountManager.warmStartAllAccounts().catch((err) => {
         console.error('warmStart failed:', err);
       });
-    }, 2000);
+    });
   });
 }
 

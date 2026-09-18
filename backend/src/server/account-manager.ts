@@ -216,17 +216,20 @@ export class AccountRuntimeManager {
       hasCred: Boolean(await this.registryStore.getCredentialForAccount(account.accountId)),
     })));
     const accounts = accountCreds.filter(({ hasCred }) => hasCred).map(({ account }) => account);
-    for (const account of accounts) {
-      try {
-        await this.ensureRuntime(account.accountId);
-      } catch (error) {
-        this.logger.error('account_runtime_warm_start_failed', {
-          accountId: account.accountId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      await new Promise((r) => setTimeout(r, 1500));
-    }
+    
+    // Parallel fast boot - start all active accounts concurrently
+    await Promise.allSettled(
+      accounts.map(async (account) => {
+        try {
+          await this.ensureRuntime(account.accountId);
+        } catch (error) {
+          this.logger.error('account_runtime_warm_start_failed', {
+            accountId: account.accountId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })
+    );
   }
 
   private async watchRuntimes() {
@@ -330,29 +333,40 @@ export class AccountRuntimeManager {
       this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'loading' });
       this.logger.info('account_auto_sync_starting', { accountId });
 
-      await runtime.listFriends().catch(() => undefined);
-      await runtime.listGroups().catch(() => undefined);
-      await runtime.syncLabels().catch(() => undefined);
-      this.logger.info('account_auto_sync_loaded_contacts', { accountId });
+      // Immediate DB-first conversation summaries emission
+      const initialSummaries = await runtime.getConversationSummaries().catch(() => []);
+      if (initialSummaries.length > 0) {
+        this.broadcast?.({
+          type: 'conversation_summaries',
+          accountId,
+          conversations: initialSummaries,
+        });
+      }
 
-      // Refresh conversation list summaries without deep history hammering
-      const summaries = await runtime.getConversationSummaries().catch(() => []);
-      this.broadcast?.({
-        type: 'conversation_summaries',
-        accountId,
-        conversations: summaries,
+      // Non-blocking background metadata enrichment
+      setImmediate(async () => {
+        try {
+          await runtime.listFriends().catch(() => undefined);
+          await runtime.listGroups().catch(() => undefined);
+          await runtime.syncLabels().catch(() => undefined);
+          const summaries = await runtime.getConversationSummaries().catch(() => []);
+          this.broadcast?.({
+            type: 'conversation_summaries',
+            accountId,
+            conversations: summaries,
+          });
+          this.broadcast?.({
+            type: 'ws_sync_status',
+            accountId,
+            status: 'done',
+            requ18Received: 0,
+            requ18Inserted: 0,
+            historySynced: summaries.length,
+            historyMsgs: 0,
+          });
+          this.logger.info('account_auto_sync_ready', { accountId, conversationCount: summaries.length });
+        } catch { /* ignore */ }
       });
-
-      this.broadcast?.({
-        type: 'ws_sync_status',
-        accountId,
-        status: 'done',
-        requ18Received: 0,
-        requ18Inserted: 0,
-        historySynced: summaries.length,
-        historyMsgs: 0,
-      });
-      this.logger.info('account_auto_sync_ready', { accountId, conversationCount: summaries.length });
     } catch (error) {
       this.logger.info('account_auto_sync_skipped', { accountId, reason: error instanceof Error ? error.message : String(error) });
       this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'error', error: error instanceof Error ? error.message : String(error) });
