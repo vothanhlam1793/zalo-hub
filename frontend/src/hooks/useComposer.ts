@@ -1,8 +1,11 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { bff } from '../bff-api';
 import type { ConversationSummary, Message } from '../types';
 
 export function useComposer() {
+  const lastSendTimeRef = useRef(0);
+  const isComposingRef = useRef(false);
+
   const handleSend = useCallback(async (
     e: React.FormEvent,
     activeConversationId: string,
@@ -20,16 +23,24 @@ export function useComposer() {
     fileInputRef: React.MutableRefObject<HTMLInputElement | null>,
     appendLocalMessage?: (msg: Message) => void,
     updateConversationSummaryLocal?: (accountId: string, msg: { conversationId: string; text: string; kind: string; timestamp: string; direction: string }) => void,
+    textareaRef?: React.MutableRefObject<HTMLTextAreaElement | null>,
   ) => {
     e.preventDefault();
-    const trimmedText = text.trim();
-    if (!activeConversationId || (!trimmedText && !attachFile)) return;
+    const currentInputText = (textareaRef?.current?.value ?? text).trim();
+    if (!activeConversationId || (!currentInputText && !attachFile)) return;
     if (!accountId) {
-      setStatusMsg('Chua co tai khoan workspace duoc chon');
+      setStatusMsg('Chưa có tài khoản workspace được chọn');
       return;
     }
 
-    const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Debounce guard: block duplicate Enter bursts within 250ms
+    const nowTs = Date.now();
+    if (nowTs - lastSendTimeRef.current < 250) {
+      return;
+    }
+    lastSendTimeRef.current = nowTs;
+
+    const tempId = `pending-${nowTs}-${Math.random().toString(36).slice(2, 8)}`;
     const now = new Date().toISOString();
     const kind = attachFile ? (attachFile.type.startsWith('image/') ? 'image' : 'file') : 'text';
 
@@ -38,7 +49,7 @@ export function useComposer() {
       conversationId: activeConversationId,
       threadId: '',
       conversationType: 'direct',
-      text: trimmedText || (attachFile ? `[${kind}]` : ''),
+      text: currentInputText || (attachFile ? `[${kind}]` : ''),
       kind,
       attachments: [],
       direction: 'outgoing',
@@ -48,12 +59,17 @@ export function useComposer() {
       cliMsgId: undefined,
     };
 
-    appendLocalMessage?.(pendingMsg);
+    // Synchronously clear both DOM element and React state immediately
+    if (textareaRef?.current) {
+      textareaRef.current.value = '';
+    }
     setText('');
     setAttachFile(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     setSending(true);
     setStatusMsg('');
+
+    appendLocalMessage?.(pendingMsg);
 
     updateConversationSummaryLocal?.(accountId, {
       conversationId: activeConversationId,
@@ -74,7 +90,7 @@ export function useComposer() {
 
       if (attachFile) {
         params.type = 'attachment';
-        if (trimmedText) params.caption = trimmedText;
+        if (currentInputText) params.caption = currentInputText;
         const result: any = await bff.send(params, attachFile);
         const resId = result?.message?.msgId ?? result?.msgId;
         if (resId) {
@@ -82,7 +98,7 @@ export function useComposer() {
           pendingMsg.providerMessageId = String(resId);
         }
       } else {
-        params.text = trimmedText;
+        params.text = currentInputText;
         const result: any = await bff.send(params);
         const resId = result?.message?.msgId ?? result?.msgId;
         if (resId) {
@@ -92,19 +108,38 @@ export function useComposer() {
       }
       setLoadError('');
     } catch (err) {
-      setStatusMsg(err instanceof Error ? err.message : 'Gui that bai');
-      setLoadError(err instanceof Error ? err.message : 'Gui that bai');
+      setStatusMsg(err instanceof Error ? err.message : 'Gửi thất bại');
+      setLoadError(err instanceof Error ? err.message : 'Gửi thất bại');
     } finally {
       setSending(false);
+      // Double check cleanup in case IME injected text after asynchronous tick
+      if (textareaRef?.current && textareaRef.current.value === currentInputText) {
+        textareaRef.current.value = '';
+        setText('');
+      }
     }
   }, []);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>, handleSend: (e: React.FormEvent) => void) => {
-    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+  const handleCompositionStart = useCallback(() => {
+    isComposingRef.current = true;
+  }, []);
+
+  const handleCompositionEnd = useCallback(() => {
+    isComposingRef.current = false;
+  }, []);
+
+  const handleKeyDown = useCallback((
+    e: React.KeyboardEvent<HTMLTextAreaElement>,
+    handleSend: (e: React.FormEvent) => void,
+  ) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) {
+        return;
+      }
       e.preventDefault();
       handleSend(e as any);
     }
   }, []);
 
-  return { handleSend, handleKeyDown };
+  return { handleSend, handleKeyDown, handleCompositionStart, handleCompositionEnd, isComposingRef };
 }

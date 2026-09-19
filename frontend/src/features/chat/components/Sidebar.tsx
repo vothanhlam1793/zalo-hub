@@ -2,6 +2,14 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useEffect, useState } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
@@ -24,6 +32,7 @@ interface SidebarProps {
   accountDisplayName?: string;
   accountAvatar?: string;
   accountPhoneNumber?: string;
+  isSessionActive?: boolean;
   className?: string;
   tags?: TagItem[];
   selectedTagId?: string | null;
@@ -50,6 +59,7 @@ export function Sidebar({
   accountDisplayName,
   accountAvatar,
   accountPhoneNumber,
+  isSessionActive = true,
   className,
   tags = [],
   selectedTagId,
@@ -113,7 +123,7 @@ export function Sidebar({
                 >
                   ✎
                 </button>
-                {onReconnectAccount && (
+                {!isSessionActive && onReconnectAccount && (
                   <button
                     type="button"
                     onClick={() => onReconnectAccount(workspaceAccountId)}
@@ -176,43 +186,69 @@ export function Sidebar({
         />
 
         {sidebarTab === 'conversations' && (
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
-            <button
-              type="button"
-              onClick={() => onSelectTag?.(null)}
-              className={cn(
-                'px-2.5 py-1 rounded-full whitespace-nowrap font-medium text-[11px] transition-colors',
-                !selectedTagId ? 'bg-white/20 text-white font-semibold' : 'bg-white/5 text-muted-foreground hover:bg-white/10'
-              )}
-            >
-              Tất cả
-            </button>
-            {tags.map((tag) => (
-              <button
-                key={tag.id}
-                type="button"
-                onClick={() => onSelectTag?.(selectedTagId === tag.id ? null : tag.id)}
-                className={cn(
-                  'px-2.5 py-1 rounded-full whitespace-nowrap font-medium text-[11px] transition-colors flex items-center gap-1',
-                  selectedTagId === tag.id
-                    ? 'text-white ring-1 ring-white/50'
-                    : 'bg-white/5 text-[#ccc] hover:bg-white/10'
-                )}
-                style={selectedTagId === tag.id ? { backgroundColor: tag.color || '#3b82f6' } : {}}
-              >
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tag.color || '#3b82f6' }} />
-                <span>{tag.emoji ? `${tag.emoji} ` : ''}{tag.name}</span>
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'flex-1 flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-colors select-none text-left',
+                    selectedTagId
+                      ? 'bg-[#4f7aff]/15 border-[#4f7aff]/30 text-[#dde8ff]'
+                      : 'bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10 hover:text-white'
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span>🏷️</span>
+                    <span className="truncate">
+                      {selectedTagId
+                        ? (() => {
+                            const current = tags.find((t) => t.id === selectedTagId);
+                            return current ? `${current.emoji ? `${current.emoji} ` : ''}${current.name}` : 'Đã chọn nhãn';
+                          })()
+                        : 'Lọc theo nhãn (Tất cả)'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] opacity-60">▼</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56 bg-[#121824] border-white/10 text-[#e2e8f0]">
+                <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold">
+                  Phân loại nhãn Zalo
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-white/10" />
+                <DropdownMenuCheckboxItem
+                  checked={!selectedTagId}
+                  onCheckedChange={() => onSelectTag?.(null)}
+                  className="text-xs cursor-pointer focus:bg-white/10"
+                >
+                  <span>Tất cả cuộc trò chuyện</span>
+                </DropdownMenuCheckboxItem>
+                {tags.map((tag) => (
+                  <DropdownMenuCheckboxItem
+                    key={tag.id}
+                    checked={selectedTagId === tag.id}
+                    onCheckedChange={() => onSelectTag?.(selectedTagId === tag.id ? null : tag.id)}
+                    className="text-xs cursor-pointer focus:bg-white/10 flex items-center gap-2"
+                  >
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tag.color || '#3b82f6' }} />
+                    <span className="truncate">{tag.emoji ? `${tag.emoji} ` : ''}{tag.name}</span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             {onSyncTags && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={onSyncTags}
-                className="px-2 py-1 rounded-full whitespace-nowrap text-[11px] text-muted-foreground hover:text-white bg-white/5 hover:bg-white/10 transition-colors shrink-0"
-                title="Đồng bộ nhãn từ Zalo"
+                className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-white hover:bg-white/10 shrink-0 border border-white/5"
+                title="Đồng bộ danh sách nhãn từ Zalo"
               >
-                🔄 Sync
-              </button>
+                🔄 Đồng bộ
+              </Button>
             )}
           </div>
         )}

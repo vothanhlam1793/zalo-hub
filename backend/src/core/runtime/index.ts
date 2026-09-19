@@ -566,7 +566,10 @@ export class GoldRuntime {
   }
 
   onConversationMessage(listener: (message: GoldConversationMessage) => void) {
-    return this.listener.onConversationMessage(listener);
+    this.state.conversationListeners.add(listener);
+    return () => {
+      this.state.conversationListeners.delete(listener);
+    };
   }
 
   getListenerState() {

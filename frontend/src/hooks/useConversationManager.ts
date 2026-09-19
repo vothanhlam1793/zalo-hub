@@ -11,17 +11,16 @@ export function useConversationManager() {
     setHasMoreHistory: (v: boolean) => void,
     selectionTokenRef: React.MutableRefObject<number>,
     activeConversationIdRef: React.MutableRefObject<string>,
-    messagesEndRef: React.MutableRefObject<HTMLDivElement | null>,
+    messagesEndRef?: React.MutableRefObject<HTMLDivElement | null>,
   ) => {
     const token = selectionTokenRef.current;
     try {
-      const r = await bff.chatGetMessages(accountId, conversationId, { limit: 40 });
+      const r = await bff.chatGetMessages(accountId, conversationId, { limit: 50 });
       const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
       if (r.messages && r.messages.length > 0) {
         mergeMessagesIntoConversation(accountId, conversationId, r.messages, 'replace');
         if (stillActive) {
           setHasMoreHistory(Boolean(r.hasMore));
-          requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
         }
       }
       return r;
@@ -58,15 +57,9 @@ export function useConversationManager() {
         replaceAccountConversations(accountId, cv.conversations);
         void clientDb.saveConversations(accountId, cv.conversations);
       }
-      if (activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
-        setHasMoreHistory(result.hasMore || result.insertedCount > 0);
-      }
       return result;
-    } catch (err) {
+    } catch {
       return {
-        conversationId,
-        threadId: '',
-        type: 'direct',
         remoteCount: 0,
         insertedCount: 0,
         dedupedCount: 0,
@@ -128,32 +121,19 @@ export function useConversationManager() {
       }
     }
 
-    // Step 3 (Non-blocking background refresh): Query latest from server
+    // Step 3 (Non-blocking background refresh): Always fetch the latest 50 messages from server
     void (async () => {
       try {
-        const latestTime = cached.length > 0 ? cached[cached.length - 1]?.timestamp : undefined;
-        const messagesRes = await bff.chatGetMessages(accountId, conversationId, {
-          since: latestTime,
-          limit: 50,
-        }).catch(() => null);
+        const messagesRes = await bff.chatGetMessages(accountId, conversationId, { limit: 50 }).catch(() => null);
 
         if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
 
-        if (messagesRes && messagesRes.messages) {
-          if (messagesRes.messages.length > 0) {
-            const { next } = mergeMessagesIntoConversation(accountId, conversationId, messagesRes.messages, cached.length > 0 ? 'append' : 'replace');
-            setMessages(next);
-            setHasMoreHistory(Boolean(messagesRes.hasMore || next.length >= 40));
-          } else if (cached.length === 0) {
-            // Empty locally and no delta: fetch initial page
-            const initialRes = await refreshConversationMessages(accountId, conversationId);
-            if (token === selectionTokenRef.current && activeConversationIdRef.current === conversationId && initialRes) {
-              setMessages(initialRes.messages || []);
-              setHasMoreHistory(Boolean(initialRes.hasMore));
-            }
-          }
+        if (messagesRes && messagesRes.messages && messagesRes.messages.length > 0) {
+          const { next } = mergeMessagesIntoConversation(accountId, conversationId, messagesRes.messages, cached.length > 0 ? 'append' : 'replace');
+          setMessages(next);
+          setHasMoreHistory(Boolean(messagesRes.hasMore || next.length >= 40));
         }
-      } catch (error) {
+      } catch {
         // Non-blocking: silence errors so user keeps reading local messages
       }
     })();
@@ -175,44 +155,33 @@ export function useConversationManager() {
     if (!activeConversationId || loadingOlder || !hasMoreHistory || messages.length === 0) {
       return;
     }
-    if (!accountId) return;
 
     const oldest = messages[0]?.timestamp;
+    const oldestProviderId = messages[0]?.providerMessageId;
     if (!oldest) return;
-
-    const container = messagesAreaRef.current;
-    const previousHeight = container?.scrollHeight ?? 0;
 
     setLoadingOlder(true);
     try {
-      // Step A: First check IndexedDB before calling network
+      // 1. Try to load older from local IndexedDB first
       const dbOlder = await clientDb.getMessages(accountId, activeConversationId, 40, oldest);
       if (dbOlder.length > 0) {
         prependMessages(accountId, activeConversationId, dbOlder);
         setHasMoreHistory(true);
-        requestAnimationFrame(() => {
-          if (!container) return;
-          container.scrollTop = container.scrollHeight - previousHeight;
-        });
         return;
       }
 
-      // Step B: If IndexedDB reached the top, request server
+      // 2. Fetch from backend DB
       const r = await bff.chatGetMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
-      if (r.messages.length > 0) {
+      if (r.messages && r.messages.length > 0) {
         prependMessages(accountId, activeConversationId, r.messages);
-        setHasMoreHistory(Boolean(r.messages.length >= 40));
+        setHasMoreHistory(Boolean(r.hasMore));
       } else {
-        setHasMoreHistory(false);
+        // 3. Fallback: sync from Zalo cloud if DB is exhausted
+        const syncResult = await syncConversationHistory(accountId, activeConversationId, oldestProviderId, undefined);
+        setHasMoreHistory(Boolean(syncResult.hasMore));
       }
-
-      requestAnimationFrame(() => {
-        if (!container) return;
-        const nextHeight = container.scrollHeight;
-        container.scrollTop = nextHeight - previousHeight;
-      });
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Khong tai duoc lich su cu hon');
+      setLoadError(error instanceof Error ? error.message : 'Tải thêm tin cũ thất bại');
     } finally {
       setLoadingOlder(false);
     }

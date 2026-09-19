@@ -58,7 +58,8 @@ export function useDashboardState() {
   const messageCache = useMessageCache();
   const { loadData, handleSelectAccount } = useAccountManager();
   const { selectConversation, loadOlderMessages, refreshConversationMessages, syncConversationHistory } = useConversationManager();
-  const { handleSend, handleKeyDown } = useComposer();
+  const { handleSend, handleKeyDown, handleCompositionStart, handleCompositionEnd } = useComposer();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const resolveWorkspaceId = useCallback(() => {
     return workspace.selectedAccountId || status?.account?.userId || '';
@@ -114,11 +115,11 @@ export function useDashboardState() {
     onMessage: ({ accountId, message }: WsConversationMessagePayload) => {
       if (accountId !== resolveWorkspaceId()) return;
       chat.updateConversationFromWs(accountId, message);
+      if (message.isSelf && message.direction === 'outgoing') {
+        chat.reconcileOutgoingMessage(message);
+      }
       const { next } = messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
       if (activeConversationIdRef.current === message.conversationId) {
-        if (message.isSelf && message.direction === 'outgoing') {
-          chat.reconcileOutgoingMessage(message);
-        }
         chat.setMessages(next);
       }
     },
@@ -214,6 +215,22 @@ export function useDashboardState() {
     );
   }, [resolveWorkspaceId, selectConversation, subscribe, messageCache, refreshConversationMessages, syncConversationHistory, loadData, chat, composer]);
 
+  // Restore saved active conversation on page refresh / initial load
+  const restoredConversationRef = useRef(false);
+  useEffect(() => {
+    if (restoredConversationRef.current) return;
+    const accountId = resolveWorkspaceId();
+    if (!status?.sessionActive || !accountId) return;
+
+    if (typeof localStorage !== 'undefined') {
+      const savedConvId = localStorage.getItem('zalohub_active_conversation');
+      if (savedConvId && !chat.activeConversationId) {
+        restoredConversationRef.current = true;
+        onSelectConversation(savedConvId);
+      }
+    }
+  }, [status?.sessionActive, workspace.selectedAccountId, chat.activeConversationId, onSelectConversation, resolveWorkspaceId]);
+
   const onOpenDirectConversation = useCallback((contact: Contact) => {
     const accountId = resolveWorkspaceId();
     const conversationId = directConversationId(contact.userId);
@@ -275,6 +292,7 @@ export function useDashboardState() {
       composer.setText, composer.setAttachFile, composer.setSending, composer.setStatusMsg, composer.setLoadError, chat.replaceAccountConversations, chat.setMessages,
       messageCache.mergeMessagesIntoConversation, fileInputRef,
       chat.appendLocalMessage, chat.updateConversationSummaryLocal,
+      textareaRef,
     );
   }, [resolveWorkspaceId, handleSend, chat.activeConversationId, composer.text, composer.attachFile, messageCache, chat, composer]);
 
@@ -532,6 +550,9 @@ export function useDashboardState() {
     activeSubtitle,
     isGroupConversation,
     fileInputRef,
+    textareaRef,
+    handleCompositionStart,
+    handleCompositionEnd,
     resolveWorkspaceId,
     onSelectAccount,
     onSelectConversation,

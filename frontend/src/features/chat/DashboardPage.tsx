@@ -84,6 +84,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           accountDisplayName={workspaceAccount?.displayName ?? status?.account?.displayName}
           accountAvatar={workspaceAccount?.avatar ?? status?.account?.avatar}
           accountPhoneNumber={workspaceAccount?.phoneNumber ?? status?.account?.phoneNumber}
+          isSessionActive={Boolean(workspaceAccount?.sessionActive ?? status?.sessionActive)}
           tags={tags}
           selectedTagId={selectedTagId}
           onSelectTag={setSelectedTagId}
@@ -119,6 +120,9 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             onScroll={onMessagesScroll}
             onTextChange={composer.setText}
             onKeyDown={onKeyDown}
+            onCompositionStart={dashboard.handleCompositionStart}
+            onCompositionEnd={dashboard.handleCompositionEnd}
+            textareaRef={dashboard.textareaRef}
             onSend={onSend}
             onAttachFile={composer.setAttachFile}
             onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
@@ -271,6 +275,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               accountDisplayName={workspaceAccount?.displayName ?? status?.account?.displayName}
               accountAvatar={workspaceAccount?.avatar ?? status?.account?.avatar}
               accountPhoneNumber={workspaceAccount?.phoneNumber ?? status?.account?.phoneNumber}
+              isSessionActive={Boolean(workspaceAccount?.sessionActive ?? status?.sessionActive)}
               tags={tags}
               selectedTagId={selectedTagId}
               onSelectTag={setSelectedTagId}
@@ -311,6 +316,9 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               onScroll={onMessagesScroll}
               onTextChange={composer.setText}
               onKeyDown={onKeyDown}
+              onCompositionStart={dashboard.handleCompositionStart}
+              onCompositionEnd={dashboard.handleCompositionEnd}
+              textareaRef={dashboard.textareaRef}
               onSend={onSend}
               onAttachFile={composer.setAttachFile}
               onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
