@@ -30,6 +30,8 @@ import { createSystemRouter } from './routes/system.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createSystemAuthRouter } from './routes/system-auth.js';
 import { createAccountsRouter } from './routes/accounts.js';
+import { SendRequestRepo } from '../core/store/send-request-repo.js';
+import { SendRequestService } from './services/send-request-service.js';
 import { createLegacyRouter } from './routes/legacy.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createMonitorRouter } from './routes/monitor.js';
@@ -58,6 +60,11 @@ async function main() {
   await knex.migrate.latest();
 
   const logger = new GoldLogger();
+  const sendRequestRepo = new SendRequestRepo(knex);
+  // Single-process startup recovery only: abandoned work is never auto-resubmitted.
+  const abandonedSendCount = await sendRequestRepo.recoverAbandoned();
+  logger.info('send_requests_recovered', { abandonedSendCount });
+  const sendRequestService = new SendRequestService(sendRequestRepo, logger);
   const loginStore = new GoldStore(knex);
   const loginRuntime = new GoldRuntime(loginStore, logger);
   const accountManager = new AccountRuntimeManager(logger, knex);
@@ -166,7 +173,7 @@ async function main() {
   app.use('/api', createAuthRouter(logger, loginRuntime, knex, accountManager, broadcast, () => loginPromise, (p) => { loginPromise = p; }, getEmptyStatus));
   const systemAuth = createSystemAuthRouter(logger, knex);
   app.use('/api', systemAuth.router);
-  app.use('/api/accounts', createAccountsRouter(logger, accountManager, broadcast, upload, knex, systemAuth.requireAuth, systemAuth.requireAccountAccess));
+  app.use('/api/accounts', createAccountsRouter(logger, accountManager, broadcast, upload, knex, systemAuth.requireAuth, systemAuth.requireAccountAccess, sendRequestService));
   app.use('/api/accounts', createMonitorRouter(logger, loginStore, accountManager, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api/tags', createTagsRouter(loginStore, accountManager, broadcast, systemAuth.requireAuth, systemAuth.requireAccountAccess));

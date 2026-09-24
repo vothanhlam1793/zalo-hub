@@ -5,9 +5,15 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { formatSize, getInitial, isImageAttachment } from '@/utils';
 import { MessageBubble, type MessageGroupItem } from './MessageBubble';
 import Lightbox, { type LightboxImage } from './Lightbox';
-import type { ConversationSummary, Message } from '@/types';
+import type { ConversationSummary, Message, MessageReactionOption } from '@/types';
+import { useComposerStore } from '@/stores/composer-store';
+import type { DeliveryActions } from './messages/MessageDeliveryStatus';
 
-interface ChatPanelProps {
+interface ChatPanelProps extends DeliveryActions {
+  loadState?: 'idle' | 'loading' | 'ready' | 'error';
+  onRetryLoad?: () => void;
+  isComposing?: boolean;
+  canSend?: boolean;
   activeConversationId: string;
   activeConversation?: ConversationSummary;
   activeName: string;
@@ -24,8 +30,6 @@ interface ChatPanelProps {
   showDisconnectBanner?: boolean;
   onReconnectAccount?: (accountId?: string) => void;
   workspaceAccountId?: string;
-  text: string;
-  attachFile: File | null;
   sending: boolean;
   typingUsers: string[];
   detailsOpen: boolean;
@@ -39,7 +43,7 @@ interface ChatPanelProps {
   onAttachFile: (file: File | null) => void;
   onClearFile: () => void;
   onToggleDetails: () => void;
-  onReactMessage: (message: Message, reaction: { emoji: string; type: number }) => void;
+  onReactMessage: (message: Message, reaction: MessageReactionOption) => void;
 }
 
 function formatDateDivider(dateStr: string): string {
@@ -74,8 +78,6 @@ export function ChatPanel({
   showDisconnectBanner,
   onReconnectAccount,
   workspaceAccountId,
-  text,
-  attachFile,
   sending,
   typingUsers,
   detailsOpen,
@@ -90,14 +92,34 @@ export function ChatPanel({
   onClearFile,
   onToggleDetails,
   onReactMessage,
+  loadState, onRetryLoad, isComposing, canSend = true,
+  onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
 }: ChatPanelProps) {
+  const text = useComposerStore((s) => s.text);
+  const attachFile = useComposerStore((s) => s.attachFile);
+  const missingFileName = useComposerStore((s) => s.missingFileName);
+  const [draftPreview, setDraftPreview] = useState<string>();
+  useEffect(() => {
+    if (!attachFile?.type.startsWith('image/')) { setDraftPreview(undefined); return; }
+    const url = URL.createObjectURL(attachFile);
+    setDraftPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [attachFile]);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const prevConversationRef = useRef(activeConversationId);
+  const viewKey = JSON.stringify([workspaceAccountId, activeConversationId]);
+  const prevConversationRef = useRef(viewKey);
   const userInteractedScrollRef = useRef(false);
   const isAutoScrollingRef = useRef(false);
   const [showScrollBottomButton, setShowScrollBottomButton] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const scrollSnapshot = useRef({ height: 0, top: 0, first: '', ids: new Set<string>(), anchor: '', offset: 0 });
+  const captureAnchor = (el: HTMLDivElement) => {
+    const top = el.getBoundingClientRect().top;
+    const node = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]')).find((item) => item.getBoundingClientRect().bottom > top);
+    return { anchor: node?.dataset.messageId || '', offset: node ? node.getBoundingClientRect().top - top : 0 };
+  };
 
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -185,6 +207,7 @@ export function ChatPanel({
     isAutoScrollingRef.current = true;
     el.scrollTop = el.scrollHeight;
     setShowScrollBottomButton(false);
+    setNewMessageCount(0);
     requestAnimationFrame(() => {
       if (el) el.scrollTop = el.scrollHeight;
       setTimeout(() => { isAutoScrollingRef.current = false; }, 50);
@@ -195,28 +218,43 @@ export function ChatPanel({
     const el = messagesAreaRef.current;
     if (!el) return;
     isAutoScrollingRef.current = true;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    el.scrollTo({ top: el.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     setShowScrollBottomButton(false);
+    setNewMessageCount(0);
     setTimeout(() => { isAutoScrollingRef.current = false; }, 300);
   }, []);
 
   // When switching conversation: reset state and snap to bottom
   useLayoutEffect(() => {
-    const isNewConversation = activeConversationId !== prevConversationRef.current;
-    prevConversationRef.current = activeConversationId;
+    const isNewConversation = viewKey !== prevConversationRef.current;
+    prevConversationRef.current = viewKey;
 
     if (isNewConversation) {
       userInteractedScrollRef.current = false;
+      scrollSnapshot.current = { height: 0, top: 0, first: '', ids: new Set(), anchor: '', offset: 0 };
+      setNewMessageCount(0);
       scrollToBottomInstant();
     }
-  }, [activeConversationId, scrollToBottomInstant]);
+  }, [viewKey, scrollToBottomInstant]);
 
   // When messages update: if user hasn't explicitly scrolled up, keep pinned to bottom
-  useEffect(() => {
-    if (!userInteractedScrollRef.current) {
-      scrollToBottomInstant();
+  useLayoutEffect(() => {
+    const el = messagesAreaRef.current;
+    if (!el) return;
+    const old = scrollSnapshot.current;
+    const first = messages[0]?.localId || messages[0]?.id || '';
+    const added = messages.filter((m) => !old.ids.has(m.localId || m.id));
+    const ownSend = added.some((m) => m.delivery === 'queued' || m.delivery === 'sending');
+    const prepended = old.first && first !== old.first && messages.some((m) => (m.localId || m.id) === old.first);
+    if (prepended && !ownSend) {
+      const anchor = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]')).find((node) => node.dataset.messageId === old.anchor);
+      if (anchor) el.scrollTop += anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - old.offset;
+      else el.scrollTop = old.top + el.scrollHeight - old.height;
     }
-  }, [messages.length, scrollToBottomInstant]);
+    else if (ownSend || !userInteractedScrollRef.current) scrollToBottomInstant();
+    else if (added.length) { setNewMessageCount((count) => count + added.length); setShowScrollBottomButton(true); }
+    scrollSnapshot.current = { height: el.scrollHeight, top: el.scrollTop, first, ids: new Set(messages.map((m) => m.localId || m.id)), ...captureAnchor(el) };
+  }, [messages, scrollToBottomInstant]);
 
   // Track real user scroll interaction
   const handleUserWheelOrTouch = () => {
@@ -227,10 +265,14 @@ export function ChatPanel({
     const container = e.currentTarget;
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const atBottom = distanceFromBottom < 90;
+    scrollSnapshot.current.top = container.scrollTop;
+    scrollSnapshot.current.height = container.scrollHeight;
+    Object.assign(scrollSnapshot.current, captureAnchor(container));
 
     if (atBottom) {
       userInteractedScrollRef.current = false;
       setShowScrollBottomButton(false);
+      setNewMessageCount(0);
     } else if (userInteractedScrollRef.current && !isAutoScrollingRef.current) {
       setShowScrollBottomButton(true);
     }
@@ -288,6 +330,7 @@ export function ChatPanel({
           {(statusMsg || loadError) && (
             <div className={`shrink-0 px-5 py-2 text-xs font-medium ${loadError ? 'bg-rose-500/10 text-rose-300 border-b border-rose-500/20' : 'bg-emerald-500/10 text-emerald-300 border-b border-emerald-500/20'}`}>
               {loadError || statusMsg}
+              {loadState === 'error' && <button type="button" className="underline ml-3 p-2" onClick={onRetryLoad}>Tải lại</button>}
             </div>
           )}
           {showDisconnectBanner && (
@@ -313,8 +356,8 @@ export function ChatPanel({
           <div className="flex-1 min-h-0 relative">
             <div
               ref={messagesAreaRef}
-              className="h-full overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-0.5 scroll-smooth"
-              style={{ overflowAnchor: 'auto' }}
+              className="h-full overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-0.5"
+              style={{ overflowAnchor: 'none' }}
               onScroll={handleScroll}
               onWheel={handleUserWheelOrTouch}
               onTouchMove={handleUserWheelOrTouch}
@@ -326,7 +369,8 @@ export function ChatPanel({
                 </div>
               )}
 
-              {messages.length === 0 && !hasMoreHistory && (
+              {loadState === 'loading' && <div role="status" className="text-xs text-slate-400 text-center p-3">Đang tải tin nhắn…</div>}
+              {messages.length === 0 && loadState === 'ready' && (
                 <div className="flex flex-col items-center justify-center my-auto py-12 text-center text-muted-foreground text-sm">
                   <div className="text-3xl mb-2">👋</div>
                   <div>Chưa có tin nhắn nào.</div>
@@ -335,7 +379,7 @@ export function ChatPanel({
               )}
 
               {groupedMessages.map((item) => (
-                <div key={item.msg.id} className="flex flex-col">
+                <div key={item.msg.localId || item.msg.id} data-message-id={item.msg.localId || item.msg.id} className="flex flex-col">
                   {item.showDateDivider && (
                     <div className="flex items-center justify-center my-4 select-none">
                       <span className="text-[11px] font-medium tracking-wide uppercase px-3 py-0.5 rounded-full bg-white/5 border border-white/5 text-[#94a3b8] shadow-sm">
@@ -350,6 +394,10 @@ export function ChatPanel({
                     isLastInGroup={item.isLastInGroup}
                     onReact={onReactMessage}
                     onOpenLightbox={openLightbox}
+                    onRetryMessage={onRetryMessage}
+                    onQueryMessage={onQueryMessage}
+                    onCancelMessage={onCancelMessage}
+                    onRestoreDraft={onRestoreDraft}
                   />
                 </div>
               ))}
@@ -363,17 +411,22 @@ export function ChatPanel({
                 onClick={scrollToBottomSmooth}
                 className="absolute right-6 bottom-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1e293b]/95 border border-white/10 text-xs text-white shadow-xl backdrop-blur-sm hover:bg-[#334155] active:scale-95 transition-all animate-in fade-in zoom-in duration-150"
               >
-                <span>↓ Mới nhất</span>
+                <span>↓ {newMessageCount ? `${newMessageCount} tin nhắn mới` : 'Mới nhất'}</span>
               </button>
             )}
           </div>
 
           {/* Composer */}
           <form className="shrink-0 p-3 sm:p-4 border-t border-[var(--border)] flex flex-col gap-2 bg-[rgba(11,14,20,0.95)] backdrop-blur" onSubmit={onSend}>
+            {!canSend && <div className="text-xs text-amber-200">Tài khoản cần kết nối và quyền gửi tin nhắn.</div>}
+            {missingFileName && !attachFile && <div role="status" className="text-xs text-amber-200">Chọn lại tệp đính kèm: {missingFileName}
+              <button type="button" className="underline p-2" onClick={onClearFile}>Bỏ tệp</button>
+            </div>}
             {attachFile && (
               <div className="flex items-center gap-2 px-3 py-1.5 bg-[#4f7aff]/10 border border-[#4f7aff]/25 rounded-xl text-xs text-[#7fa8ff] animate-in fade-in">
-                <span>📎 {attachFile.name} ({formatSize(attachFile.size)})</span>
-                <button type="button" onClick={onClearFile} className="ml-auto text-rose-400 hover:text-rose-300 p-0.5">✕</button>
+                {draftPreview && <img src={draftPreview} alt="Xem trước ảnh đính kèm" className="w-12 h-12 object-contain rounded" />}
+                <span className="min-w-0 truncate">📎 {attachFile.name} ({formatSize(attachFile.size)})</span>
+                <button type="button" aria-label="Bỏ tệp đính kèm" onClick={onClearFile} className="ml-auto text-rose-400 hover:text-rose-300 p-2">✕</button>
               </div>
             )}
             <div className="flex gap-2 items-end">
@@ -383,6 +436,7 @@ export function ChatPanel({
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files?.[0]) onAttachFile(e.target.files[0]);
+                  e.target.value = '';
                 }}
               />
               <Button
@@ -392,6 +446,7 @@ export function ChatPanel({
                 onClick={() => fileInputRef.current?.click()}
                 className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-white hover:bg-white/5 shrink-0"
                 title="Đính kèm file hoặc ảnh"
+                aria-label="Đính kèm file hoặc ảnh"
               >
                 📎
               </Button>
@@ -399,6 +454,7 @@ export function ChatPanel({
               <Textarea
                 ref={textareaRef as any}
                 placeholder={isGroupConversation ? 'Nhập tin nhắn vào nhóm...' : 'Nhập tin nhắn...'}
+                aria-label="Nội dung tin nhắn"
                 value={text}
                 onChange={(e) => onTextChange(e.target.value)}
                 onKeyDown={onKeyDown}
@@ -410,10 +466,10 @@ export function ChatPanel({
 
               <Button
                 type="submit"
-                disabled={sending || (!text.trim() && !attachFile)}
+                disabled={!canSend || isComposing || (!text.trim() && !attachFile) || Boolean(missingFileName && !attachFile)}
                 className="h-10 px-4 rounded-xl bg-[#4f7aff] hover:bg-[#4068e8] text-white font-medium shrink-0 disabled:opacity-40 transition-opacity"
               >
-                {sending ? '...' : 'Gửi'}
+                Gửi
               </Button>
             </div>
           </form>
@@ -421,8 +477,9 @@ export function ChatPanel({
           {/* Lightbox for large images */}
           {lightboxOpen && (
             <Lightbox
+              open={lightboxOpen}
               images={lightboxImages}
-              initialIndex={lightboxIndex}
+              index={lightboxIndex}
               onClose={() => setLightboxOpen(false)}
             />
           )}

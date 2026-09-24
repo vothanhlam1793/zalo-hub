@@ -1,25 +1,27 @@
 import type { AccountSummary, Contact, ConversationSummary, Group, HistorySyncResult, Message, SessionStatus } from './types';
 import { api } from './api';
+import { readStoredCredential } from './features/chat/model/chat-session';
 
 export type { AccountStatusSummary } from './api';
 
 export const bff = {
-  authLogin: async (email: string, password: string) => {
+  authLogin: async (email: string, password: string, isCurrent: () => boolean = () => true) => {
     const res = await api.authLogin(email, password);
+    if (!isCurrent()) throw new Error('Session changed');
     localStorage.setItem('auth_token', res.token);
-    return { user: { ...res.user, role: (res.user as any).role || 'user' } };
+    return { token: res.token, user: { ...res.user, role: (res.user as any).role || 'user' } };
   },
 
   authLogout: async () => {
-    await api.logout().catch(() => {});
+    const logout = api.logout().catch(() => {});
     localStorage.removeItem('auth_token');
+    await logout;
     return { ok: true };
   },
 
-  authMe: async () => {
-    const token = localStorage.getItem('auth_token') || '';
+  authMe: async (token = readStoredCredential()) => {
     const res = await api.authMe(token);
-    return { user: { ...res.user, role: (res.user as any).role || 'user' } };
+    return { token, user: { ...res.user, role: (res.user as any).role || 'user' } };
   },
 
   workspaceInit: async () => {
@@ -47,11 +49,18 @@ export const bff = {
       conversations,
     };
   },
+  workspaceLoadMetadata: async (accountId: string, refresh = false) => {
+    const [contacts, groups] = await Promise.all([
+      api.accountContacts(accountId, refresh).catch(() => ({ contacts: [] })),
+      api.accountGroups(accountId, refresh).catch(() => ({ groups: [] })),
+    ]);
+    return { contacts, groups };
+  },
 
   chatOpenConversation: async (accountId: string, conversationId: string, options: { since?: string; before?: string; limit?: number } = {}) => {
     const [messages, metadata] = await Promise.all([
       api.accountMessages(accountId, conversationId, options).catch(() => null),
-      api.accountSyncMetadata(accountId, conversationId).catch(() => null),
+      api.accountSyncConversationMetadata(accountId, conversationId).catch(() => null),
     ]);
     return { messages, metadata };
   },
@@ -74,15 +83,18 @@ export const bff = {
     accountId: string; conversationId: string;
     text?: string; type?: string; caption?: string;
     stickerId?: string; catId?: string;
-  }, file?: File) => {
+    clientRequestId?: string; retry?: boolean;
+  }, file?: File, signal?: AbortSignal) => {
+    const intent = { clientRequestId: params.clientRequestId, retry: params.retry };
     if (file) {
-      return api.accountSendAttachment(params.accountId, params.conversationId, file, params.caption);
+      return api.accountSendAttachment(params.accountId, params.conversationId, file, params.caption, intent, signal);
     }
     if (params.type === 'sticker' && params.stickerId && params.catId) {
       return api.accountSendSticker(params.accountId, params.conversationId, params.stickerId, params.catId);
     }
-    return api.accountSendText(params.accountId, params.conversationId, params.text || '');
+    return api.accountSendText(params.accountId, params.conversationId, params.text || '', intent, signal);
   },
+  sendRequest: api.sendRequest,
 
   sendTyping: (accountId: string, conversationId: string, isTyping: boolean) =>
     api.accountSendTyping(accountId, conversationId, isTyping),
@@ -108,13 +120,16 @@ export const bff = {
     api.updateAccountProfile(accountId, updates),
 
   syncHistory: (accountId: string, conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number } = {}) =>
-    api.accountSyncHistory(accountId, conversationId, options.beforeMessageId, options.timeoutMs),
+    api.accountSyncHistory(accountId, conversationId, options),
 
   mobileSync: (accountId: string) => api.accountMobileSync(accountId),
   mobileSyncThread: (accountId: string, threadId: string, threadType: 'direct' | 'group', timeoutMs?: number) =>
     api.accountMobileSyncThread(accountId, threadId, threadType, timeoutMs),
   syncAll: (accountId: string) => api.accountSyncAll(accountId),
-  restartAccount: (accountId: string) => api.accountRestart(accountId),
+  restartAccount: (accountId: string) => api.restartAccount(accountId),
+  accountMobileSync: api.accountMobileSync,
+  accountSyncAll: api.accountSyncAll,
+  adminUpdateMembership: api.adminUpdateMembership,
 
   myAccounts: () => api.myAccounts(),
   setAccountVisible: (accountId: string, visible: boolean) => api.setAccountVisible(accountId, visible),

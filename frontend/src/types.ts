@@ -32,6 +32,15 @@ export interface Attachment {
 }
 
 export interface Message {
+  /** Browser identity survives HTTP/WS acknowledgement. Never a provider ID. */
+  localId?: string;
+  clientRequestId?: string;
+  delivery?: 'queued' | 'sending' | 'sent' | 'failed' | 'unknown';
+  errorCode?: string;
+  errorText?: string;
+  retryable?: boolean;
+  attachmentNeedsReselect?: boolean;
+  localFile?: { name: string; size: number; type: string; lastModified: number };
   id: string;
   conversationId: string;
   threadId: string;
@@ -50,6 +59,22 @@ export interface Message {
   reactions?: MessageReactionItem[];
   rawMessageJson?: string;
   cliMsgId?: string;
+}
+export interface SendReceipt {
+  clientRequestId: string;
+  accountId: string;
+  conversationId: string;
+  status: 'sending' | 'sent' | 'failed' | 'unknown';
+  messages: Message[];
+  providerMessageIds: string[];
+  acceptedAt?: string;
+  error?: { code: string; message: string; retryable: boolean };
+}
+export interface SendResponse {
+  method?: string;
+  result?: unknown;
+  kind?: string;
+  receipt?: SendReceipt;
 }
 export interface MessageReactionOption {
   emoji: string;

@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.json",
+  "include": ["./realtime.test.ts", "../src/features/realtime/useWebSocket.ts"]
+}

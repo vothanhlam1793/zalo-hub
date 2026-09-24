@@ -1,4 +1,10 @@
-import type { AccountSummary, Contact, ConversationSummary, Group, HistorySyncResult, Message, SessionStatus } from './types';
+import type { AccountSummary, Contact, ConversationSummary, Group, HistorySyncResult, Message, SessionStatus, SendReceipt, SendResponse } from './types';
+import { chatSession, readStoredCredential, type ChatSessionSnapshot } from './features/chat/model/chat-session';
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public receipt?: SendReceipt, public code?: string) { super(message); }
+}
+export const SEND_TIMEOUT_MS = { text: 30_000, attachment: 120_000 };
 
 export interface AccountStatusSummary extends AccountSummary {
   listener?: { connected: boolean; started: boolean; lastError?: string };
@@ -7,30 +13,43 @@ export interface AccountStatusSummary extends AccountSummary {
   qrCodeAvailable?: boolean;
 }
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem('auth_token');
+type RequestIdentity = ChatSessionSnapshot | { bootstrapToken: string } | null;
+function assertIdentity(identity: RequestIdentity) {
+  if (identity === null) return; // Only the public system login endpoint.
+  if ('bootstrapToken' in identity) {
+    chatSession.synchronizeCredentials();
+    if (identity.bootstrapToken && identity.bootstrapToken === readStoredCredential()) return;
+  } else if (chatSession.valid(identity) && identity.token) return;
+  throw new ApiError('Phiên đăng nhập đã thay đổi. Vui lòng xác thực lại.', 401);
+}
+function identityHeaders(identity: RequestIdentity): Record<string, string> {
+  assertIdentity(identity);
+  const token = identity && ('bootstrapToken' in identity ? identity.bootstrapToken : identity.token);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function req<T>(url: string, options: RequestInit = {}): Promise<T> {
+async function req<T>(url: string, options: RequestInit = {}, identity: RequestIdentity = chatSession.capture()): Promise<T> {
   const extraHeaders = (options.headers as Record<string, string>) ?? {};
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders(), ...extraHeaders },
     ...options,
+    headers: { 'Content-Type': 'application/json', ...extraHeaders, ...identityHeaders(identity) },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  assertIdentity(identity);
+  if (!res.ok) throw new ApiError(body.error ?? `HTTP ${res.status}`, res.status, body.receipt, body.code);
   return body as T;
 }
 
-async function upload(url: string, formData: FormData) {
+async function upload(url: string, formData: FormData, signal?: AbortSignal, identity = chatSession.capture()): Promise<SendResponse> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { ...getAuthHeaders() },
+    headers: identityHeaders(identity),
     body: formData,
+    signal,
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  assertIdentity(identity);
+  if (!res.ok) throw new ApiError(body.error ?? `HTTP ${res.status}`, res.status, body.receipt, body.code);
   return body;
 }
 
@@ -127,11 +146,14 @@ export const api = {
       body: JSON.stringify({ conversationId, text }),
     }),
 
-  accountSendText: (accountId: string, conversationId: string, text: string) =>
-    req(`/api/accounts/${encodeURIComponent(accountId)}/send`, {
+  accountSendText: (accountId: string, conversationId: string, text: string, intent: { clientRequestId?: string; retry?: boolean } = {}, signal?: AbortSignal, identity = chatSession.capture()) =>
+    req<SendResponse>(`/api/accounts/${encodeURIComponent(accountId)}/send`, {
       method: 'POST',
-      body: JSON.stringify({ conversationId, text }),
-    }),
+      body: JSON.stringify({ conversationId, text, ...intent }),
+      signal,
+    }, identity),
+  sendRequest: (accountId: string, clientRequestId: string, signal?: AbortSignal, identity = chatSession.capture()) =>
+    req<{ receipt: SendReceipt }>(`/api/accounts/${encodeURIComponent(accountId)}/send-requests/${encodeURIComponent(clientRequestId)}`, { signal }, identity),
 
   sendAttachment: (conversationId: string, file: File, caption?: string) => {
     const fd = new FormData();
@@ -141,24 +163,25 @@ export const api = {
     return upload('/api/send-attachment', fd);
   },
 
-  accountSendAttachment: (accountId: string, conversationId: string, file: File, caption?: string) => {
+  accountSendAttachment: (accountId: string, conversationId: string, file: File, caption?: string, intent: { clientRequestId?: string; retry?: boolean } = {}, signal?: AbortSignal, identity = chatSession.capture()) => {
     const fd = new FormData();
     fd.append('conversationId', conversationId);
     fd.append('file', file, file.name);
     if (caption) fd.append('caption', caption);
-    return upload(`/api/accounts/${encodeURIComponent(accountId)}/send-attachment`, fd);
+    if (intent.clientRequestId) fd.append('clientRequestId', intent.clientRequestId);
+    if (intent.retry) fd.append('retry', 'true');
+    return upload(`/api/accounts/${encodeURIComponent(accountId)}/send-attachment`, fd, signal, identity);
   },
 
   authLogin: (email: string, password: string) =>
     req<{ token: string; user: { id: string; email: string; displayName: string; type: string } }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
-    }),
+    }, null),
 
   authMe: (token: string) =>
     req<{ token: string; user: { id: string; email: string; displayName: string; type: string } }>('/api/auth/me', {
-      headers: { Authorization: `Bearer ${token}` } as Record<string, string>,
-    }),
+    }, { bootstrapToken: token }),
 
   accountSendSticker: (accountId: string, conversationId: string, stickerId: string, catId: string) =>
     req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/sticker`, {
@@ -288,7 +311,7 @@ export const api = {
     }),
 
   restartAccount: (accountId: string) =>
-    req<{ ok: boolean; message?: string }>(`/api/accounts/${encodeURIComponent(accountId)}/restart`, {
+    req<{ ok: boolean; message?: string; error?: string }>(`/api/accounts/${encodeURIComponent(accountId)}/restart`, {
       method: 'POST',
     }),
 

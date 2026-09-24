@@ -304,7 +304,8 @@ export class GoldMessageRepo {
 
       for (const message of dedupedMessages) {
         const messageThreadId = message.threadId || parsedConversation.threadId;
-        const storedMessageId = buildStoredMessageId(resolvedAccountId, message.id);
+        const prefix = `${resolvedAccountId}::`;
+        const storedMessageId = message.id.startsWith(prefix) ? message.id : buildStoredMessageId(resolvedAccountId, message.id);
         const legacyImageUrl = message.imageUrl
           ?? (message.kind === 'image' && message.attachments?.[0]?.url ? message.attachments[0].url : null);
 
@@ -342,7 +343,7 @@ export class GoldMessageRepo {
           messageThreadId,
           message.conversationType,
           message.conversationType === 'direct' ? messageThreadId : '',
-          message.providerMessageId ?? message.id,
+          message.providerMessageId ?? null,
           message.senderId ?? null,
           message.senderName ?? null,
           message.direction,
@@ -358,7 +359,7 @@ export class GoldMessageRepo {
 
         for (const att of message.attachments ?? []) {
           if (att.id.startsWith('legacy-')) continue;
-          const storedAttachmentId = buildStoredAttachmentId(resolvedAccountId, att.id);
+          const storedAttachmentId = att.id.startsWith(prefix) ? att.id : buildStoredAttachmentId(resolvedAccountId, att.id);
           await trx.raw(`
             INSERT INTO attachments (
               id,

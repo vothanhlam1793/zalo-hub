@@ -1,6 +1,6 @@
 {
   "name": "zalohub-backend",
-  "version": "5.0.8",
+  "version": "5.0.9",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "admin:dev": "vite src/admin --config src/admin/vite.config.ts",
     "admin:build": "vite build src/admin --config src/admin/vite.config.ts",
     "build": "tsc && npm run admin:build",
+    "test:sales-chat": "tsx --test test/send-request-service.test.ts test/sender-receipts.test.ts test/accounts-send-routes.test.ts test/send-request-repo.postgres.test.ts tests/realtime.test.ts",
     "postinstall": "patch-package",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",

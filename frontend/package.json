@@ -1,11 +1,13 @@
 {
   "name": "zalohub-frontend",
-  "version": "5.0.8",
+  "version": "5.0.9",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "test:sales-chat": "../backend/node_modules/.bin/tsx --tsconfig tsconfig.app.json --test src/features/chat/model/message-reconciliation.test.ts src/features/chat/model/send-controller.test.ts tests/realtime.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

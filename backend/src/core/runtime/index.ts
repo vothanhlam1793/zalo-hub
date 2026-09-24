@@ -179,9 +179,8 @@ export class GoldRuntime {
         return true;
       }
 
-      if (await this.state.store.hasMessageByProviderIdForAccount(this.state.boundAccountId, message.conversationId, message.providerMessageId.trim())) {
-        return true;
-      }
+      // Distinct provider identities must never collapse just because text/time match.
+      return this.state.store.hasMessageByProviderIdForAccount(this.state.boundAccountId, message.conversationId, message.providerMessageId.trim());
     }
 
     const messageTime = Date.parse(message.timestamp);
@@ -497,8 +496,8 @@ export class GoldRuntime {
     return this.sync.syncLabels();
   }
 
-  async sendText(conversationId: string, text: string) {
-    return this.sender.sendText(conversationId, text);
+  async sendText(conversationId: string, text: string, lifecycle?: import('./send-contract.js').SendLifecycle) {
+    return this.sender.sendText(conversationId, text, lifecycle);
   }
 
   async sendAttachment(conversationId: string, options: {
@@ -506,12 +505,12 @@ export class GoldRuntime {
     fileName: string;
     mimeType: string;
     caption?: string;
-  }) {
-    return this.sender.sendAttachment(conversationId, options);
+  }, lifecycle?: import('./send-contract.js').SendLifecycle) {
+    return this.sender.sendAttachment(conversationId, options, lifecycle);
   }
 
-  async sendImage(conversationId: string, options: { imageBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
-    return this.sender.sendImage(conversationId, options);
+  async sendImage(conversationId: string, options: { imageBuffer: Buffer; fileName: string; mimeType: string; caption?: string }, lifecycle?: import('./send-contract.js').SendLifecycle) {
+    return this.sender.sendImage(conversationId, options, lifecycle);
   }
 
   async sendFile(conversationId: string, options: { fileBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {

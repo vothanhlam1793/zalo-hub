@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import { formatSize, formatTime, getFileIcon, isImageAttachment, isVideoAttachment } from '@/utils';
 import type { Message, MessageReactionOption } from '@/types';
+import { MessageDeliveryStatus, type DeliveryActions } from './messages/MessageDeliveryStatus';
 
 const REACTION_OPTIONS: MessageReactionOption[] = [
   { emoji: '❤️', icon: '/-heart' },
@@ -18,7 +19,7 @@ export interface MessageGroupItem {
   showDateDivider?: string;
 }
 
-interface MessageBubbleProps {
+interface MessageBubbleProps extends DeliveryActions {
   msg: Message;
   isGroup: boolean;
   isFirstInGroup?: boolean;
@@ -34,6 +35,7 @@ export const MessageBubble = memo(function MessageBubble({
   isLastInGroup = true,
   onReact,
   onOpenLightbox,
+  onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
 }: MessageBubbleProps) {
   const dir = msg.direction;
   const isOutgoing = dir === 'outgoing' || msg.isSelf;
@@ -48,7 +50,8 @@ export const MessageBubble = memo(function MessageBubble({
   const isSticker = msg.kind === 'sticker';
   const quoteLabel = msg.quote?.senderName ?? msg.quote?.senderId ?? 'Tin nhắn gốc';
   const quoteText = msg.quote?.text?.trim() || (msg.quote?.kind ? `[${msg.quote.kind}]` : 'Tin nhắn đã trả lời');
-  const canReact = Boolean(onReact && msg.providerMessageId && msg.kind !== 'reaction');
+  const canReact = Boolean(onReact && msg.providerMessageId && (!msg.delivery || msg.delivery === 'sent') && msg.kind !== 'reaction');
+  const delivery = <MessageDeliveryStatus message={msg} onRetryMessage={onRetryMessage} onQueryMessage={onQueryMessage} onCancelMessage={onCancelMessage} onRestoreDraft={onRestoreDraft} />;
   const defaultReaction = REACTION_OPTIONS[1];
 
   const reactionDock = canReact ? (
@@ -100,6 +103,7 @@ export const MessageBubble = memo(function MessageBubble({
             <img src={stickerUrl} alt="Sticker" className="w-full h-auto block" loading="lazy" />
           </div>
           <div className="text-[10px] text-[rgba(255,255,255,0.30)] mt-0.5 text-right">{formatTime(msg.timestamp)}</div>
+          {delivery}
           {reactionDock}
         </div>
       </div>
@@ -123,6 +127,7 @@ export const MessageBubble = memo(function MessageBubble({
               ))}
             </div>
             <div className="text-[10px] text-[rgba(255,255,255,0.35)] mt-2 text-right">{formatTime(msg.timestamp)}</div>
+            {delivery}
             {reactionDock}
           </div>
         </div>
@@ -163,7 +168,7 @@ export const MessageBubble = memo(function MessageBubble({
           {shouldRenderImage ? (
             <button type="button" className="cursor-pointer block w-full text-left overflow-hidden rounded-xl" onClick={() => onOpenLightbox?.(msg.id)} title="Xem ảnh lớn">
               <div className="min-h-[140px] max-w-[280px] bg-black/20 rounded-xl overflow-hidden flex items-center justify-center">
-                <img src={imageUrl} alt={msg.text || 'Hình ảnh'} className="max-w-[280px] max-h-[320px] w-auto h-auto object-cover rounded-xl block transition-transform hover:scale-[1.02]" loading="lazy" />
+                <img src={imageUrl} alt={msg.text || 'Hình ảnh'} className="max-w-full max-h-[320px] w-auto h-auto object-cover rounded-xl block transition-transform hover:scale-[1.02]" loading="lazy" />
               </div>
             </button>
           ) : shouldRenderVideo && att?.url ? (
@@ -224,10 +229,8 @@ export const MessageBubble = memo(function MessageBubble({
 
           <div className="text-[10px] text-[rgba(255,255,255,0.35)] mt-1 flex items-center justify-end gap-1 select-none">
             <span>{formatTime(msg.timestamp)}</span>
-            {isOutgoing && (
-              <span className="text-[11px] text-[#7fa8ff]" title="Đã gửi">✓</span>
-            )}
           </div>
+          {delivery}
           {reactionDock}
         </div>
       </div>

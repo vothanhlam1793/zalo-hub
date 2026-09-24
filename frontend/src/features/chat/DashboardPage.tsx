@@ -97,6 +97,15 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
         />
         <div className="flex-1 min-w-0 flex relative">
           <ChatPanel
+            key={chat.activeKey}
+            loadState={dashboard.messageLoad?.loadState}
+            onRetryLoad={() => onSelectConversation(chat.activeConversationId)}
+            isComposing={dashboard.isComposing}
+            canSend={dashboard.canSend}
+            onRetryMessage={dashboard.onRetryMessage}
+            onQueryMessage={dashboard.onQueryMessage}
+            onCancelMessage={dashboard.onCancelMessage}
+            onRestoreDraft={dashboard.onRestoreDraft}
             activeConversationId={chat.activeConversationId}
             activeConversation={activeConversation}
             activeName={activeName}
@@ -108,12 +117,10 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             loadingOlder={chat.loadingOlder}
             syncingHistory={chat.syncingHistory}
             statusMsg={composer.statusMsg}
-            loadError={composer.loadError}
+            loadError={dashboard.messageLoad?.error || composer.loadError}
             showDisconnectBanner={Boolean(workspaceAccount?.sessionActive === false && workspaceAccount?.hasCredential)}
             onReconnectAccount={onReconnectAccount}
             workspaceAccountId={resolveWorkspaceId()}
-            text={composer.text}
-            attachFile={composer.attachFile}
             sending={composer.sending}
             typingUsers={[]}
             detailsOpen={detailsOpen}
@@ -128,7 +135,6 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onReactMessage={onReactMessage}
-            showDisconnectBanner={status ? !status.sessionActive && !status.loginInProgress && !!workspace.selectedAccountId : false}
           />
         <ConversationDetailsPanel
           open={detailsOpen}
@@ -291,6 +297,16 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
         {screen === 'chat' && (
           <div className="relative flex h-dvh w-full flex-col overflow-hidden">
             <ChatPanel
+              key={chat.activeKey}
+              workspaceAccountId={resolveWorkspaceId()}
+              loadState={dashboard.messageLoad?.loadState}
+              onRetryLoad={() => onSelectConversation(chat.activeConversationId)}
+              isComposing={dashboard.isComposing}
+              canSend={dashboard.canSend}
+              onRetryMessage={dashboard.onRetryMessage}
+              onQueryMessage={dashboard.onQueryMessage}
+              onCancelMessage={dashboard.onCancelMessage}
+              onRestoreDraft={dashboard.onRestoreDraft}
               activeConversationId={chat.activeConversationId}
               activeConversation={activeConversation}
               activeName={activeName}
@@ -307,9 +323,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               loadingOlder={chat.loadingOlder}
               syncingHistory={chat.syncingHistory}
               statusMsg={composer.statusMsg}
-              loadError={composer.loadError}
-              text={composer.text}
-              attachFile={composer.attachFile}
+              loadError={dashboard.messageLoad?.error || composer.loadError}
               sending={composer.sending}
               typingUsers={[]}
               detailsOpen={detailsOpen}

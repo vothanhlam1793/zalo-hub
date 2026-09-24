@@ -1,249 +1,126 @@
 import type { Contact, ConversationSummary, Group, Message } from '../types';
+import { chatSession, conversationKey } from '../features/chat/model/chat-session';
 
-const DB_NAME = 'zalohub_local_v1';
-const DB_VERSION = 1;
-
-let dbPromise: Promise<IDBDatabase> | null = null;
-
+// v1 had no trustworthy system-user ownership. Discard it rather than relabel it.
+let opening: Promise<IDBDatabase> | undefined;
 function getDb(): Promise<IDBDatabase> {
-  if (typeof window === 'undefined' || !window.indexedDB) {
-    return Promise.reject(new Error('IndexedDB not supported in this environment'));
-  }
-
-  if (dbPromise) return dbPromise;
-
-  dbPromise = new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-
-      // 1. Store messages: key is message ID
-      if (!db.objectStoreNames.contains('messages')) {
-        const messageStore = db.createObjectStore('messages', { keyPath: 'id' });
-        messageStore.createIndex('accountId', 'accountId', { unique: false });
-        messageStore.createIndex('conversationId', 'conversationId', { unique: false });
-        messageStore.createIndex('account_conversation', ['accountId', 'conversationId'], { unique: false });
-        messageStore.createIndex('account_conversation_time', ['accountId', 'conversationId', 'timestamp'], { unique: false });
-        messageStore.createIndex('timestamp', 'timestamp', { unique: false });
-      }
-
-      // 2. Store conversations
-      if (!db.objectStoreNames.contains('conversations')) {
-        const convStore = db.createObjectStore('conversations', { keyPath: ['accountId', 'id'] });
-        convStore.createIndex('accountId', 'accountId', { unique: false });
-        convStore.createIndex('lastMessageTimestamp', 'lastMessageTimestamp', { unique: false });
-      }
-
-      // 3. Store contacts & groups
-      if (!db.objectStoreNames.contains('contacts')) {
-        db.createObjectStore('contacts', { keyPath: ['accountId', 'userId'] });
-      }
-      if (!db.objectStoreNames.contains('groups')) {
-        db.createObjectStore('groups', { keyPath: ['accountId', 'groupId'] });
-      }
+  if (typeof indexedDB === 'undefined') return Promise.reject(new Error('No IndexedDB'));
+  return opening ||= new Promise((resolve, reject) => {
+    const request = indexedDB.open('zalohub_local_v1', 2);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      for (const name of Array.from(db.objectStoreNames)) db.deleteObjectStore(name);
+      db.createObjectStore('cache');
     };
-
-    request.onsuccess = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      resolve(db);
+    request.onsuccess = () => {
+      request.result.onversionchange = () => { request.result.close(); opening = undefined; };
+      resolve(request.result);
     };
-
-    request.onerror = (event) => {
-      dbPromise = null;
-      reject((event.target as IDBOpenDBRequest).error);
-    };
+    request.onerror = () => { opening = undefined; reject(request.error); };
+    request.onblocked = () => { opening = undefined; reject(new Error('Cache upgrade blocked')); };
   });
-
-  return dbPromise;
 }
 
+async function read<T>(key: string, fallback: T): Promise<T> {
+  const session = chatSession.capture();
+  try {
+    const db = await getDb();
+    if (!chatSession.valid(session)) return fallback;
+    return await new Promise<T>((resolve) => {
+      const tx = db.transaction('cache');
+      const request = tx.objectStore('cache').get(key);
+      request.onsuccess = () => resolve(chatSession.valid(session) ? request.result ?? fallback : fallback);
+      request.onerror = tx.onabort = () => resolve(fallback);
+    });
+  } catch { return fallback; }
+}
+
+function serializable(messages: Message[]): Message[] {
+  return messages.map((m) => ({ ...m,
+    imageUrl: m.imageUrl?.startsWith('blob:') ? undefined : m.imageUrl,
+    attachments: m.attachments.map((a) => ({ ...a,
+      url: a.url?.startsWith('blob:') ? undefined : a.url,
+      thumbnailUrl: a.thumbnailUrl?.startsWith('blob:') ? undefined : a.thumbnailUrl,
+    })),
+  }));
+}
+
+const writeVersions = new Map<string, number>();
+async function write(key: string, value: unknown): Promise<void> {
+  const session = chatSession.capture();
+  const version = (writeVersions.get(key) || 0) + 1;
+  writeVersions.set(key, version);
+  try {
+    const db = await getDb();
+    if (!chatSession.valid(session) || writeVersions.get(key) !== version) return;
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction('cache', 'readwrite');
+      tx.objectStore('cache').put(value, key);
+      tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
+    });
+  } catch { /* Cache is optional, including quota/private-mode/transaction failures. */ }
+}
+const accountKey = (kind: string, account: string) => JSON.stringify([chatSession.capture().userId, kind, account]);
+const messageKey = (account: string, conversation: string) => conversationKey(chatSession.capture().userId, account, conversation);
+
 export const clientDb = {
-  // --- MESSAGES ---
-  async getMessages(accountId: string, conversationId: string, limit = 50, beforeTimestamp?: string): Promise<Message[]> {
-    try {
-      const db = await getDb();
-      return new Promise<Message[]>((resolve) => {
-        const tx = db.transaction('messages', 'readonly');
-        const store = tx.objectStore('messages');
-        const index = store.index('account_conversation_time');
-
-        let range: IDBKeyRange;
-        if (beforeTimestamp) {
-          range = IDBKeyRange.bound(
-            [accountId, conversationId, ''],
-            [accountId, conversationId, beforeTimestamp],
-            false,
-            true,
-          );
-        } else {
-          range = IDBKeyRange.bound(
-            [accountId, conversationId, ''],
-            [accountId, conversationId, '\uffff'],
-            false,
-            false,
-          );
-        }
-
-        const request = index.openCursor(range, 'prev'); // Most recent first
-        const results: Message[] = [];
-
-        request.onsuccess = (e) => {
-          const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
-          if (cursor && results.length < limit) {
-            results.push(cursor.value);
-            cursor.continue();
-          } else {
-            // Sort ascending by timestamp for chat display
-            results.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-            resolve(results);
-          }
-        };
-
-        request.onerror = () => resolve([]);
-      });
-    } catch {
-      return [];
-    }
+  async getMessages(account: string, conversation: string, limit = 50, before?: string): Promise<Message[]> {
+    const rows = await read<Message[]>(messageKey(account, conversation), []);
+    const history = rows.filter((m) => !before || m.timestamp < before).slice(-limit);
+    // Unresolved intents must not disappear behind the history page limit.
+    return before ? history : rows.filter((m) => history.includes(m) || (m.delivery && m.delivery !== 'sent'));
   },
-
-  async saveMessages(accountId: string, conversationId: string, messages: Message[]): Promise<void> {
-    if (!messages.length) return;
+  saveMessages: (account: string, conversation: string, messages: Message[]) => write(messageKey(account, conversation), serializable(messages)),
+  getConversations: (account: string) => read<ConversationSummary[]>(accountKey('conversations', account), []),
+  saveConversations: (account: string, rows: ConversationSummary[]) => write(accountKey('conversations', account), rows),
+  getContacts: (account: string) => read<Contact[]>(accountKey('contacts', account), []),
+  saveContacts: (account: string, rows: Contact[]) => write(accountKey('contacts', account), rows),
+  getGroups: (account: string) => read<Group[]>(accountKey('groups', account), []),
+  saveGroups: (account: string, rows: Group[]) => write(accountKey('groups', account), rows),
+  getDraft: (key: string) => read<{ text: string; fileName?: string } | null>(`draft:${key}`, null),
+  saveDraft: (key: string, draft: { text: string; fileName?: string }) => write(`draft:${key}`, draft),
+  async getPendingConversations(): Promise<Array<{ key: string; messages: Message[] }>> {
+    const session = chatSession.capture();
     try {
       const db = await getDb();
-      return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction('messages', 'readwrite');
-        const store = tx.objectStore('messages');
-
-        for (const msg of messages) {
-          const item = {
-            ...msg,
-            accountId,
-            conversationId: msg.conversationId || conversationId,
-          };
-          store.put(item);
-        }
-
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-    } catch {
-      // Non-fatal
-    }
-  },
-
-  // --- CONVERSATIONS ---
-  async getConversations(accountId: string): Promise<ConversationSummary[]> {
-    try {
-      const db = await getDb();
-      return new Promise<ConversationSummary[]>((resolve) => {
-        const tx = db.transaction('conversations', 'readonly');
-        const store = tx.objectStore('conversations');
-        const index = store.index('accountId');
-        const request = index.getAll(IDBKeyRange.only(accountId));
-
+      if (!chatSession.valid(session)) return [];
+      return await new Promise((resolve) => {
+        const tx = db.transaction('cache');
+        const request = tx.objectStore('cache').openCursor();
+        const result: Array<{ key: string; messages: Message[] }> = [];
         request.onsuccess = () => {
-          const list = (request.result || []) as ConversationSummary[];
-          list.sort((a, b) => (b.lastMessageTimestamp || '').localeCompare(a.lastMessageTimestamp || ''));
-          resolve(list);
+          const cursor = request.result;
+          if (!cursor) return;
+          try {
+            const key = String(cursor.key);
+            const parts = JSON.parse(key);
+            const messages: Message[] = cursor.value;
+            if (parts[0] === session.userId && Array.isArray(messages) && messages.some((m) => m.delivery && m.delivery !== 'sent')) result.push({ key, messages });
+          } catch { /* Not a message cache key. */ }
+          cursor.continue();
         };
-        request.onerror = () => resolve([]);
+        tx.oncomplete = () => resolve(chatSession.valid(session) ? result : []);
+        tx.onerror = tx.onabort = () => resolve([]);
       });
-    } catch {
-      return [];
-    }
+    } catch { return []; }
   },
-
-  async saveConversations(accountId: string, conversations: ConversationSummary[]): Promise<void> {
-    if (!conversations.length) return;
+  async clearUser(user: string) {
+    if (!user) return;
     try {
       const db = await getDb();
-      return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction('conversations', 'readwrite');
-        const store = tx.objectStore('conversations');
-
-        for (const conv of conversations) {
-          store.put({ ...conv, accountId });
-        }
-
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-    } catch {
-      // Non-fatal
-    }
-  },
-
-  // --- CONTACTS & GROUPS ---
-  async getContacts(accountId: string): Promise<Contact[]> {
-    try {
-      const db = await getDb();
-      return new Promise<Contact[]>((resolve) => {
-        const tx = db.transaction('contacts', 'readonly');
-        const store = tx.objectStore('contacts');
-        const request = store.getAll();
+      await new Promise<void>((resolve) => {
+        const tx = db.transaction('cache', 'readwrite');
+        const request = tx.objectStore('cache').openCursor();
         request.onsuccess = () => {
-          const list = (request.result || []).filter((c: any) => c.accountId === accountId);
-          resolve(list);
+          const cursor = request.result;
+          if (!cursor) return;
+          const key = String(cursor.key).replace(/^draft:/, '');
+          try { if (JSON.parse(key)[0] === user) cursor.delete(); } catch { cursor.delete(); }
+          cursor.continue();
         };
-        request.onerror = () => resolve([]);
+        tx.oncomplete = tx.onerror = tx.onabort = () => resolve();
       });
-    } catch {
-      return [];
-    }
-  },
-
-  async saveContacts(accountId: string, contacts: Contact[]): Promise<void> {
-    if (!contacts.length) return;
-    try {
-      const db = await getDb();
-      return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction('contacts', 'readwrite');
-        const store = tx.objectStore('contacts');
-        for (const c of contacts) {
-          store.put({ ...c, accountId });
-        }
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-    } catch {
-      // Non-fatal
-    }
-  },
-
-  async getGroups(accountId: string): Promise<Group[]> {
-    try {
-      const db = await getDb();
-      return new Promise<Group[]>((resolve) => {
-        const tx = db.transaction('groups', 'readonly');
-        const store = tx.objectStore('groups');
-        const request = store.getAll();
-        request.onsuccess = () => {
-          const list = (request.result || []).filter((g: any) => g.accountId === accountId);
-          resolve(list);
-        };
-        request.onerror = () => resolve([]);
-      });
-    } catch {
-      return [];
-    }
-  },
-
-  async saveGroups(accountId: string, groups: Group[]): Promise<void> {
-    if (!groups.length) return;
-    try {
-      const db = await getDb();
-      return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction('groups', 'readwrite');
-        const store = tx.objectStore('groups');
-        for (const g of groups) {
-          store.put({ ...g, accountId });
-        }
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-    } catch {
-      // Non-fatal
-    }
+    } catch { /* Optional cache. */ }
   },
 };
+chatSession.subscribe((oldUser) => { writeVersions.clear(); void clientDb.clearUser(oldUser); });

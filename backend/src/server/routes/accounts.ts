@@ -5,6 +5,9 @@ import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
 import { getStatusForRuntime } from '../helpers/status.js';
 import { getRuntimeForAccount } from '../helpers/context.js';
+import { SendRequestRepo } from '../../core/store/send-request-repo.js';
+import { SendRequestError, SendRequestService, type NormalizedSend } from '../services/send-request-service.js';
+import { SendFailure, type SendLifecycle } from '../../core/runtime/send-contract.js';
 
 export function createAccountsRouter(
   logger: GoldLogger,
@@ -14,6 +17,7 @@ export function createAccountsRouter(
   knex: Knex,
   requireAuth?: (req: Request, res: Response, next: NextFunction) => void,
   requireAccountAccess?: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
+  sendRequestService?: SendRequestService,
 ) {
 
   const router = Router();
@@ -23,6 +27,29 @@ export function createAccountsRouter(
   const auth = requireAuth ? [requireAuth] : [];
   const viewAny = requireAuth && needsViewer ? [requireAuth, needsViewer] : [];
   const editAny = requireAuth && needsEditor ? [requireAuth, needsEditor] : [];
+  const sendRepo = new SendRequestRepo(knex);
+  const sends = sendRequestService ?? new SendRequestService(sendRepo, logger);
+  const metadataInFlight = new Set<string>();
+  const sendError = (res: Response, error: unknown) => {
+    if (error instanceof SendRequestError || error instanceof SendFailure) {
+      res.status(error instanceof SendRequestError ? error.status : error.httpStatus).json({ error: error.message, code: error.code });
+    } else {
+      logger.error('send_request_route_failed', { code: 'SEND_REQUEST_UNAVAILABLE' });
+      res.status(503).json({ error: 'Không thể xử lý yêu cầu gửi. Kiểm tra trạng thái bằng cùng clientRequestId.', code: 'SEND_REQUEST_UNAVAILABLE' });
+    }
+  };
+  const dispatch = async (input: NormalizedSend, lifecycle: SendLifecycle) => {
+    const targetRuntime = await getRuntimeForAccount(input.accountId, accountManager);
+    if (!targetRuntime.isSessionActive()) throw new SendFailure('SESSION_UNAVAILABLE', 'Phiên Zalo chưa sẵn sàng.', true, 409);
+    const result = input.attachment
+      ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text }, lifecycle)
+      : await targetRuntime.sendText(input.conversationId, input.text, lifecycle);
+    void (async () => {
+      broadcast({ type: 'conversation_summaries', accountId: input.accountId, conversations: await targetRuntime.getConversationSummaries() });
+      broadcast({ type: 'session_state', accountId: input.accountId, status: await getStatusForRuntime(targetRuntime) });
+    })().catch(() => logger.error('send_summary_refresh_failed', { accountId: input.accountId }));
+    return result;
+  };
 
   router.get('/', ...auth, (_req, res) => {
     void (async () => {
@@ -251,23 +278,35 @@ export function createAccountsRouter(
         return;
       }
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          try {
-            await targetRuntime.loginWithStoredCredential();
-          } catch {
-            // fallback to active check below
-          }
-        }
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
+        if ((limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000))
+          || (since && !Number.isFinite(Date.parse(since))) || (before && !Number.isFinite(Date.parse(before)))) {
+          res.status(400).json({ error: 'Tham số phân trang không hợp lệ.' });
           return;
         }
-        const rawMessages = await targetRuntime.getConversationMessages(conversationId, { since, before, limit });
-        const messages = await targetRuntime.resolveGroupSenderNames(conversationId, rawMessages);
+        // Registry store is already available; never ensureRuntime/login on a history read.
+        const rawMessages = await accountManager.getRegistryStore().listConversationMessagesByAccount(accountId, conversationId, { before, limit });
+        const filtered = since ? rawMessages.filter((message) => message.timestamp > since) : rawMessages;
+        const messages = await sendRepo.correlate(accountId, conversationId, filtered);
         const oldestTimestamp = messages[0]?.timestamp;
         const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
         res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
+        // Bounded DB metadata enrichment is off-path and remains useful while Zalo is offline.
+        const key = JSON.stringify([accountId, conversationId]);
+        if (conversationId.startsWith('group:') && !metadataInFlight.has(key)) {
+          metadataInFlight.add(key);
+          const candidates = rawMessages.slice(-200);
+          void accountManager.getRegistryStore().resolveGroupSenderNamesByAccount(accountId, conversationId, candidates)
+            .then(async (enriched) => {
+              const previous = new Map(candidates.map((m) => [m.id, m.senderName]));
+              const changed = enriched.filter((m) => m.senderName && m.senderName !== previous.get(m.id));
+              if (!changed.length) return;
+              await knex.raw(`UPDATE messages AS m SET sender_name = names.sender_name
+                FROM (VALUES ${changed.map(() => '(?::text, ?::text)').join(',')}) AS names(id, sender_name)
+                WHERE m.account_id = ? AND m.id = names.id`, [...changed.flatMap((m) => [m.id, m.senderName!]), accountId]);
+            })
+            .catch(() => logger.error('history_metadata_refresh_failed', { accountId, conversationId }))
+            .finally(() => metadataInFlight.delete(key));
+        }
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversation that bai' });
       }
@@ -390,94 +429,67 @@ export function createAccountsRouter(
     })();
   });
 
-  router.post('/:accountId/send', ...editAny, (req, res) => {
+  router.get('/:accountId/send-requests/:clientRequestId', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
-      const conversationId = String(req.body?.conversationId ?? '').trim();
-      const text = String(req.body?.text ?? '').trim();
-      const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
-      const imageFileName = typeof req.body?.imageFileName === 'string' ? req.body.imageFileName.trim() : '';
-      const imageMimeType = typeof req.body?.imageMimeType === 'string' ? req.body.imageMimeType.trim() : '';
-      if (!conversationId) {
-        res.status(400).json({ error: 'conversationId la bat buoc' });
-        return;
-      }
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
-          return;
+        const userId = (req as Request & { systemUserId?: string }).systemUserId;
+        if (!userId) throw new SendRequestError(401, 'UNAUTHENTICATED', 'Yêu cầu xác thực.');
+        const user = await knex('system_users').where('id', userId).select('role').first();
+        const membership = await knex('zalo_account_memberships').where({ user_id: userId, account_id: accountId }).select('role').first();
+        if (user?.role !== 'super_admin' && !['editor', 'admin', 'master'].includes(membership?.role)) {
+          throw new SendRequestError(403, 'FORBIDDEN', 'Cần quyền editor để xem trạng thái gửi.');
         }
-        let result;
-        if (imageBase64) {
-          if (!imageFileName || !imageMimeType) {
-            res.status(400).json({ error: 'imageFileName va imageMimeType la bat buoc khi gui anh' });
-            return;
-          }
-          result = await targetRuntime.sendImage(conversationId, {
-            imageBuffer: Buffer.from(imageBase64, 'base64'),
-            fileName: imageFileName,
-            mimeType: imageMimeType,
-            caption: text || undefined,
-          });
-        } else {
-          if (!text) {
-            res.status(400).json({ error: 'Can co text hoac image de gui' });
-            return;
-          }
-          result = await targetRuntime.sendText(conversationId, text);
-        }
-        res.json(result);
-        void (async () => {
-          broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-          broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
-        })();
-      } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Gui tin that bai' });
-      }
+        const privileged = user?.role === 'super_admin' || ['admin', 'master'].includes(membership?.role);
+        const receipt = await sends.get(accountId, req.params.clientRequestId, userId, privileged);
+        const unresolved = receipt.status === 'sending' || receipt.status === 'unknown';
+        if (unresolved) res.setHeader('Retry-After', '2');
+        res.status(unresolved ? 202 : 200).json({ receipt });
+      } catch (error) { sendError(res, error); }
     })();
   });
 
-  router.post('/:accountId/send-attachment', upload.single('file'), ...editAny, (req, res) => {
+  router.post('/:accountId/send', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
-      const conversationId = String(req.body?.conversationId ?? '').trim();
-      const caption = String(req.body?.caption ?? '').trim();
-      if (!conversationId) {
-        res.status(400).json({ error: 'conversationId la bat buoc' });
-        return;
-      }
-      if (!req.file) {
-        res.status(400).json({ error: 'File la bat buoc' });
-        return;
-      }
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          try {
-            await targetRuntime.loginWithStoredCredential();
-          } catch {
-            // fallback to active check below
+        const body = req.body ?? {};
+        let attachment;
+        if (body.imageBase64) {
+          if (typeof body.imageBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.imageBase64)
+            || typeof body.imageFileName !== 'string' || typeof body.imageMimeType !== 'string') {
+            throw new SendRequestError(400, 'INVALID_ATTACHMENT', 'Dữ liệu ảnh base64 không hợp lệ.');
           }
+          attachment = { fileBuffer: Buffer.from(body.imageBase64, 'base64'), fileName: body.imageFileName, mimeType: body.imageMimeType };
         }
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
-          return;
-        }
-        const result = await targetRuntime.sendAttachment(conversationId, {
-          fileBuffer: req.file.buffer,
-          fileName: req.file.originalname,
-          mimeType: req.file.mimetype,
-          caption: caption || undefined,
-        });
-        res.json(result);
-        void (async () => {
-          broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-          broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
-        })();
-      } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
-      }
+        const result = await sends.send({ accountId, systemUserId: (req as any).systemUserId,
+          conversationId: body.conversationId, text: body.text, attachment,
+          clientRequestId: body.clientRequestId, retry: body.retry }, dispatch);
+        if (result.status === 202) res.setHeader('Retry-After', '2');
+        res.status(result.status).json(result.body);
+      } catch (error) { sendError(res, error); }
+    })();
+  });
+
+  // Authorization deliberately precedes multipart allocation/parsing.
+  router.post('/:accountId/send-attachment', ...editAny, (req, res, next) => {
+    upload.single('file')(req, res, (error: unknown) => {
+      if (error) {
+        const tooLarge = (error as { code?: string }).code === 'LIMIT_FILE_SIZE';
+        res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? 'File vượt quá 50 MB.' : 'Dữ liệu multipart không hợp lệ.', code: 'INVALID_ATTACHMENT' });
+      } else next();
+    });
+  }, (req, res) => {
+    void (async () => {
+      try {
+        if (!req.file) throw new SendRequestError(400, 'INVALID_ATTACHMENT', 'File là bắt buộc.');
+        const result = await sends.send({ accountId: String(req.params.accountId ?? '').trim(),
+          systemUserId: (req as any).systemUserId, conversationId: req.body?.conversationId, text: req.body?.caption,
+          clientRequestId: req.body?.clientRequestId, retry: req.body?.retry,
+          attachment: { fileBuffer: req.file.buffer, fileName: req.file.originalname, mimeType: req.file.mimetype } }, dispatch);
+        if (result.status === 202) res.setHeader('Retry-After', '2');
+        res.status(result.status).json(result.body);
+      } catch (error) { sendError(res, error); }
     })();
   });
 

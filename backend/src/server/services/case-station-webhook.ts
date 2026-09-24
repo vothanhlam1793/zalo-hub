@@ -7,7 +7,7 @@ type CaseStationWebhookConfig = {
   url: string;
   secret: string;
   accountId: string;
-  conversationId: string;
+  conversationIds: Set<string>;
 };
 
 type OutboxRow = {
@@ -82,8 +82,12 @@ export class CaseStationWebhook {
     const rawUrl = String(process.env.CASE_STATION_WEBHOOK_URL || '').trim();
     const secret = String(process.env.CASE_STATION_WEBHOOK_SECRET || '').trim();
     const accountId = String(process.env.CASE_STATION_ACCOUNT_ID || '').trim();
-    const conversationId = String(process.env.CASE_STATION_CONVERSATION_ID || '').trim();
-    const configuredValues = [rawUrl, secret, accountId, conversationId].filter(Boolean).length;
+    const legacyConversationId = String(process.env.CASE_STATION_CONVERSATION_ID || '').trim();
+    const conversationIds = String(process.env.CASE_STATION_CONVERSATION_IDS || legacyConversationId)
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const configuredValues = [rawUrl, secret, accountId, conversationIds.length ? 'configured' : ''].filter(Boolean).length;
 
     if (configuredValues === 0) {
       this.config = null;
@@ -95,11 +99,11 @@ export class CaseStationWebhook {
     }
 
     const url = validateEndpoint(rawUrl);
-    this.config = { url, secret, accountId, conversationId };
+    this.config = { url, secret, accountId, conversationIds: new Set(conversationIds) };
     this.logger.info('case_station_webhook_enabled', {
       endpoint: redactedEndpoint(url),
       accountId,
-      conversationId,
+      conversationCount: conversationIds.length,
     });
   }
 
@@ -118,7 +122,7 @@ export class CaseStationWebhook {
   /** Persist an accepted runtime event before any network delivery is attempted. */
   enqueue(accountId: string, message: GoldConversationMessage): Promise<void> {
     const config = this.config;
-    if (!config || accountId !== config.accountId || message.conversationId !== config.conversationId) {
+    if (!config || accountId !== config.accountId || !config.conversationIds.has(message.conversationId)) {
       return Promise.resolve();
     }
 

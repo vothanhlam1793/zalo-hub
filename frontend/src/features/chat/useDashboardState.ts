@@ -21,6 +21,12 @@ import { useComposer } from '@/hooks/useComposer';
 import { useWorkspaceStore } from '@/stores/workspace-store';
 import { useChatStore } from '@/stores/chat-store';
 import { useComposerStore } from '@/stores/composer-store';
+import { useShallow } from 'zustand/react/shallow';
+import { chatSession, conversationKey } from './model/chat-session';
+import { recheckUnresolved, retryMessage, querySendStatus, cancelQueued, restoreDraft } from './model/send-controller';
+import { clientDb } from '@/lib/client-db';
+import { recoverMessage } from './model/message-reconciliation';
+import { createPaneResumeController } from './model/pane-resume';
 
 export type DashboardState = ReturnType<typeof useDashboardState>;
 
@@ -36,10 +42,18 @@ export function useDashboardState() {
   const initialBootstrapDoneRef = useRef(false);
 
   const workspace = useWorkspaceStore();
-  const chat = useChatStore();
-  const composer = useComposerStore();
-  const { user } = useAuthStore();
+  const chat = useChatStore(useShallow(({ byConversation, ...view }) => view));
+  // Keystrokes belong to the composer, not the entire sidebar/dashboard tree.
+  const composer = useComposerStore(useShallow((s) => ({
+    statusMsg: s.statusMsg, loadError: s.loadError, sending: s.sending,
+    setStatusMsg: s.setStatusMsg, setLoadError: s.setLoadError, setText: s.setText,
+    setAttachFile: s.setAttachFile, setSending: s.setSending,
+    clearComposer: s.clearComposer, clearErrors: s.clearErrors,
+  })));
+  const messageLoad = useChatStore((s) => s.byConversation[s.activeKey]);
+  const user = useAuthStore((s) => s.user);
   const [myAccountsMap, setMyAccountsMap] = useState<Map<string, boolean>>(new Map());
+  const [accountRoles, setAccountRoles] = useState<Record<string, string>>({});
   const [tags, setTags] = useState<import('@/types').TagItem[]>([]);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
   const [reconnectModal, setReconnectModal] = useState<{
@@ -58,7 +72,7 @@ export function useDashboardState() {
   const messageCache = useMessageCache();
   const { loadData, handleSelectAccount } = useAccountManager();
   const { selectConversation, loadOlderMessages, refreshConversationMessages, syncConversationHistory } = useConversationManager();
-  const { handleSend, handleKeyDown, handleCompositionStart, handleCompositionEnd } = useComposer();
+  const { handleSend, handleKeyDown, handleCompositionStart, handleCompositionEnd, isComposing } = useComposer();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const resolveWorkspaceId = useCallback(() => {
@@ -102,8 +116,18 @@ export function useDashboardState() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [composer]);
 
+  const paneResumeRef = useRef<ReturnType<typeof createPaneResumeController> | null>(null);
+  const authenticatedBeforeMount = useRef(false);
   const { subscribe, unsubscribe } = useWebSocket({
+    onEvent: (event) => {
+      if (event.type === 'authenticated') {
+        recheckUnresolved();
+        if (paneResumeRef.current) void paneResumeRef.current.authenticated();
+        else authenticatedBeforeMount.current = true;
+      }
+    },
     onStatus: ({ accountId, status: nextStatus }: WsSessionStatusPayload) => {
+      if (nextStatus.listener?.connected) recheckUnresolved();
       if (!accountId || accountId === resolveWorkspaceId()) {
         setStatus(nextStatus);
       }
@@ -113,15 +137,8 @@ export function useDashboardState() {
       chat.replaceAccountConversations(accountId, nextConversations);
     },
     onMessage: ({ accountId, message }: WsConversationMessagePayload) => {
-      if (accountId !== resolveWorkspaceId()) return;
       chat.updateConversationFromWs(accountId, message);
-      if (message.isSelf && message.direction === 'outgoing') {
-        chat.reconcileOutgoingMessage(message);
-      }
-      const { next } = messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
-      if (activeConversationIdRef.current === message.conversationId) {
-        chat.setMessages(next);
-      }
+      messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
     },
     onSyncStatus: ({ accountId, status: syncStatus, requ18Received, historySynced, historyMsgs }) => {
       if (accountId !== resolveWorkspaceId()) return;
@@ -135,21 +152,37 @@ export function useDashboardState() {
       }
     },
   });
+  useEffect(() => {
+    const controller = createPaneResumeController({ subscribe, unsubscribe });
+    paneResumeRef.current = controller;
+    if (authenticatedBeforeMount.current) {
+      authenticatedBeforeMount.current = false;
+      void controller.authenticated();
+    }
+    return () => {
+      controller.dispose();
+      if (paneResumeRef.current === controller) paneResumeRef.current = null;
+    };
+  }, [subscribe, unsubscribe, user?.id]);
 
   useEffect(() => {
     if (initialBootstrapDoneRef.current) return;
     initialBootstrapDoneRef.current = true;
-
+    const session = chatSession.capture();
+    const selectedAtStart = useWorkspaceStore.getState().selectedAccountId;
     bff.workspaceInit().then((result) => {
-      if (result.status) setStatus(result.status);
+      if (!chatSession.valid(session)) return;
+      const selectionUnchanged = selectedAtStart === useWorkspaceStore.getState().selectedAccountId;
+      if (result.status && selectionUnchanged && (!selectedAtStart || result.status.account?.userId === selectedAtStart)) setStatus(result.status);
       if (result.accounts) {
         workspace.setKnownAccounts(result.accounts.accounts.map(mapAccountStatusToSummary));
-        if (result.accounts.activeAccountId) workspace.setSelectedAccountId(result.accounts.activeAccountId);
+        if (result.accounts.activeAccountId && selectionUnchanged && !selectedAtStart) workspace.setSelectedAccountId(result.accounts.activeAccountId);
       }
       if (result.myAccounts) {
         const map = new Map<string, boolean>();
         result.myAccounts.accounts.forEach((a) => map.set(a.accountId, a.visible));
         setMyAccountsMap(map);
+        setAccountRoles(Object.fromEntries(result.myAccounts.accounts.map((a) => [a.accountId, a.role])));
       }
     }).catch(() => {});
   }, [mapAccountStatusToSummary, workspace]);
@@ -172,9 +205,8 @@ export function useDashboardState() {
 
   useEffect(() => {
     const accountId = resolveWorkspaceId();
-    if (!status?.sessionActive || !accountId || accountId === loadedAccountRef.current) return;
+    if (!accountId || accountId === loadedAccountRef.current) return;
     loadedAccountRef.current = accountId;
-    chat.clearActivePane();
     void loadData(accountId, status, {}, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
   }, [workspace.selectedAccountId, status?.sessionActive]);
 
@@ -185,7 +217,7 @@ export function useDashboardState() {
     void handleSelectAccount(
       accountId, workspace.setSelectedAccountId, setStatus, composer.setStatusMsg, composer.setLoadError,
       chat.setActiveConversationId, chat.setMessages, chat.clearActivePane,
-      clearComposer, messageCache.clearCache, unsubscribe, workspace.setKnownAccounts,
+      clearComposer, messageCache.clearCache, () => {}, workspace.setKnownAccounts,
       innerLoad, activeConversationIdRef, selectionTokenRef,
     );
   }, [handleSelectAccount, loadData, clearComposer, messageCache, unsubscribe, chat, workspace, composer]);
@@ -194,18 +226,20 @@ export function useDashboardState() {
     const accountId = resolveWorkspaceId();
     if (!accountId) { composer.setLoadError('Chua co tai khoan workspace duoc chon'); return; }
     const readAt = new Date().toISOString();
+    const session = chatSession.capture();
+    const key = conversationKey(session.userId, accountId, conversationId);
     chat.markConversationReadLocal(accountId, conversationId, readAt);
     void bff.updateReadState(accountId, conversationId, readAt)
       .then((result) => {
-        if (result?.ok) {
+        if (chatSession.valid(session) && result?.ok) {
           chat.clearPendingReadAt(accountId, conversationId, result.readAt);
         }
       })
       .catch((error) => {
-        composer.setLoadError(error instanceof Error ? error.message : 'Luu trang thai da doc that bai');
+        if (chatSession.valid(session) && useChatStore.getState().activeKey === key) composer.setLoadError(error instanceof Error ? error.message : 'Luu trang thai da doc that bai');
       });
     void selectConversation(
-      conversationId, accountId, subscribe, messageCache.getCachedMessages,
+      conversationId, accountId, () => {}, messageCache.getCachedMessages,
       messageCache.mergeMessagesIntoConversation, chat.setMessages, chat.setActiveConversationId,
       chat.setHasMoreHistory, composer.setLoadError, composer.setStatusMsg,
       (aid, s, opts) => loadData(aid, s, opts, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError),
@@ -220,10 +254,11 @@ export function useDashboardState() {
   useEffect(() => {
     if (restoredConversationRef.current) return;
     const accountId = resolveWorkspaceId();
-    if (!status?.sessionActive || !accountId) return;
+    if (!accountId || !user?.id) return;
 
     if (typeof localStorage !== 'undefined') {
-      const savedConvId = localStorage.getItem('zalohub_active_conversation');
+      let savedConvId: string | null = null;
+      try { savedConvId = localStorage.getItem(`zalohub_active_conversation:${JSON.stringify([user.id, accountId])}`); } catch { /* optional */ }
       if (savedConvId && !chat.activeConversationId) {
         restoredConversationRef.current = true;
         onSelectConversation(savedConvId);
@@ -268,7 +303,6 @@ export function useDashboardState() {
       chat.setLoadingOlder, chat.setHasMoreHistory, composer.setLoadError,
       (aid, cid, incoming) => {
         const { next } = messageCache.prependMessages(aid, cid, incoming);
-        if (activeConversationIdRef.current === cid) chat.setMessages(next);
         return { next };
       },
       (aid, cid, bmid, readAt) => syncConversationHistory(aid, cid, bmid, readAt,
@@ -285,16 +319,36 @@ export function useDashboardState() {
     scrollDebounceRef.current = setTimeout(() => { onLoadOlder(); }, 150);
   }, [onLoadOlder]);
 
+  const selectedAccount = workspace.knownAccounts.find((a) => a.accountId === resolveWorkspaceId());
+  const canSend = Boolean(
+    (status?.account?.userId === resolveWorkspaceId() ? status.sessionActive : selectedAccount?.sessionActive)
+    && (user?.role === 'super_admin' || user?.role === 'super-admin' || ['editor', 'admin', 'master'].includes(accountRoles[resolveWorkspaceId()])),
+  );
   const onSend = useCallback((e: React.FormEvent) => {
-    const accountId = resolveWorkspaceId();
-    void handleSend(
-      e, chat.activeConversationId, composer.text, composer.attachFile, accountId,
-      composer.setText, composer.setAttachFile, composer.setSending, composer.setStatusMsg, composer.setLoadError, chat.replaceAccountConversations, chat.setMessages,
-      messageCache.mergeMessagesIntoConversation, fileInputRef,
-      chat.appendLocalMessage, chat.updateConversationSummaryLocal,
-      textareaRef,
-    );
-  }, [resolveWorkspaceId, handleSend, chat.activeConversationId, composer.text, composer.attachFile, messageCache, chat, composer]);
+    if (!canSend) { e.preventDefault(); return; }
+    handleSend(e);
+  }, [handleSend, canSend]);
+  const onRetryMessage = useCallback((message: import('@/types').Message, file?: File) => {
+    if (!canSend) { composer.setStatusMsg('Tài khoản cần kết nối và quyền gửi tin nhắn.'); return; }
+    retryMessage(useChatStore.getState().activeKey, message, file);
+  }, [canSend, composer.setStatusMsg]);
+  const onQueryMessage = useCallback((message: import('@/types').Message) => {
+    if (message.clientRequestId) void querySendStatus(useChatStore.getState().activeKey, message.clientRequestId);
+  }, []);
+  const onCancelMessage = useCallback((message: import('@/types').Message) => cancelQueued(useChatStore.getState().activeKey, message), []);
+  const onRestoreDraft = useCallback((message: import('@/types').Message) => restoreDraft(useChatStore.getState().activeKey, message), []);
+  useEffect(() => {
+    const refresh = () => recheckUnresolved();
+    const session = chatSession.capture();
+    void clientDb.getPendingConversations().then((entries) => {
+      if (!chatSession.valid(session)) return;
+      entries.forEach(({ key, messages }) => useChatStore.getState().mergeForKey(key, messages.map(recoverMessage), true));
+      refresh();
+    });
+    window.addEventListener('online', refresh);
+    window.addEventListener('focus', refresh);
+    return () => { window.removeEventListener('online', refresh); window.removeEventListener('focus', refresh); };
+  }, []);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     handleKeyDown(e, onSend);
@@ -302,6 +356,8 @@ export function useDashboardState() {
 
   const onReactMessage = useCallback(async (message: import('@/types').Message, reaction: import('@/types').MessageReactionOption) => {
     const accountId = resolveWorkspaceId();
+    const session = chatSession.capture();
+    const key = useChatStore.getState().activeKey;
     if (!accountId || !message.providerMessageId) {
       if (message.providerMessageId) composer.setStatusMsg('Chua chon account de gui reaction');
       else composer.setStatusMsg('Tin nhan nay chua co ID de gui reaction');
@@ -331,37 +387,47 @@ export function useDashboardState() {
     try {
       await bff.sendReaction(accountId, message.conversationId, message.providerMessageId, cliMsgId, reaction.icon);
     } catch (err) {
-      composer.setLoadError(err instanceof Error ? err.message : 'Gui reaction that bai');
+      if (chatSession.valid(session) && useChatStore.getState().activeKey === key) composer.setLoadError(err instanceof Error ? err.message : 'Gui reaction that bai');
     }
   }, [resolveWorkspaceId, composer]);
 
   const onRefresh = useCallback(() => {
+    void paneResumeRef.current?.refresh();
     const id = resolveWorkspaceId();
+    const session = chatSession.capture();
     if (id) {
       loadData(id, status, { refresh: true }, chat.setContacts, chat.setGroups, chat.replaceAccountConversations, composer.setLoadError);
-      bff.tagsList(id).then((r) => setTags(r.tags)).catch(() => {});
+      bff.tagsList(id).then((r) => { if (chatSession.valid(session) && useWorkspaceStore.getState().selectedAccountId === id) setTags(r.tags); }).catch(() => {});
     }
   }, [resolveWorkspaceId, status, loadData, chat, composer]);
 
   useEffect(() => {
     const id = resolveWorkspaceId();
+    const session = chatSession.capture();
+    let cancelled = false;
+    setTags([]);
     if (id) {
-      bff.tagsList(id).then((r) => setTags(r.tags)).catch(() => {});
+      bff.tagsList(id).then((r) => { if (!cancelled && chatSession.valid(session)) setTags(r.tags); }).catch(() => {});
     }
+    return () => { cancelled = true; };
   }, [resolveWorkspaceId]);
 
   const onSyncTags = useCallback(async () => {
     const id = resolveWorkspaceId();
     if (!id) return;
+    const session = chatSession.capture();
+    const active = () => chatSession.valid(session) && useWorkspaceStore.getState().selectedAccountId === id;
     try {
       composer.setStatusMsg('Đang đồng bộ nhãn từ Zalo...');
       const res = await bff.tagsSync(id);
-      setTags(res.tags);
+      if (!chatSession.valid(session)) return;
+      if (active()) setTags(res.tags);
       const convs = await bff.chatGetConversations(id);
+      if (!chatSession.valid(session)) return;
       chat.replaceAccountConversations(id, convs.conversations);
-      composer.setStatusMsg(`Đã đồng bộ ${res.count} nhãn từ Zalo.`);
+      if (active()) composer.setStatusMsg(`Đã đồng bộ ${res.count} nhãn từ Zalo.`);
     } catch (err) {
-      composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ nhãn thất bại');
+      if (active()) composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ nhãn thất bại');
     }
   }, [resolveWorkspaceId, chat, composer]);
 
@@ -369,14 +435,17 @@ export function useDashboardState() {
     const id = resolveWorkspaceId();
     const convId = chat.activeConversationId;
     if (!id || !convId) return;
+    const session = chatSession.capture();
+    const key = useChatStore.getState().activeKey;
     try {
       const res = await bff.tagAssign(convId, tagId, id);
+      if (!chatSession.valid(session)) return;
       const currentConvs = chat.getAccountConversations(id);
       const updated = currentConvs.map((c) => c.id === convId ? { ...c, labels: res.tags } : c);
       chat.replaceAccountConversations(id, updated);
-      composer.setStatusMsg('Đã gắn nhãn.');
+      if (useChatStore.getState().activeKey === key) composer.setStatusMsg('Đã gắn nhãn.');
     } catch (err) {
-      composer.setLoadError(err instanceof Error ? err.message : 'Gắn nhãn thất bại');
+      if (chatSession.valid(session) && useChatStore.getState().activeKey === key) composer.setLoadError(err instanceof Error ? err.message : 'Gắn nhãn thất bại');
     }
   }, [resolveWorkspaceId, chat, composer]);
 
@@ -384,14 +453,17 @@ export function useDashboardState() {
     const id = resolveWorkspaceId();
     const convId = chat.activeConversationId;
     if (!id || !convId) return;
+    const session = chatSession.capture();
+    const key = useChatStore.getState().activeKey;
     try {
       const res = await bff.tagUnassign(convId, tagId, id);
+      if (!chatSession.valid(session)) return;
       const currentConvs = chat.getAccountConversations(id);
       const updated = currentConvs.map((c) => c.id === convId ? { ...c, labels: res.tags } : c);
       chat.replaceAccountConversations(id, updated);
-      composer.setStatusMsg('Đã gỡ nhãn.');
+      if (useChatStore.getState().activeKey === key) composer.setStatusMsg('Đã gỡ nhãn.');
     } catch (err) {
-      composer.setLoadError(err instanceof Error ? err.message : 'Gỡ nhãn thất bại');
+      if (chatSession.valid(session) && useChatStore.getState().activeKey === key) composer.setLoadError(err instanceof Error ? err.message : 'Gỡ nhãn thất bại');
     }
   }, [resolveWorkspaceId, chat, composer]);
 
@@ -401,12 +473,14 @@ export function useDashboardState() {
       throw new Error('Chua co account duoc chon');
     }
 
+    const session = chatSession.capture();
     const result = await bff.updateAccountProfile(accountId, { hubAlias: nextDisplayName });
+    if (!chatSession.valid(session)) return;
     const updatedAccount = result.account;
     if (updatedAccount) {
       workspace.addOrUpdateAccount(updatedAccount);
     }
-    composer.setStatusMsg('Da cap nhat alias account.');
+    if (useWorkspaceStore.getState().selectedAccountId === accountId) composer.setStatusMsg('Da cap nhat alias account.');
   }, [resolveWorkspaceId, workspace, composer]);
 
   const visibleConversations = useMemo(() => chat.getAccountConversations(resolveWorkspaceId()), [chat, resolveWorkspaceId, workspace.selectedAccountId, chat.conversationsByAccount]);
@@ -459,10 +533,11 @@ export function useDashboardState() {
       .map((account) => account.accountId)
       .filter(Boolean);
     if (visibleAccountIds.length === 0) return;
+    const session = chatSession.capture();
     void Promise.all(visibleAccountIds.map(async (accountId) => {
       try {
         const result = await bff.chatGetConversations(accountId);
-        chat.setSidebarConversationsForAccount(accountId, result.conversations);
+        if (chatSession.valid(session)) chat.setSidebarConversationsForAccount(accountId, result.conversations);
       } catch {
         // Ignore per-account sidebar unread preload failures.
       }
@@ -561,6 +636,13 @@ export function useDashboardState() {
     onMessagesScroll,
     onKeyDown,
     onSend,
+    onRetryMessage,
+    onQueryMessage,
+    onCancelMessage,
+    onRestoreDraft,
+    messageLoad,
+    isComposing,
+    canSend,
     onReactMessage,
     onRenameAccount,
     onReconnectAccount,

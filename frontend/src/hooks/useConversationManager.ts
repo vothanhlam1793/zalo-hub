@@ -2,6 +2,10 @@ import { useCallback } from 'react';
 import { bff } from '../bff-api';
 import type { ConversationSummary, HistorySyncResult, Message, SessionStatus } from '../types';
 import { clientDb } from '../lib/client-db';
+import { chatSession, conversationKey } from '../features/chat/model/chat-session';
+import { useChatStore } from '../stores/chat-store';
+import { useComposerStore } from '../stores/composer-store';
+import { recheckUnresolved } from '../features/chat/model/send-controller';
 
 export function useConversationManager() {
   const refreshConversationMessages = useCallback(async (
@@ -14,11 +18,15 @@ export function useConversationManager() {
     messagesEndRef?: React.MutableRefObject<HTMLDivElement | null>,
   ) => {
     const token = selectionTokenRef.current;
+    const session = chatSession.capture();
+    const key = conversationKey(session.userId, accountId, conversationId);
+    const revision = useChatStore.getState().byConversation[key]?.revision || 0;
     try {
       const r = await bff.chatGetMessages(accountId, conversationId, { limit: 50 });
+      if (!chatSession.valid(session)) return r;
       const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
       if (r.messages && r.messages.length > 0) {
-        mergeMessagesIntoConversation(accountId, conversationId, r.messages, 'replace');
+        useChatStore.getState().mergeForKey(key, r.messages, (useChatStore.getState().byConversation[key]?.revision || 0) !== revision);
         if (stillActive) {
           setHasMoreHistory(Boolean(r.hasMore));
         }
@@ -43,17 +51,19 @@ export function useConversationManager() {
     activeConversationIdRef: React.MutableRefObject<string>,
   ) => {
     const token = selectionTokenRef.current;
+    const session = chatSession.capture();
     if (activeConversationIdRef.current === conversationId) {
       setSyncingHistory(true);
     }
     try {
       const result = await bff.syncHistory(accountId, conversationId, { beforeMessageId, timeoutMs: 8000 });
+      if (!chatSession.valid(session)) return result;
       if (readAt) {
         void bff.updateReadState(accountId, conversationId, readAt).catch(() => {});
       }
       await refreshConversationMessages(accountId, conversationId);
       const cv = await bff.chatGetConversations(accountId).catch(() => ({ conversations: [] }));
-      if (token === selectionTokenRef.current && cv.conversations?.length > 0) {
+      if (chatSession.valid(session) && token === selectionTokenRef.current && cv.conversations?.length > 0) {
         replaceAccountConversations(accountId, cv.conversations);
         void clientDb.saveConversations(accountId, cv.conversations);
       }
@@ -66,7 +76,7 @@ export function useConversationManager() {
         hasMore: false,
       } as HistorySyncResult;
     } finally {
-      if (activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
+      if (chatSession.valid(session) && activeConversationIdRef.current === conversationId && token === selectionTokenRef.current) {
         setSyncingHistory(false);
       }
     }
@@ -93,7 +103,11 @@ export function useConversationManager() {
   ) => {
     const token = selectionTokenRef.current + 1;
     selectionTokenRef.current = token;
-    setActiveConversationId(conversationId);
+    const session = chatSession.capture();
+    const key = conversationKey(session.userId, accountId, conversationId);
+    useChatStore.getState().selectKey(key);
+    useComposerStore.getState().selectKey(key);
+    useChatStore.getState().setLoadState(key, { loadState: 'loading', error: undefined });
     activeConversationIdRef.current = conversationId;
     setLoadError('');
     setStatusMsg('');
@@ -101,40 +115,27 @@ export function useConversationManager() {
 
     // Save active state to localStorage for instant F5 restoration
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('zalohub_active_conversation', conversationId);
+      try { localStorage.setItem(`zalohub_active_conversation:${JSON.stringify([session.userId, accountId])}`, conversationId); } catch { /* optional */ }
     }
 
     // Step 1 (0ms): Check RAM cache first
-    let cached = getCachedMessages(accountId, conversationId);
-    if (cached.length > 0) {
-      setMessages(cached);
-      setHasMoreHistory(true);
-    } else if (loadFromDb) {
-      // Step 2 (1~5ms): Fallback to IndexedDB
-      const dbMsgs = await loadFromDb(accountId, conversationId, 50);
-      if (token === selectionTokenRef.current && activeConversationIdRef.current === conversationId) {
-        if (dbMsgs.length > 0) {
-          cached = dbMsgs;
-          setMessages(dbMsgs);
-          setHasMoreHistory(true);
-        }
-      }
-    }
+    if (loadFromDb) void loadFromDb(accountId, conversationId, 50).then(() => {
+      if (chatSession.valid(session)) recheckUnresolved();
+    }).catch(() => {});
+    const revision = useChatStore.getState().byConversation[key]?.revision || 0;
 
     // Step 3 (Non-blocking background refresh): Always fetch the latest 50 messages from server
     void (async () => {
       try {
-        const messagesRes = await bff.chatGetMessages(accountId, conversationId, { limit: 50 }).catch(() => null);
-
-        if (token !== selectionTokenRef.current || activeConversationIdRef.current !== conversationId) return;
-
-        if (messagesRes && messagesRes.messages && messagesRes.messages.length > 0) {
-          const { next } = mergeMessagesIntoConversation(accountId, conversationId, messagesRes.messages, cached.length > 0 ? 'append' : 'replace');
-          setMessages(next);
-          setHasMoreHistory(Boolean(messagesRes.hasMore || next.length >= 40));
-        }
-      } catch {
-        // Non-blocking: silence errors so user keeps reading local messages
+        const messagesRes = await bff.chatGetMessages(accountId, conversationId, { limit: 50 });
+        if (!chatSession.valid(session)) return;
+        const store = useChatStore.getState();
+        store.mergeForKey(key, messagesRes.messages, (store.byConversation[key]?.revision || 0) !== revision);
+        store.setLoadState(key, { loadState: 'ready', hasMore: Boolean(messagesRes.hasMore), error: undefined });
+      } catch (error) {
+        if (chatSession.valid(session)) useChatStore.getState().setLoadState(key, {
+          loadState: 'error', error: error instanceof Error ? error.message : 'Không tải được tin nhắn',
+        });
       }
     })();
   }, []);
@@ -161,9 +162,13 @@ export function useConversationManager() {
     if (!oldest) return;
 
     setLoadingOlder(true);
+    const session = chatSession.capture();
+    const key = conversationKey(session.userId, accountId, activeConversationId);
+    const stillActive = () => chatSession.valid(session) && useChatStore.getState().activeKey === key;
     try {
       // 1. Try to load older from local IndexedDB first
       const dbOlder = await clientDb.getMessages(accountId, activeConversationId, 40, oldest);
+      if (!stillActive()) return;
       if (dbOlder.length > 0) {
         prependMessages(accountId, activeConversationId, dbOlder);
         setHasMoreHistory(true);
@@ -172,18 +177,19 @@ export function useConversationManager() {
 
       // 2. Fetch from backend DB
       const r = await bff.chatGetMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
+      if (!stillActive()) return;
       if (r.messages && r.messages.length > 0) {
         prependMessages(accountId, activeConversationId, r.messages);
         setHasMoreHistory(Boolean(r.hasMore));
       } else {
         // 3. Fallback: sync from Zalo cloud if DB is exhausted
         const syncResult = await syncConversationHistory(accountId, activeConversationId, oldestProviderId, undefined);
-        setHasMoreHistory(Boolean(syncResult.hasMore));
+        if (stillActive()) setHasMoreHistory(Boolean(syncResult.hasMore));
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Tải thêm tin cũ thất bại');
+      if (stillActive()) setLoadError(error instanceof Error ? error.message : 'Tải thêm tin cũ thất bại');
     } finally {
-      setLoadingOlder(false);
+      if (stillActive()) setLoadingOlder(false);
     }
   }, []);
 

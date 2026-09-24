@@ -1,0 +1,204 @@
+openapi: 3.1.0
+info:
+  title: ZaloHub additive manual-send contract
+  version: 1.0.0
+  description: |
+    Existing /api URLs remain unchanged. clientRequestId is both the idempotency and
+    correlation key, scoped to the account and initiating system user. sent means
+    provider acceptance, never recipient delivery. Legacy requests without this key
+    retain method/result/kind but have no receipt or idempotency guarantee.
+    SDK budgets: text 30 seconds, attachment 120 seconds; post-dispatch timeout is
+    unknown. No automatic SDK retry. Poll status at most every 2 seconds for 30 seconds,
+    then require manual refresh. Only failed + retryable supports explicit same-key retry.
+    No new rate limiter is installed; deployment ingress limits must be verified before
+    rollout. Attachment allocation is authorized first and bounded to 50 MiB.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /api/accounts/{accountId}/send:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      operationId: sendAccountMessage
+      description: Requires editor account access (or system super_admin). Retry never changes the fingerprint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [conversationId]
+              anyOf:
+                - required: [text]
+                  properties:
+                    text: { type: string, minLength: 1 }
+                - required: [imageBase64, imageFileName, imageMimeType]
+              properties:
+                conversationId: { type: string, pattern: '^(direct|group):[^\s:]+$', maxLength: 255 }
+                text: { type: string, maxLength: 20000 }
+                imageBase64: { type: string, description: Legacy JSON attachment compatibility; standard padded base64 }
+                imageFileName: { type: string }
+                imageMimeType: { type: string }
+                clientRequestId: { type: string, format: uuid }
+                retry: { type: boolean, default: false }
+              additionalProperties: true
+      responses:
+        '200': { $ref: '#/components/responses/Accepted' }
+        '202': { $ref: '#/components/responses/Unresolved' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/accounts/{accountId}/send-attachment:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      operationId: sendAccountAttachment
+      description: Requires editor access before multipart parsing. File bytes are SHA-256 fingerprinted, never stored in the registry.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [conversationId, file]
+              properties:
+                conversationId: { type: string, pattern: '^(direct|group):[^\s:]+$', maxLength: 255 }
+                file: { type: string, format: binary }
+                caption: { type: string, maxLength: 20000 }
+                clientRequestId: { type: string, format: uuid }
+                retry: { type: string, enum: ['true', 'false'], default: 'false' }
+      responses:
+        '200': { $ref: '#/components/responses/Accepted' }
+        '202': { $ref: '#/components/responses/Unresolved' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/accounts/{accountId}/send-requests/{clientRequestId}:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+      - name: clientRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getAccountSendRequest
+      description: |
+        Requires editor AND initiating user, or account admin/master/system super_admin.
+        Offline lookup never starts a runtime. 404 is not proof a concurrent POST cannot
+        arrive: retain the same key. No provider resend occurs in status lookup.
+      responses:
+        '200':
+          description: Terminal sent or failed receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusResponse' }
+        '202':
+          description: Sending or unknown; never automatically resend
+          headers:
+            Retry-After: { schema: { type: integer, const: 2 } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Accepted:
+      description: Provider accepted; identical accepted request replays without SDK execution
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SendResponse' }
+    Unresolved:
+      description: Sending or ambiguous outcome; no implicit resend
+      headers:
+        Retry-After: { schema: { type: integer, const: 2 } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SendResponse' }
+    Error:
+      description: Top-level error retained for legacy clients; durable failures also contain receipt
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }
+              code: { type: string }
+              receipt: { $ref: '#/components/schemas/SendReceipt' }
+  schemas:
+    StatusResponse:
+      type: object
+      required: [receipt]
+      properties:
+        receipt: { $ref: '#/components/schemas/SendReceipt' }
+    SendResponse:
+      type: object
+      properties:
+        method: { type: string }
+        result: { description: Original SDK result on dispatch; sanitized documented ID fields on durable replay }
+        kind: { type: string }
+        error: { type: string }
+        receipt: { $ref: '#/components/schemas/SendReceipt' }
+    SendReceipt:
+      type: object
+      required: [clientRequestId, accountId, conversationId, status, messages, providerMessageIds]
+      properties:
+        clientRequestId: { type: string, format: uuid }
+        accountId: { type: string }
+        conversationId: { type: string }
+        status: { type: string, enum: [sending, sent, failed, unknown] }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+        providerMessageIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, pattern: '^[1-9][0-9]*$' }
+        acceptedAt: { type: string, format: date-time }
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            retryable: { type: boolean }
+    Message:
+      type: object
+      description: Existing GoldConversationMessage DTO; clientRequestId is additive and only receipt-correlated.
+      required: [id, conversationId, threadId, conversationType, text, kind, attachments, direction, isSelf, timestamp]
+      properties:
+        id: { type: string }
+        providerMessageId: { type: string }
+        clientRequestId: { type: string, format: uuid }
+        conversationId: { type: string }
+        threadId: { type: string }
+        conversationType: { type: string, enum: [direct, group] }
+        text: { type: string }
+        kind: { type: string }
+        attachments: { type: array, items: { type: object } }
+        direction: { type: string, enum: [incoming, outgoing] }
+        isSelf: { type: boolean }
+        timestamp: { type: string, format: date-time }
+      additionalProperties: true

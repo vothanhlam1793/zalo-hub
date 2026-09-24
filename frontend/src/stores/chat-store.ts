@@ -1,7 +1,29 @@
 import { create } from 'zustand';
 import type { Contact, ConversationSummary, Group, Message } from '../types';
+import type { SendReceipt } from '../types';
+import { applyReceipt, mergeMessages } from '../features/chat/model/message-reconciliation';
+import { chatSession, conversationKey, parseConversationKey } from '../features/chat/model/chat-session';
+import { clientDb } from '../lib/client-db';
+
+export interface ConversationMessages {
+  messages: Message[];
+  revision: number;
+  loadState: 'idle' | 'loading' | 'ready' | 'error';
+  hasMore: boolean;
+  error?: string;
+  discardedLocalIds?: string[];
+}
+const emptyEntry = (): ConversationMessages => ({ messages: [], revision: 0, loadState: 'idle', hasMore: false });
 
 interface ChatState {
+  byConversation: Record<string, ConversationMessages>;
+  activeKey: string;
+  selectKey: (key: string) => void;
+  mergeForKey: (key: string, messages: Message[], stale?: boolean) => Message[];
+  receiptForKey: (key: string, receipt: SendReceipt) => void;
+  patchMessage: (key: string, localId: string, patch: Partial<Message>) => void;
+  removeMessage: (key: string, localId: string) => void;
+  setLoadState: (key: string, patch: Partial<ConversationMessages>) => void;
   conversationsByAccount: Record<string, ConversationSummary[]>;
   pendingReadAtByConversation: Record<string, string>;
   contacts: Contact[];
@@ -35,6 +57,46 @@ interface ChatState {
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
+  byConversation: {},
+  activeKey: '',
+  selectKey: (key) => set((s) => ({ activeKey: key, activeConversationId: key ? parseConversationKey(key)[2] : '',
+    messages: s.byConversation[key]?.messages || [], hasMoreHistory: s.byConversation[key]?.hasMore || false,
+    loadingOlder: false, syncingHistory: false })),
+  mergeForKey: (key, incoming, stale = false) => {
+    const [user, account, conversation] = parseConversationKey(key);
+    if (user !== chatSession.capture().userId || !user) return [];
+    const old = get().byConversation[key] || emptyEntry();
+    const messages = mergeMessages(old.messages, incoming.filter((m) => m.conversationId === conversation && !old.discardedLocalIds?.includes(m.localId || m.id)), account, stale);
+    get().setLoadState(key, { messages, revision: old.revision + (stale ? 0 : 1) });
+    return messages;
+  },
+  receiptForKey: (key, receipt) => {
+    const [user, account, conversation] = parseConversationKey(key);
+    if (user !== chatSession.capture().userId || receipt.accountId !== account || receipt.conversationId !== conversation) return;
+    const old = get().byConversation[key] || emptyEntry();
+    const messages = applyReceipt(old.messages, receipt);
+    get().setLoadState(key, { messages, revision: old.revision + 1 });
+  },
+  patchMessage: (key, localId, patch) => {
+    const old = get().byConversation[key];
+    if (!old) return;
+    const messages = old.messages.map((m) => (m.localId || m.id) !== localId ? m : {
+      ...m, ...patch, delivery: m.delivery === 'sent' ? 'sent' : patch.delivery || m.delivery,
+    });
+    get().setLoadState(key, { messages, revision: old.revision + 1 });
+  },
+  removeMessage: (key, localId) => {
+    const old = get().byConversation[key];
+    if (!old) return;
+    const messages = old.messages.filter((m) => (m.localId || m.id) !== localId);
+    get().setLoadState(key, { messages, revision: old.revision + 1, discardedLocalIds: [...(old.discardedLocalIds || []), localId] });
+  },
+  setLoadState: (key, patch) => set((s) => {
+    if (!key || parseConversationKey(key)[0] !== chatSession.capture().userId) return s;
+    const entry = { ...(s.byConversation[key] || emptyEntry()), ...patch };
+    return { byConversation: { ...s.byConversation, [key]: entry },
+      ...(s.activeKey === key ? { messages: entry.messages, hasMoreHistory: entry.hasMore } : {}) };
+  }),
   conversationsByAccount: {},
   pendingReadAtByConversation: {},
   contacts: [],
@@ -47,7 +109,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   replaceAccountConversations: (accountId, c) => set((state) => {
     const nextPending = { ...state.pendingReadAtByConversation };
-    const merged = c.map((entry) => {
+    const merged = c.map((snapshot) => {
+      const current = state.conversationsByAccount[accountId]?.find((entry) => entry.id === snapshot.id);
+      const entry = current && current.lastMessageTimestamp > snapshot.lastMessageTimestamp
+        ? { ...snapshot, lastMessageText: current.lastMessageText, lastMessageKind: current.lastMessageKind,
+          lastMessageTimestamp: current.lastMessageTimestamp, lastDirection: current.lastDirection,
+          messageCount: Math.max(current.messageCount, snapshot.messageCount), unreadCount: current.unreadCount }
+        : snapshot;
       const pendingKey = `${accountId}::${entry.id}`;
       const pendingReadAt = nextPending[pendingKey];
       const backendReadAt = entry.lastReadAt ?? new Date(0).toISOString();
@@ -153,32 +221,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     };
   }),
 
-  appendLocalMessage: (msg) => set((state) => ({
-    messages: [...state.messages, msg],
-  })),
-
-  reconcileOutgoingMessage: (sentMsg) => set((state) => {
-    const next = state.messages.map((m) => {
-      if (m.id.startsWith('pending-') && m.conversationId === sentMsg.conversationId
-          && m.direction === 'outgoing' && m.text === sentMsg.text) {
-        return sentMsg;
-      }
-      return m;
-    });
-    return { messages: next };
-  }),
+  appendLocalMessage: (msg) => { if (get().activeKey) get().mergeForKey(get().activeKey, [msg]); },
+  reconcileOutgoingMessage: (msg) => { if (get().activeKey) get().mergeForKey(get().activeKey, [msg]); },
 
   getAccountConversations: (accountId) => get().conversationsByAccount[accountId] ?? [],
   setContacts: (c) => set({ contacts: c }),
   setGroups: (g) => set({ groups: g }),
   setActiveConversationId: (id) => set({ activeConversationId: id }),
-  setMessages: (m) => set({ messages: m }),
-  setHasMoreHistory: (v) => set({ hasMoreHistory: v }),
+  setMessages: (m) => { if (get().activeKey) get().mergeForKey(get().activeKey, m); },
+  setHasMoreHistory: (v) => { if (get().activeKey) get().setLoadState(get().activeKey, { hasMore: v }); },
   setLoadingOlder: (v) => set({ loadingOlder: v }),
   setSyncingHistory: (v) => set({ syncingHistory: v }),
 
   clearActivePane: () => set({
-    pendingReadAtByConversation: {},
+    activeKey: '',
     contacts: [],
     groups: [],
     activeConversationId: '',
@@ -189,6 +245,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   }),
 
   resetAll: () => set({
+    byConversation: {},
+    activeKey: '',
     conversationsByAccount: {},
     pendingReadAtByConversation: {},
     contacts: [],
@@ -200,3 +258,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     syncingHistory: false,
   }),
 }));
+chatSession.subscribe(() => useChatStore.getState().resetAll());
+
+// Store listeners can synchronously dispatch the next queued send. Never save
+// the pre-notification array from a mutator: it may already be superseded by a
+// nested sending/receipt transition. Coalesce, then read the committed owner.
+const pendingSnapshots = new Set<string>();
+useChatStore.subscribe((state, previous) => {
+  const session = chatSession.capture();
+  if (!chatSession.valid(session)) return;
+  for (const [key, entry] of Object.entries(state.byConversation)) {
+    if (entry.messages === previous.byConversation[key]?.messages || pendingSnapshots.has(key)) continue;
+    pendingSnapshots.add(key);
+    queueMicrotask(() => {
+      pendingSnapshots.delete(key);
+      if (!chatSession.valid(session)) return;
+      const latest = useChatStore.getState().byConversation[key];
+      if (!latest) return;
+      const [user, account, conversation] = parseConversationKey(key);
+      if (user === session.userId) void clientDb.saveMessages(account, conversation, latest.messages);
+    });
+  }
+});
+chatSession.subscribe(() => pendingSnapshots.clear());

@@ -1,5 +1,39 @@
 # Handoff
 
+## Active Handoff — Sales Chat Readiness, 2026-09-22
+
+**Start here, not with the historical Gateway next-step below.**
+
+### Current State
+User prioritized sales chat usability over architecture cleanup and requested a detailed design for another agent team. The design is in `gold_2_sales_chat/`; no application implementation has been performed in this handoff task.
+
+### Read First
+1. `workflow/brief.md` and current assessment.
+2. `gold_2_sales_chat/README.md`.
+3. `gold_2_sales_chat/design.md`, `ux.md` and `execution.md`.
+4. `gold_2_sales_chat/sprint_1/plan.md` and `test_key.md`.
+
+### Next Exact Action
+Incoming MAIN checks current git state against baseline `5a9f732`, confirms Sprint 1 scope with Lam, and runs S1-01/S1-02 baseline + receipt discovery. Review/freeze contracts before assigning parallel implementation. Execute Gold phases in order and record actual verification results.
+
+### Guardrails Specific to This Handoff
+- Preserve the pre-existing uncommitted `backend/src/server/services/case-station-webhook.ts` edit.
+- Keep existing monolith/browser integration; no service extraction or broad folder refactor.
+- Tags classify customers/conversations only. No bulk-send or automated-message feature.
+- Do not assume two-way Zalo label sync, provider client-ID injection, or unsupported call/sticker formats.
+- One authoritative message state; account-qualified tag associations; no text/time-based correlation.
+- No code builds/live tests/migrations/deployments have been claimed by the design author.
+
+### Pending Evidence
+SDK receipts and matching echoes; problematic message samples; supported target browsers; approved live test account/conversation; database/tag mapping preflight; Zalo label membership completeness.
+
+### Recommended Next Skill
+gold-sprint (GOLD), not REORG. A sprint can be worked by multiple agents following file ownership in `execution.md`.
+
+---
+
+## Historical Handoff — Independent Services
+
 ## Current State
 The independent-service direction and signed internal JWT approach are confirmed. The implementation branch is `feat/independent-services-foundation`, created from checkpoint `bed2343`.
 

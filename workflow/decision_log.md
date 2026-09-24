@@ -1,5 +1,28 @@
 # Decision Log
 
+## Current Precedence — 2026-09-22
+
+The entries below this section describing independent services are retained history. The following decisions govern the current delivery:
+
+### D-SALES-01 — Prioritize sales chat in the existing application
+The user accepted a monolith direction, then explicitly prioritized responsive frontend chat and practical usability over making the architecture uniform. Keep existing backend/frontend and defer broad reorganization/service extraction. This does not authorize deleting or stopping existing service foundations.
+
+### D-SALES-02 — Tags are management data in this version
+The user clarified that future system automation may select customers by tags, but bulk sending is not needed now. Tag CRUD/assignment/filter/import must have no message-send side effect. Stable IDs and account-qualified associations provide future compatibility.
+
+### D-SALES-03 — Prepare a detailed handoff, not implement in this task
+The user requested detailed design for another agent team. Produce planner artifacts in `gold_2_sales_chat/` and align workflow files. Preserve current application code and the existing uncommitted webhook change. Incoming coordinator confirms sprint execution under Gold workflow.
+
+### D-SALES-04 — Proposed implementation defaults
+Use three sprints: delivery/state; rich-message display; label management. Design defaults: additive send receipt/request registry, explicit unknown-send state, scoped authenticated WS, internal account labels plus read-only Zalo mirrors, preserve ambiguous old associations for review. These technical choices are specified for coordinator review; provider capabilities and production data mappings remain evidence-dependent.
+
+### D-SALES-05 — Do not confuse transport acknowledgement with recipient delivery
+Client feedback is immediate, but sent status requires provider acceptance evidence. Unknown post-dispatch outcomes are not auto-retried. The request registry prevents duplicate Hub dispatch for known attempts but cannot promise exactly-once remote delivery across an acceptance/persistence crash window.
+
+---
+
+## Historical Decisions — Independent Services
+
 ## Decision
 Adopt three independently deployable services from the beginning: Zalo Gateway, Management API, and Web Platform.
 

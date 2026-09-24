@@ -1,6 +1,6 @@
 {
   "name": "zalohub-platform",
-  "version": "5.0.8",
+  "version": "5.0.9",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -8,6 +8,7 @@
     "services/*"
   ],
   "scripts": {
+    "test:sales-chat": "npm run test:sales-chat --prefix backend && npm run test:sales-chat --prefix frontend",
     "build:foundation": "npm run build --workspace=@zalohub/contracts && npm run build --workspace=@zalohub/management-api && npm run build --workspace=@zalohub/zalo-gateway && npm run build --workspace=@zalohub/web-platform",
     "start:zalo-gateway": "npm run start --workspace=@zalohub/zalo-gateway",
     "start:management-api": "npm run start --workspace=@zalohub/management-api",

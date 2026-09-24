@@ -96,6 +96,19 @@ export interface GoldConversationMessage {
   reactions?: GoldMessageReactionItem[];
   rawMessageJson?: string;
   cliMsgId?: string;
+  clientRequestId?: string;
+}
+
+/** sent means provider acceptance, not recipient delivery/read. */
+export interface SendReceipt {
+  clientRequestId: string;
+  accountId: string;
+  conversationId: string;
+  status: 'sending' | 'sent' | 'failed' | 'unknown';
+  messages: GoldConversationMessage[];
+  providerMessageIds: string[];
+  acceptedAt?: string;
+  error?: { code: string; message: string; retryable: boolean };
 }
 
 export interface GoldConversationSummary {
