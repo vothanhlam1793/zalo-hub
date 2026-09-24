@@ -8,6 +8,7 @@ interface GroupAvatarProps {
   title: string;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   members?: Array<GroupMember | Contact | { avatar?: string; displayName?: string; name?: string; userId?: string }>;
+  memberAvatars?: string[];
   contacts?: Contact[];
   memberCount?: number;
   className?: string;
@@ -32,6 +33,7 @@ export function GroupAvatar({
   title,
   size = 'md',
   members = [],
+  memberAvatars = [],
   contacts = [],
   memberCount,
   className = '',
@@ -50,18 +52,29 @@ export function GroupAvatar({
     );
   }
 
-  // 2. Resolve sub-avatars from members and contacts lookup
+  // 2. Resolve sub-avatars from memberAvatars first, then members and contacts lookup
   const subItems = useMemo(() => {
-    const contactMap = new Map<string, Contact>();
-    if (Array.isArray(contacts)) {
-      for (const c of contacts) {
-        if (c.userId) contactMap.set(c.userId, c);
+    const resolved: Array<{ avatar?: string; name: string }> = [];
+
+    // Priority 1: Real member avatars passed directly from backend
+    if (Array.isArray(memberAvatars) && memberAvatars.length > 0) {
+      for (const av of memberAvatars) {
+        if (resolved.length >= 4) break;
+        if (av && av.trim() !== '') {
+          resolved.push({ avatar: av, name: 'M' });
+        }
       }
     }
 
-    const resolved: Array<{ avatar?: string; name: string }> = [];
+    // Priority 2: Member object list with lookup into contacts
+    if (resolved.length < 4 && Array.isArray(members) && members.length > 0) {
+      const contactMap = new Map<string, Contact>();
+      if (Array.isArray(contacts)) {
+        for (const c of contacts) {
+          if (c.userId) contactMap.set(c.userId, c);
+        }
+      }
 
-    if (Array.isArray(members) && members.length > 0) {
       for (const m of members) {
         if (resolved.length >= 4) break;
         const uId = ('userId' in m ? m.userId : undefined) || '';
@@ -69,11 +82,14 @@ export function GroupAvatar({
 
         const av = m.avatar || matchContact?.avatar;
         const nm = ('displayName' in m ? m.displayName : undefined) || ('name' in m ? m.name : undefined) || matchContact?.displayName || 'U';
+        
+        // Avoid duplicate avatar URLs
+        if (av && resolved.some((r) => r.avatar === av)) continue;
         resolved.push({ avatar: av, name: nm });
       }
     }
 
-    // If less than 4 members are resolved from list, fill with deterministic stylish placeholders based on group title
+    // If less than 4 members are resolved, fill with deterministic stylish placeholders based on group title
     if (resolved.length < 4) {
       const words = title.split(/\s+/).filter(Boolean);
       const needed = 4 - resolved.length;
@@ -84,7 +100,7 @@ export function GroupAvatar({
     }
 
     return resolved.slice(0, 4);
-  }, [members, contacts, title]);
+  }, [memberAvatars, members, contacts, title]);
 
   // 3. Zalo Style: 2x2 Circular Sub-Avatar Collage with crisp white/slate border dividers
   return (

@@ -169,6 +169,48 @@ export class GoldConversationRepo {
     }
 
     const summaries: GoldConversationSummary[] = [];
+
+    // Collect group threadIds that do not have custom avatar to batch-load member avatars
+    const groupThreadIdsWithoutAvatar = rows
+      .filter((r) => r.type === 'group' && (!r.avatar || r.avatar.trim() === ''))
+      .map((r) => r.thread_id ?? r.friend_id)
+      .filter(Boolean);
+
+    const groupMemberAvatarsMap = new Map<string, string[]>();
+    if (groupThreadIdsWithoutAvatar.length > 0) {
+      try {
+        const memberAvatarRows = (await this.knex.raw(`
+          WITH recent_senders AS (
+            SELECT m.thread_id, m.sender_id, MAX(m.timestamp) as max_ts
+            FROM messages m
+            WHERE m.account_id = ?
+              AND m.conversation_type = 'group'
+              AND m.thread_id = ANY(?)
+              AND m.sender_id IS NOT NULL
+            GROUP BY m.thread_id, m.sender_id
+          )
+          SELECT rs.thread_id, f.avatar
+          FROM recent_senders rs
+          JOIN friends f ON f.account_id = ? AND f.friend_id = rs.sender_id
+          WHERE f.avatar IS NOT NULL AND f.avatar <> ''
+          ORDER BY rs.thread_id, rs.max_ts DESC
+        `, [resolvedAccountId, groupThreadIdsWithoutAvatar, resolvedAccountId])).rows as Array<{
+          thread_id: string;
+          avatar: string;
+        }>;
+
+        for (const item of memberAvatarRows) {
+          const list = groupMemberAvatarsMap.get(item.thread_id) || [];
+          if (list.length < 4 && !list.includes(item.avatar)) {
+            list.push(item.avatar);
+            groupMemberAvatarsMap.set(item.thread_id, list);
+          }
+        }
+      } catch {
+        /* ignore batch avatar query errors */
+      }
+    }
+
     for (const row of rows) {
       const resolvedType = row.type ?? 'direct';
       const threadOrFriend = row.thread_id ?? row.friend_id;
@@ -200,6 +242,8 @@ export class GoldConversationRepo {
         lastMessageKind: toMessageKind(row.last_message_kind),
         lastMessageTimestamp: row.last_message_timestamp,
         lastDirection: row.last_direction,
+        lastMessageSenderName: row.last_message_sender_name || undefined,
+        memberAvatars: resolvedType === 'group' ? groupMemberAvatarsMap.get(threadOrFriend) : undefined,
         messageCount: row.message_count,
         unreadCount: unreadMap.get(row.id) ?? 0,
         lastReadAt: effectiveLastReadAt,
@@ -750,6 +794,31 @@ export class GoldConversationRepo {
     }
 
     const threadOrFriend = row.thread_id ?? row.friend_id;
+    let memberAvatars: string[] | undefined = undefined;
+    if (row.type === 'group' && (!row.avatar || row.avatar.trim() === '')) {
+      try {
+        const memberAvatarRows = (await this.knex.raw(`
+          WITH recent_senders AS (
+            SELECT m.sender_id, MAX(m.timestamp) as max_ts
+            FROM messages m
+            WHERE m.account_id = ?
+              AND m.conversation_type = 'group'
+              AND m.thread_id = ?
+              AND m.sender_id IS NOT NULL
+            GROUP BY m.sender_id
+          )
+          SELECT f.avatar
+          FROM recent_senders rs
+          JOIN friends f ON f.account_id = ? AND f.friend_id = rs.sender_id
+          WHERE f.avatar IS NOT NULL AND f.avatar <> ''
+          ORDER BY rs.max_ts DESC
+          LIMIT 4
+        `, [resolvedAccountId, threadOrFriend, resolvedAccountId])).rows as Array<{ avatar: string }>;
+
+        memberAvatars = memberAvatarRows.map((r) => r.avatar);
+      } catch { /* ignore */ }
+    }
+
     return {
       id: row.id,
       accountId: resolvedAccountId,
@@ -764,12 +833,13 @@ export class GoldConversationRepo {
       avatar: row.avatar ?? (row.type === 'group'
         ? (await this.getGroupAvatarFn(threadOrFriend, resolvedAccountId))
         : (await this.getFriendAvatarFn(row.friend_id, resolvedAccountId))),
-        lastMessageText: row.last_message_text,
-        lastMessageKind: toMessageKind(row.last_message_kind),
-        lastMessageTimestamp: row.last_message_timestamp,
-        lastDirection: row.last_direction,
-        lastMessageSenderName: row.last_message_sender_name || undefined,
-        messageCount: row.message_count,
+      lastMessageText: row.last_message_text,
+      lastMessageKind: toMessageKind(row.last_message_kind),
+      lastMessageTimestamp: row.last_message_timestamp,
+      lastDirection: row.last_direction,
+      lastMessageSenderName: row.last_message_sender_name || undefined,
+      memberAvatars,
+      messageCount: row.message_count,
       unreadCount: row.unread_count,
       lastReadAt: row.last_read_at,
       labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,

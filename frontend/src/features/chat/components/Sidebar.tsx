@@ -292,6 +292,7 @@ export function Sidebar({
                     avatar={resolvedAvatar}
                     title={resolvedTitle}
                     members={resolvedGroup?.members}
+                    memberAvatars={entry.memberAvatars}
                     contacts={contacts}
                     memberCount={resolvedGroup?.memberCount}
                     size="md"

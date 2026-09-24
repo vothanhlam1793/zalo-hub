@@ -119,6 +119,7 @@ export interface ConversationSummary {
   lastMessageTimestamp: string;
   lastDirection: 'incoming' | 'outgoing';
   lastMessageSenderName?: string;
+  memberAvatars?: string[];
   messageCount: number;
   unreadCount: number;
   lastReadAt?: string;

@@ -302,6 +302,7 @@ export function ChatPanel({
                 avatar={activeAvatar}
                 title={activeName}
                 members={groupMembers}
+                memberAvatars={activeConversation?.memberAvatars}
                 contacts={contacts}
                 size="md"
               />

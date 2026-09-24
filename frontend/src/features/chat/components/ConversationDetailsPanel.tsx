@@ -122,6 +122,7 @@ export function ConversationDetailsPanel({
               avatar={avatar}
               title={title}
               members={group?.members}
+              memberAvatars={conversation?.memberAvatars}
               contacts={contacts}
               memberCount={group?.memberCount}
               size="xl"
