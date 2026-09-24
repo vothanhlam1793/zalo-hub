@@ -21,6 +21,8 @@ interface ChatPanelProps extends DeliveryActions {
   activeAvatar?: string;
   activeSubtitle?: string;
   isGroupConversation: boolean;
+  groupMembers?: GroupMember[];
+  contacts?: Contact[];
   headerLeading?: React.ReactNode;
   messages: Message[];
   hasMoreHistory: boolean;
@@ -69,6 +71,8 @@ export function ChatPanel({
   activeAvatar,
   activeSubtitle,
   isGroupConversation,
+  groupMembers,
+  contacts,
   headerLeading,
   messages,
   hasMoreHistory,
@@ -297,6 +301,8 @@ export function ChatPanel({
               <GroupAvatar
                 avatar={activeAvatar}
                 title={activeName}
+                members={groupMembers}
+                contacts={contacts}
                 size="md"
               />
             ) : (

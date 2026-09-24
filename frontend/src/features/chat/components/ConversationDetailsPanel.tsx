@@ -11,6 +11,7 @@ interface ConversationDetailsPanelProps {
   conversation?: ConversationSummary;
   contact?: Contact;
   group?: Group;
+  contacts?: Contact[];
   workspaceAccount?: AccountSummary;
   allTags?: TagItem[];
   onAssignTag?: (tagId: string) => void;
@@ -52,6 +53,7 @@ export function ConversationDetailsPanel({
   conversation,
   contact,
   group,
+  contacts,
   workspaceAccount,
   allTags = [],
   onAssignTag,
@@ -120,6 +122,7 @@ export function ConversationDetailsPanel({
               avatar={avatar}
               title={title}
               members={group?.members}
+              contacts={contacts}
               memberCount={group?.memberCount}
               size="xl"
             />

@@ -112,6 +112,8 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             activeAvatar={activeAvatar}
             activeSubtitle={activeSubtitle}
             isGroupConversation={isGroupConversation}
+            groupMembers={activeGroup?.members}
+            contacts={chat.contacts}
             messages={chat.messages}
             hasMoreHistory={chat.hasMoreHistory}
             loadingOlder={chat.loadingOlder}
@@ -141,6 +143,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           conversation={activeConversation}
           contact={activeContact}
           group={activeGroup}
+          contacts={chat.contacts}
           workspaceAccount={workspaceAccount}
           allTags={tags}
           onAssignTag={onAssignTag}
@@ -317,6 +320,8 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               activeAvatar={activeAvatar}
               activeSubtitle={activeSubtitle}
               isGroupConversation={isGroupConversation}
+              groupMembers={activeGroup?.members}
+              contacts={chat.contacts}
               headerLeading={
                 <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-xs" onClick={() => setScreen('list')}>
                   ← DS
@@ -352,6 +357,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               conversation={activeConversation}
               contact={activeContact}
               group={activeGroup}
+              contacts={chat.contacts}
               workspaceAccount={workspaceAccount}
               allTags={tags}
               onAssignTag={onAssignTag}
