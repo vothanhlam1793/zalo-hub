@@ -212,15 +212,15 @@ export function Sidebar({
                   <span className="text-[10px] opacity-60">▼</span>
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56 bg-[#121824] border-white/10 text-[#e2e8f0]">
+              <DropdownMenuContent align="start" className="w-56 bg-[var(--popover)] border border-[var(--border)] text-[var(--popover-foreground)] shadow-xl">
                 <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold">
                   Phân loại nhãn Zalo
                 </DropdownMenuLabel>
-                <DropdownMenuSeparator className="bg-white/10" />
+                <DropdownMenuSeparator className="bg-[var(--border)]" />
                 <DropdownMenuCheckboxItem
                   checked={!selectedTagId}
                   onCheckedChange={() => onSelectTag?.(null)}
-                  className="text-xs cursor-pointer focus:bg-white/10"
+                  className="text-xs cursor-pointer focus:bg-[var(--accent)] focus:text-[var(--accent-foreground)]"
                 >
                   <span>Tất cả cuộc trò chuyện</span>
                 </DropdownMenuCheckboxItem>
@@ -229,7 +229,7 @@ export function Sidebar({
                     key={tag.id}
                     checked={selectedTagId === tag.id}
                     onCheckedChange={() => onSelectTag?.(selectedTagId === tag.id ? null : tag.id)}
-                    className="text-xs cursor-pointer focus:bg-white/10 flex items-center gap-2"
+                    className="text-xs cursor-pointer focus:bg-[var(--accent)] focus:text-[var(--accent-foreground)] flex items-center gap-2"
                   >
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tag.color || '#3b82f6' }} />
                     <span className="truncate">{tag.emoji ? `${tag.emoji} ` : ''}{tag.name}</span>
@@ -244,7 +244,7 @@ export function Sidebar({
                 variant="ghost"
                 size="sm"
                 onClick={onSyncTags}
-                className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-white hover:bg-white/10 shrink-0 border border-white/5"
+                className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)]"
                 title="Đồng bộ danh sách nhãn từ Zalo"
               >
                 🔄 Đồng bộ
@@ -320,31 +320,34 @@ export function Sidebar({
           const contactConvId = directConversationId(entry.userId);
           const contactUnread = conversations.find(c => c.id === contactConvId)?.unreadCount || 0;
           const isActive = activeConversationId === contactConvId;
+          const name = getContactDisplayName(entry);
           
           return (
             <div
               key={entry.userId}
               onClick={() => onOpenDirectConversation(entry)}
-              className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${isActive ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+              className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${isActive ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
             >
               <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
-                {entry.avatar ? <img src={entry.avatar} alt={getContactDisplayName(entry)} className="w-full h-full object-cover rounded-full" /> : null}
+                {entry.avatar ? <img src={entry.avatar} alt={name} className="w-full h-full object-cover rounded-full" /> : null}
                 <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
-                  {getInitial(getContactDisplayName(entry))}
+                  {getInitial(name)}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className={`text-sm truncate ${contactUnread > 0 && !isActive ? 'font-bold text-white' : 'font-semibold text-[#eee]'}`}>
-                    {getContactDisplayName(entry)}
+                <div className="flex items-center justify-between gap-1">
+                  <span className={`text-sm truncate ${contactUnread > 0 && !isActive ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]'}`}>
+                    {name}
                   </span>
                   {contactUnread > 0 && !isActive && (
-                    <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-[#4f7aff] rounded-full leading-none">
+                    <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-blue-600 rounded-full leading-none">
                       {contactUnread > 99 ? '99+' : contactUnread}
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-[#666] mt-0.5 truncate">Nhấn để mở chat</div>
+                <div className="text-xs text-muted-foreground mt-0.5 truncate">
+                  {entry.phoneNumber ? `📞 ${entry.phoneNumber}` : 'Nhấn để mở chat'}
+                </div>
               </div>
             </div>
           );
@@ -354,7 +357,7 @@ export function Sidebar({
           <div
             key={entry.groupId}
             onClick={() => onOpenGroupConversation(entry)}
-            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${activeConversationId === groupConversationId(entry.groupId) ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${activeConversationId === groupConversationId(entry.groupId) ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
           >
             <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
               {entry.avatar ? <img src={entry.avatar} alt={entry.displayName} className="w-full h-full object-cover rounded-full" /> : null}
@@ -363,8 +366,8 @@ export function Sidebar({
               </AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-[#eee] truncate">{entry.displayName}</div>
-              <div className="text-xs text-[#666] mt-0.5 truncate">{entry.memberCount ? `${entry.memberCount} thành viên` : 'Nhấn để mở nhóm chat'}</div>
+              <div className="text-sm font-medium text-[var(--foreground)] truncate">{entry.displayName}</div>
+              <div className="text-xs text-muted-foreground mt-0.5 truncate">{entry.memberCount ? `${entry.memberCount} thành viên` : 'Nhấn để mở nhóm chat'}</div>
             </div>
           </div>
         ))}
