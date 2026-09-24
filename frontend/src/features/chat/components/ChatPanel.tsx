@@ -335,7 +335,7 @@ export function ChatPanel({
                     : `${typingUsers.length} người đang nhập...`}
                 </div>
               ) : (
-                <div className="text-xs text-muted-foreground mt-0.5 truncate">{activeSubtitle || activeConversationId}</div>
+                <div className="text-xs text-muted-foreground mt-0.5 truncate">{activeSubtitle || '👤 Khách hàng Zalo'}</div>
               )}
             </button>
             <Button

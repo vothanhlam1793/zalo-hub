@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { getAccountDisplayName, getContactDisplayName, getInitial } from '@/utils';
+import { cleanTechnicalId, formatConversationTitle, getAccountDisplayName, getContactDisplayName, getInitial } from '@/utils';
 import type { AccountSummary, Contact, ConversationSummary, Group, TagItem } from '@/types';
 
 interface ConversationDetailsPanelProps {
@@ -41,7 +41,7 @@ function DetailRow({ label, value }: { label: string; value?: string | number })
   return (
     <div className="flex flex-col gap-1">
       <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">{label}</div>
-      <div className="text-sm text-[#e8ecf8] break-words">{value}</div>
+      <div className="text-sm text-[var(--foreground)] break-words font-medium">{value}</div>
     </div>
   );
 }
@@ -77,8 +77,10 @@ export function ConversationDetailsPanel({
   }
 
   const isGroup = conversation.type === 'group';
-  const title = contact ? getContactDisplayName(contact) : group?.displayName ?? conversation.title;
+  const rawTitle = contact ? getContactDisplayName(contact) : group?.displayName ?? conversation.title;
+  const title = formatConversationTitle(rawTitle, conversation.type, conversation.threadId);
   const avatar = contact?.avatar ?? group?.avatar ?? conversation.avatar;
+  const cleanId = cleanTechnicalId(conversation.threadId || conversation.id);
 
   const handleSaveNote = async () => {
     if (!onUpdateNotes) return;
@@ -112,15 +114,24 @@ export function ConversationDetailsPanel({
       <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
         {/* Profile Card */}
         <div className="flex flex-col items-center text-center gap-3">
-          <Avatar className="w-16 h-16 rounded-2xl ring-2 ring-[var(--border)]">
+          <Avatar className="w-16 h-16 rounded-2xl ring-2 ring-[var(--border)] shadow-xs">
             {avatar ? <img src={avatar} alt={title} className="w-full h-full object-cover rounded-2xl" /> : null}
             <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#08101d] text-xl font-extrabold rounded-2xl">
               {getInitial(title)}
             </AvatarFallback>
           </Avatar>
-          <div>
+          <div className="space-y-1.5">
             <div className="text-base font-bold text-[var(--foreground)] break-words">{title}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">{conversation.id}</div>
+            <div className="flex items-center justify-center gap-1.5 flex-wrap">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                {isGroup ? '👥 Nhóm Zalo' : '👤 Khách Zalo'}
+              </span>
+              {contact?.phoneNumber && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  📞 {contact.phoneNumber}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -310,10 +321,10 @@ export function ConversationDetailsPanel({
 
         {/* CONVERSATION INFO */}
         <div className="space-y-3">
-          <div className="text-sm font-semibold text-[#eef2ff]">Chi tiết hội thoại</div>
+          <div className="text-sm font-semibold text-[var(--foreground)]">Chi tiết hội thoại</div>
           <div className="space-y-2.5">
-            <DetailRow label="Loại hội thoại" value={isGroup ? 'Nhóm Zalo' : 'Cá nhân 1-1'} />
-            <DetailRow label="Thread ID" value={conversation.threadId} />
+            <DetailRow label="Loại hội thoại" value={isGroup ? '👥 Nhóm Zalo' : '👤 Cá nhân 1-1'} />
+            <DetailRow label={isGroup ? 'Group ID' : 'Zalo User ID'} value={cleanId} />
             <DetailRow label="Tin nhắn gần nhất" value={conversation.lastMessageText} />
             <DetailRow label="Số tin nhắn local" value={conversation.messageCount} />
           </div>
@@ -323,7 +334,7 @@ export function ConversationDetailsPanel({
           <>
             <Separator />
             <div className="space-y-3">
-              <div className="text-sm font-semibold text-[#eef2ff]">Thông tin người dùng</div>
+              <div className="text-sm font-semibold text-[var(--foreground)]">Thông tin người dùng</div>
               <div className="space-y-2.5">
                 <DetailRow label="Tên hiển thị" value={getContactDisplayName(contact)} />
                 <DetailRow label="Hub alias" value={contact.hubAlias} />
@@ -340,7 +351,7 @@ export function ConversationDetailsPanel({
           <>
             <Separator />
             <div className="space-y-3">
-              <div className="text-sm font-semibold text-[#eef2ff]">Thông tin nhóm</div>
+              <div className="text-sm font-semibold text-[var(--foreground)]">Thông tin nhóm</div>
               <div className="space-y-2.5">
                 <DetailRow label="Tên nhóm" value={group.displayName} />
                 <DetailRow label="Group ID" value={group.groupId} />
@@ -354,7 +365,7 @@ export function ConversationDetailsPanel({
 
         {/* WORKSPACE INFO */}
         <div className="space-y-3">
-          <div className="text-sm font-semibold text-[#eef2ff]">Workspace hiện tại</div>
+          <div className="text-sm font-semibold text-[var(--foreground)]">Workspace hiện tại</div>
           <div className="space-y-2.5">
             <DetailRow label="Tài khoản xử lý" value={workspaceAccount ? getAccountDisplayName(workspaceAccount) : undefined} />
             <DetailRow label="Số điện thoại account" value={workspaceAccount?.phoneNumber} />

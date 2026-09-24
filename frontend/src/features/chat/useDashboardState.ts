@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { bff, type AccountStatusSummary } from '@/bff-api';
 import { useWebSocket } from '@/useWebSocket';
-import { directConversationId, getContactDisplayName, groupConversationId } from '@/utils';
+import { directConversationId, formatConversationSubtitle, formatConversationTitle, getContactDisplayName, groupConversationId } from '@/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import type {
   AccountSummary,
@@ -550,7 +550,6 @@ export function useDashboardState() {
 
   const visibleConversations = useMemo(() => chat.getAccountConversations(resolveWorkspaceId()), [chat, resolveWorkspaceId, workspace.selectedAccountId, chat.conversationsByAccount]);
   const activeConversation = useMemo(() => visibleConversations.find((e) => e.id === chat.activeConversationId), [visibleConversations, chat.activeConversationId]);
-  const activeName = activeConversation?.title ?? chat.activeConversationId;
   const isGroupConversation = activeConversation?.type === 'group';
   const currentAccountId = status?.account?.userId ?? '';
   const activeContact = useMemo(() => {
@@ -562,12 +561,21 @@ export function useDashboardState() {
     return chat.groups.find((group) => groupConversationId(group.groupId) === activeConversation.id);
   }, [activeConversation, chat.groups]);
   const activeAvatar = activeContact?.avatar ?? activeGroup?.avatar ?? activeConversation?.avatar;
-  const activeSubtitle = activeContact?.status?.trim()
-    || activeContact?.phoneNumber?.trim()
-    || (activeGroup?.memberCount ? `${activeGroup.memberCount} thanh vien` : '')
-    || activeConversation?.threadId
-    || activeConversation?.id
-    || chat.activeConversationId;
+  const activeName = useMemo(() => {
+    const rawTitle = activeContact ? getContactDisplayName(activeContact) : (activeGroup?.displayName ?? activeConversation?.title);
+    return formatConversationTitle(rawTitle, activeConversation?.type, activeConversation?.threadId || chat.activeConversationId);
+  }, [activeContact, activeGroup, activeConversation, chat.activeConversationId]);
+
+  const activeSubtitle = useMemo(() => {
+    return formatConversationSubtitle({
+      status: activeContact?.status,
+      phoneNumber: activeContact?.phoneNumber,
+      memberCount: activeGroup?.memberCount,
+      type: activeConversation?.type,
+      threadId: activeConversation?.threadId,
+      conversationId: activeConversation?.id || chat.activeConversationId,
+    });
+  }, [activeContact, activeGroup, activeConversation, chat.activeConversationId]);
 
   const sidebarAccounts = useMemo(() => {
     let list: AccountSummary[];

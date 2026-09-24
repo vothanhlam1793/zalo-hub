@@ -13,7 +13,7 @@ import {
 import { useEffect, useState } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
-import { getAccountDisplayName, getContactDisplayName, getInitial, directConversationId, groupConversationId } from '@/utils';
+import { getAccountDisplayName, getContactDisplayName, getInitial, directConversationId, groupConversationId, formatConversationTitle } from '@/utils';
 import type { Contact, ConversationSummary, Group, TagItem } from '@/types';
 
 type SidebarTab = 'conversations' | 'contacts' | 'groups';
@@ -263,9 +263,10 @@ export function Sidebar({
             const resolvedGroup = entry.type === 'group'
               ? groups.find((group) => group.groupId === entry.threadId)
               : undefined;
-            const resolvedTitle = resolvedContact
+            const rawTitle = resolvedContact
               ? getContactDisplayName(resolvedContact)
               : resolvedGroup?.displayName ?? entry.title;
+            const resolvedTitle = formatConversationTitle(rawTitle, entry.type, entry.threadId);
             const resolvedAvatar = resolvedContact?.avatar ?? resolvedGroup?.avatar ?? entry.avatar;
             const isActive = activeConversationId === entry.id;
             const showUnread = !isActive && (entry.unreadCount ?? 0) > 0;
@@ -284,7 +285,7 @@ export function Sidebar({
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
-                    <span className={`text-sm truncate ${showUnread ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]/90'}`}>{resolvedTitle}{entry.type === 'group' ? ' (Nhóm)' : ''}</span>
+                    <span className={`text-sm truncate ${showUnread ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]/90'}`}>{resolvedTitle}{entry.type === 'group' && !resolvedTitle.includes('Nhóm') ? ' (Nhóm)' : ''}</span>
                     {showUnread && (
                       <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-blue-600 rounded-full leading-none">
                         {entry.unreadCount > 99 ? '99+' : entry.unreadCount}
