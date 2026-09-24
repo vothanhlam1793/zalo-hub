@@ -151,16 +151,16 @@ export const MessageBubble = memo(function MessageBubble({
         )}
         <div className={`group relative px-3.5 py-2.5 text-[14px] leading-relaxed break-words shadow-xs ${roundedClass} ${
           isOutgoing
-            ? 'bg-[var(--bubble-out)] border border-[var(--bubble-out-border)] text-blue-950 dark:text-blue-50 font-normal'
-            : 'bg-[var(--bubble-in)] border border-[var(--bubble-in-border)] text-[var(--foreground)]'
+            ? 'bg-[var(--bubble-out-bg)] border border-[var(--bubble-out-border)] text-[var(--bubble-out-text)] font-normal'
+            : 'bg-[var(--bubble-in-bg)] border border-[var(--bubble-in-border)] text-[var(--bubble-in-text)]'
         }`}>
           {msg.quote && (
             <div className={`mb-2 rounded-xl border px-3 py-2 text-xs ${
               isOutgoing
-                ? 'border-blue-300/40 bg-blue-100/50 dark:bg-black/20 text-blue-900 dark:text-blue-100'
+                ? 'border-blue-400/30 bg-black/5 dark:bg-black/25 text-inherit opacity-90'
                 : 'border-[var(--border)] bg-[var(--muted)] text-muted-foreground'
             }`}>
-              <div className="font-semibold truncate">{quoteLabel}</div>
+              <div className="font-bold truncate">{quoteLabel}</div>
               <div className="mt-0.5 truncate opacity-85">{quoteText}</div>
             </div>
           )}
@@ -182,10 +182,10 @@ export const MessageBubble = memo(function MessageBubble({
               </div>
             </div>
           ) : shouldRenderFile && att ? (
-            <div className="flex items-start gap-2.5 p-2.5 bg-[var(--muted)]/60 rounded-xl border border-[var(--border)]">
+            <div className="flex items-start gap-2.5 p-2.5 bg-black/5 dark:bg-black/20 rounded-xl border border-[var(--border)]">
               <span className="text-[26px] leading-none shrink-0">{fileIcon}</span>
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] text-[var(--foreground)] font-medium truncate">
+                <div className="text-[13px] font-semibold truncate">
                   {hasAttachmentUrl ? (
                     <a href={att.url} target="_blank" rel="noreferrer" className="text-inherit no-underline hover:underline">
                       {fallbackFileLabel}
@@ -200,12 +200,12 @@ export const MessageBubble = memo(function MessageBubble({
                       {att.mimeType.split('/').pop()?.toUpperCase()}
                     </span>
                   )}
-                  {att.size ? <div className="text-[11px] text-muted-foreground">{formatSize(att.size)}</div> : null}
+                  {att.size ? <div className="text-[11px] opacity-75">{formatSize(att.size)}</div> : null}
                 </div>
                 {hasAttachmentUrl && (
                   <div className="flex gap-3 flex-wrap mt-1.5">
-                    <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 no-underline hover:underline font-medium">Xem file</a>
-                    <a href={att.url} download={att.fileName ?? 'download'} className="text-xs text-blue-500 no-underline hover:underline font-medium">Tải xuống</a>
+                    <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 no-underline hover:underline font-semibold">Xem file</a>
+                    <a href={att.url} download={att.fileName ?? 'download'} className="text-xs text-blue-500 no-underline hover:underline font-semibold">Tải xuống</a>
                   </div>
                 )}
               </div>
@@ -219,7 +219,7 @@ export const MessageBubble = memo(function MessageBubble({
           )}
 
           <div className="flex items-center justify-end gap-1.5 mt-1 select-none">
-            <span className="text-[10px] text-muted-foreground/70 font-medium">
+            <span className="text-[10px] opacity-60 font-medium">
               {formatTime(msg.timestamp)}
             </span>
           </div>

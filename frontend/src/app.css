@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -28,20 +30,23 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-success: var(--success);
-  --color-bubble-out: var(--bubble-out);
-  --color-bubble-in: var(--bubble-in);
+  
+  --color-bubble-out-bg: var(--bubble-out-bg);
+  --color-bubble-out-text: var(--bubble-out-text);
   --color-bubble-out-border: var(--bubble-out-border);
+  --color-bubble-in-bg: var(--bubble-in-bg);
+  --color-bubble-in-text: var(--bubble-in-text);
   --color-bubble-in-border: var(--bubble-in-border);
 }
 
 /* LIGHT MODE (DEFAULT) */
 :root {
   --background: #f4f6f9;
-  --foreground: #1e293b;
+  --foreground: #0f172a;
   --card: #ffffff;
-  --card-foreground: #1e293b;
+  --card-foreground: #0f172a;
   --popover: #ffffff;
-  --popover-foreground: #1e293b;
+  --popover-foreground: #0f172a;
   --primary: #0068ff;
   --primary-foreground: #ffffff;
   --secondary: #e2e8f0;
@@ -56,17 +61,22 @@
   --input: #cbd5e1;
   --ring: rgba(0, 104, 255, 0.4);
   --sidebar: #ffffff;
-  --sidebar-foreground: #1e293b;
+  --sidebar-foreground: #0f172a;
   --sidebar-primary: #0068ff;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #f0f6ff;
   --sidebar-accent-foreground: #0068ff;
   --sidebar-border: #e2e8f0;
   --success: #10b981;
-  --bubble-out: #e3f2fd;
-  --bubble-in: #ffffff;
-  --bubble-out-border: #bbdefb;
+
+  /* CHUẨN ZALO LIGHT MODE */
+  --bubble-out-bg: #e5efff;
+  --bubble-out-text: #081c36;
+  --bubble-out-border: #c5dcfa;
+  --bubble-in-bg: #ffffff;
+  --bubble-in-text: #0f172a;
   --bubble-in-border: #e2e8f0;
+
   --radius: 0.75rem;
 }
 
@@ -99,9 +109,13 @@
   --sidebar-accent-foreground: #bfdbfe;
   --sidebar-border: rgba(255, 255, 255, 0.08);
   --success: #34d399;
-  --bubble-out: #1e3a8a;
-  --bubble-in: #1e293b;
-  --bubble-out-border: #2563eb;
+
+  /* CHUẨN ZALO DARK MODE */
+  --bubble-out-bg: #005ae0;
+  --bubble-out-text: #ffffff;
+  --bubble-out-border: #1d72f5;
+  --bubble-in-bg: #1e293b;
+  --bubble-in-text: #f8fafc;
   --bubble-in-border: rgba(255, 255, 255, 0.1);
 }
 
@@ -112,7 +126,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   min-height: 100vh;
   min-height: 100dvh;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 #root {
