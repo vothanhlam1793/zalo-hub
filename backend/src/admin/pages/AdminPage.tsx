@@ -63,7 +63,18 @@ export default function AdminPage() {
           </Badge>
         </div>
 
-        <nav className="flex-1 p-3 flex flex-col gap-1">
+        <div className="p-3 border-b border-[var(--border)]">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full text-xs font-semibold justify-start gap-2 bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/20"
+            onClick={() => (window.location.href = "/")}
+          >
+            <span>💬</span> Quay lại Chat Panel
+          </Button>
+        </div>
+
+        <nav className="flex-1 p-3 flex flex-col gap-1.5 overflow-y-auto">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -85,22 +96,18 @@ export default function AdminPage() {
           ))}
         </nav>
 
-        <div className="p-3 border-t border-[var(--border)] flex flex-col gap-2">
+        <div className="p-3 border-t border-[var(--border)] mt-auto">
           <Button
             variant="ghost"
             size="sm"
-            className="text-xs justify-start"
-            onClick={() => (window.location.href = "/")}
+            className="w-full text-xs justify-start gap-2 text-[#ff8888] hover:bg-red-500/10 cursor-pointer"
+            onClick={() => {
+              if (window.confirm("Bạn có chắc chắn muốn đăng xuất tài khoản?")) {
+                logout();
+              }
+            }}
           >
-            ← Dashboard Chat
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs justify-start text-[#ff8888]"
-            onClick={() => logout()}
-          >
-            Đăng xuất
+            <span>🚪</span> Đăng xuất
           </Button>
         </div>
       </div>

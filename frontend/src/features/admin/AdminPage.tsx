@@ -64,13 +64,24 @@ export default function AdminPage() {
           <ThemeToggle />
         </div>
 
-        <nav className="flex-1 p-3 flex flex-col gap-1">
+        <div className="p-3 border-b border-[var(--border)]">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full text-xs font-semibold justify-start gap-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 hover:bg-blue-500/20 shadow-xs"
+            onClick={() => navigate('/')}
+          >
+            <span>💬</span> Quay lại Chat Panel
+          </Button>
+        </div>
+
+        <nav className="flex-1 p-3 flex flex-col gap-1.5 overflow-y-auto">
           {tabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => { setActiveTab(tab.key); setError(''); setStatus(''); }}
               className={cn(
-                'flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all text-left',
+                'flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left cursor-pointer',
                 activeTab === tab.key
                   ? 'bg-blue-500/15 text-blue-600 dark:text-blue-300 font-semibold border border-blue-500/30'
                   : 'text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)]',
@@ -82,12 +93,19 @@ export default function AdminPage() {
           ))}
         </nav>
 
-        <div className="p-3 border-t border-[var(--border)] flex flex-col gap-2">
-          <Button variant="ghost" size="sm" className="text-xs justify-start" onClick={() => navigate('/')}>
-            ← Dashboard Chat
-          </Button>
-          <Button variant="ghost" size="sm" className="text-xs justify-start text-red-500 hover:text-red-600 hover:bg-red-500/10" onClick={() => { logout(); navigate('/login'); }}>
-            Đăng xuất
+        <div className="p-3 border-t border-[var(--border)] mt-auto">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full text-xs justify-start gap-2 text-red-500 hover:text-red-600 hover:bg-red-500/10 cursor-pointer"
+            onClick={() => {
+              if (window.confirm('Bạn có chắc chắn muốn đăng xuất tài khoản?')) {
+                logout();
+                navigate('/login');
+              }
+            }}
+          >
+            <span>🚪</span> Đăng xuất
           </Button>
         </div>
       </div>
