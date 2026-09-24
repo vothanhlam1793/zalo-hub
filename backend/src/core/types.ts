@@ -126,6 +126,9 @@ export interface GoldConversationSummary {
   unreadCount: number;
   lastReadAt?: string;
   labels?: GoldTagItem[];
+  notes?: string;
+  notesUpdatedBy?: string;
+  notesUpdatedAt?: string;
 }
 
 export type GoldTagSource = 'zalo' | 'system' | 'ai';

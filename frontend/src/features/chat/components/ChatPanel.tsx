@@ -304,7 +304,30 @@ export function ChatPanel({
               className="min-w-0 flex-1 text-left rounded-lg px-1.5 py-1 -mx-1.5 hover:bg-white/4 transition-colors"
               title="Xem thông tin hội thoại"
             >
-              <div className="text-[15px] font-semibold text-[#f1f5f9] truncate">{activeName}</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[15px] font-semibold text-[#f1f5f9] truncate">{activeName}</span>
+                {/* Header Tag Badges */}
+                {Array.isArray(activeConversation?.labels) && activeConversation.labels.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    {activeConversation.labels.slice(0, 3).map((lbl) => (
+                      <span
+                        key={lbl.id}
+                        className="px-1.5 py-0.2 rounded text-[10px] font-medium text-white shadow-xs"
+                        style={{ backgroundColor: lbl.color || '#3b82f6' }}
+                      >
+                        {lbl.name}
+                      </span>
+                    ))}
+                    {activeConversation.labels.length > 3 && (
+                      <span className="text-[10px] text-muted-foreground">+{activeConversation.labels.length - 3}</span>
+                    )}
+                  </div>
+                )}
+                {/* Note Indicator */}
+                {activeConversation?.notes && (
+                  <span className="text-xs text-amber-400" title="Có ghi chú khách hàng">📝</span>
+                )}
+              </div>
               {typingUsers.length > 0 ? (
                 <div className="text-xs text-[#7fa8ff] animate-pulse mt-0.5">
                   {typingUsers.length === 1

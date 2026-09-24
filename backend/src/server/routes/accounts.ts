@@ -545,6 +545,50 @@ export function createAccountsRouter(
     })();
   });
 
+  router.put('/:accountId/conversations/:conversationId/notes', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const notes = typeof req.body?.notes === 'string' ? req.body.notes : null;
+      const updatedBy = (req as any).user?.username || (req as any).user?.email || 'sales';
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const updated = await targetRuntime.store.conversationRepo.updateConversationNotes(
+          accountId,
+          conversationId,
+          notes,
+          updatedBy,
+        );
+
+        broadcast({
+          type: 'conversation_notes_updated',
+          accountId,
+          conversationId,
+          notes: updated?.notes ?? null,
+          notesUpdatedBy: updated?.notesUpdatedBy ?? null,
+          notesUpdatedAt: updated?.notesUpdatedAt ?? null,
+        });
+
+        // Also broadcast updated conversation summaries so sidebar/list is fresh
+        broadcast({
+          type: 'conversation_summaries',
+          accountId,
+          conversations: await targetRuntime.getConversationSummaries(),
+        });
+
+        res.json({
+          ok: true,
+          conversationId,
+          notes: updated?.notes ?? null,
+          notesUpdatedBy: updated?.notesUpdatedBy ?? null,
+          notesUpdatedAt: updated?.notesUpdatedAt ?? null,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat ghi chu that bai' });
+      }
+    })();
+  });
+
   router.post('/:accountId/conversations/:conversationId/read-state', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();

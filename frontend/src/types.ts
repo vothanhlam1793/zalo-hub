@@ -121,6 +121,9 @@ export interface ConversationSummary {
   unreadCount: number;
   lastReadAt?: string;
   labels?: TagItem[];
+  notes?: string;
+  notesUpdatedBy?: string;
+  notesUpdatedAt?: string;
 }
 
 export interface Contact {

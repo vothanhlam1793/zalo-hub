@@ -145,6 +145,10 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           allTags={tags}
           onAssignTag={onAssignTag}
           onUnassignTag={onUnassignTag}
+          onCreateTag={dashboard.onCreateTag}
+          onDeleteTag={dashboard.onDeleteTag}
+          onSyncTags={onSyncTags}
+          onUpdateNotes={dashboard.onUpdateNotes}
           onClose={() => setDetailsOpen(false)}
         />
         </div>
@@ -349,6 +353,13 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               contact={activeContact}
               group={activeGroup}
               workspaceAccount={workspaceAccount}
+              allTags={tags}
+              onAssignTag={onAssignTag}
+              onUnassignTag={onUnassignTag}
+              onCreateTag={dashboard.onCreateTag}
+              onDeleteTag={dashboard.onDeleteTag}
+              onSyncTags={onSyncTags}
+              onUpdateNotes={dashboard.onUpdateNotes}
               onClose={() => setDetailsOpen(false)}
             />
           </div>

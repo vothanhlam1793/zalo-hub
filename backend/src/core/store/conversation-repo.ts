@@ -135,11 +135,17 @@ export class GoldConversationRepo {
       SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_timestamp, c.message_count
            , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
            , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
+           , c.notes, c.notes_updated_by, c.notes_updated_at
       FROM conversations c
       LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
       WHERE c.account_id = ?
       ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
-    `, [resolvedAccountId])).rows as (RawConversationRow & { labels_json?: any })[];
+    `, [resolvedAccountId])).rows as (RawConversationRow & {
+      labels_json?: any;
+      notes?: string | null;
+      notes_updated_by?: string | null;
+      notes_updated_at?: string | null;
+    })[];
 
     const unreadMap = new Map<string, number>();
     if (rows.length > 0) {
@@ -195,6 +201,9 @@ export class GoldConversationRepo {
         unreadCount: unreadMap.get(row.id) ?? 0,
         lastReadAt: effectiveLastReadAt,
         labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
+        notes: row.notes || undefined,
+        notesUpdatedBy: row.notes_updated_by || undefined,
+        notesUpdatedAt: row.notes_updated_at || undefined,
       } satisfies GoldConversationSummary);
     }
     return summaries;
@@ -691,6 +700,7 @@ export class GoldConversationRepo {
       SELECT c.id, c.thread_id, c.type, c.title, c.avatar, c.friend_id,
              c.display_name_snapshot, c.last_message_text, c.last_message_kind,
              c.last_direction, c.last_message_timestamp, c.message_count,
+             c.labels_json, c.notes, c.notes_updated_by, c.notes_updated_at,
              COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at,
              (SELECT COUNT(*)::int FROM messages mr
               WHERE mr.account_id = c.account_id
@@ -719,33 +729,42 @@ export class GoldConversationRepo {
       message_count: number;
       last_read_at: string;
       unread_count: number;
+      labels_json?: any;
+      notes?: string | null;
+      notes_updated_by?: string | null;
+      notes_updated_at?: string | null;
     }>;
 
     const row = rows[0];
     if (!row) return undefined;
 
+    let parsedLabels: any = undefined;
+    if (row.labels_json) {
+      try {
+        parsedLabels = typeof row.labels_json === 'string' ? JSON.parse(row.labels_json) : row.labels_json;
+      } catch { /* ignore */ }
+    }
+
     const threadOrFriend = row.thread_id ?? row.friend_id;
-    return {
-      id: row.id,
-      accountId: resolvedAccountId,
-      threadId: threadOrFriend,
-      type: row.type ?? 'direct',
-      title: row.title
-        ?? row.display_name_snapshot
-        ?? (row.type === 'group'
-          ? (await this.getGroupDisplayNameFn(threadOrFriend, resolvedAccountId))
-          : (await this.getFriendDisplayNameFn(row.friend_id, resolvedAccountId)))
-        ?? threadOrFriend,
-      avatar: row.avatar ?? (row.type === 'group'
-        ? (await this.getGroupAvatarFn(threadOrFriend, resolvedAccountId))
-        : (await this.getFriendAvatarFn(row.friend_id, resolvedAccountId))),
-      lastMessageText: row.last_message_text,
-      lastMessageKind: toMessageKind(row.last_message_kind),
-      lastMessageTimestamp: row.last_message_timestamp,
-      lastDirection: row.last_direction,
-      messageCount: row.message_count,
-      unreadCount: row.unread_count,
-      lastReadAt: row.last_read_at,
-    } satisfies GoldConversationSummary;
+  async updateConversationNotes(
+    accountId: string,
+    conversationId: string,
+    notes: string | null,
+    updatedBy?: string,
+  ) {
+    const canonicalConversationId = parseConversationId(conversationId).conversationId;
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
+
+    const now = nowIso();
+    await this.knex('conversations')
+      .where({ account_id: resolvedAccountId, id: canonicalConversationId })
+      .update({
+        notes: notes ? notes.trim() : null,
+        notes_updated_by: updatedBy || null,
+        notes_updated_at: now,
+      });
+
+    return this.getConversationSummary(resolvedAccountId, canonicalConversationId);
   }
 }

@@ -201,6 +201,15 @@ export const api = {
       body: JSON.stringify({ messageId, cliMsgId, icon }),
     }),
 
+  accountUpdateNotes: (accountId: string, conversationId: string, notes: string | null) =>
+    req<{ ok: boolean; conversationId: string; notes: string | null; notesUpdatedBy?: string | null; notesUpdatedAt?: string | null }>(
+      `/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/notes`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ notes }),
+      },
+    ),
+
   accountUpdateReadState: (accountId: string, conversationId: string, readAt: string) =>
     req<{ ok: boolean; readAt: string }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/read-state`, {
       method: 'POST',

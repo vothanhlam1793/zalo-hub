@@ -467,6 +467,71 @@ export function useDashboardState() {
     }
   }, [resolveWorkspaceId, chat, composer]);
 
+  const onUpdateNotes = useCallback(async (notes: string | null) => {
+    const id = resolveWorkspaceId();
+    const convId = chat.activeConversationId;
+    if (!id || !convId) return;
+    const session = chatSession.capture();
+    const key = useChatStore.getState().activeKey;
+    try {
+      const res = await bff.updateNotes(id, convId, notes);
+      if (!chatSession.valid(session)) return;
+      const currentConvs = chat.getAccountConversations(id);
+      const updated = currentConvs.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              notes: res.notes || undefined,
+              notesUpdatedBy: res.notesUpdatedBy || undefined,
+              notesUpdatedAt: res.notesUpdatedAt || undefined,
+            }
+          : c,
+      );
+      chat.replaceAccountConversations(id, updated);
+      if (useChatStore.getState().activeKey === key) composer.setStatusMsg('Đã lưu ghi chú.');
+    } catch (err) {
+      if (chatSession.valid(session) && useChatStore.getState().activeKey === key) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Lưu ghi chú thất bại');
+      }
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
+  const onCreateTag = useCallback(async (name: string, color: string) => {
+    const id = resolveWorkspaceId();
+    if (!id || !name.trim()) return;
+    const session = chatSession.capture();
+    try {
+      const res = await bff.tagCreate({ name: name.trim(), color, accountId: id });
+      if (!chatSession.valid(session)) return;
+      setTags((prev) => [...prev.filter((t) => t.id !== res.tag.id), res.tag]);
+      composer.setStatusMsg(`Đã tạo nhãn "${res.tag.name}".`);
+    } catch (err) {
+      if (chatSession.valid(session)) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Tạo nhãn thất bại');
+      }
+    }
+  }, [resolveWorkspaceId, composer]);
+
+  const onDeleteTag = useCallback(async (tagId: string) => {
+    const id = resolveWorkspaceId();
+    if (!id || !tagId) return;
+    const session = chatSession.capture();
+    try {
+      await bff.tagDelete(tagId);
+      if (!chatSession.valid(session)) return;
+      setTags((prev) => prev.filter((t) => t.id !== tagId));
+      // Also refresh conversations to remove deleted tag
+      const convs = await bff.chatGetConversations(id);
+      if (!chatSession.valid(session)) return;
+      chat.replaceAccountConversations(id, convs.conversations);
+      composer.setStatusMsg('Đã xóa nhãn.');
+    } catch (err) {
+      if (chatSession.valid(session)) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Xóa nhãn thất bại');
+      }
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
   const onRenameAccount = useCallback(async (nextDisplayName: string) => {
     const accountId = resolveWorkspaceId();
     if (!accountId) {
@@ -658,5 +723,8 @@ export function useDashboardState() {
     onSyncTags,
     onAssignTag,
     onUnassignTag,
+    onCreateTag,
+    onDeleteTag,
+    onUpdateNotes,
   };
 }

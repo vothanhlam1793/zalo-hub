@@ -105,6 +105,9 @@ export const bff = {
   updateReadState: (accountId: string, conversationId: string, readAt: string) =>
     api.accountUpdateReadState(accountId, conversationId, readAt),
 
+  updateNotes: (accountId: string, conversationId: string, notes: string | null) =>
+    api.accountUpdateNotes(accountId, conversationId, notes),
+
   forwardMessage: (accountId: string, conversationId: string, messageId: string, toThreadId: string, toType: string) =>
     api.accountForwardMessage(accountId, conversationId, messageId, toThreadId, toType),
 
