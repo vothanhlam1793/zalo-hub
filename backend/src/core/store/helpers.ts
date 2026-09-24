@@ -61,6 +61,7 @@ export type RawMessageRow = {
   timestamp: string;
   sender_id: string | null;
   sender_name: string | null;
+  sender_avatar?: string | null;
   provider_message_id: string | null;
   raw_message_json: string | null;
   reactions_json: string | null;

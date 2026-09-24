@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
-import { formatSize, formatTime, getFileIcon, isImageAttachment, isVideoAttachment } from '@/utils';
-import type { Message, MessageReactionOption } from '@/types';
+import { formatSize, formatTime, getFileIcon, getInitial, isImageAttachment, isVideoAttachment } from '@/utils';
+import type { Contact, Message, MessageReactionOption } from '@/types';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { MessageDeliveryStatus, type DeliveryActions } from './messages/MessageDeliveryStatus';
 
 const REACTION_OPTIONS: MessageReactionOption[] = [
@@ -24,6 +25,7 @@ interface MessageBubbleProps extends DeliveryActions {
   isGroup: boolean;
   isFirstInGroup?: boolean;
   isLastInGroup?: boolean;
+  senderAvatar?: string;
   onReact?: (message: Message, reaction: MessageReactionOption) => void;
   onOpenLightbox?: (messageId: string) => void;
 }
@@ -33,6 +35,7 @@ export const MessageBubble = memo(function MessageBubble({
   isGroup,
   isFirstInGroup = true,
   isLastInGroup = true,
+  senderAvatar,
   onReact,
   onOpenLightbox,
   onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
@@ -91,20 +94,45 @@ export const MessageBubble = memo(function MessageBubble({
     ? `rounded-2xl ${isFirstInGroup ? 'rounded-tr-2xl' : 'rounded-tr-md'} ${isLastInGroup ? 'rounded-br-sm' : 'rounded-br-md'}`
     : `rounded-2xl ${isFirstInGroup ? 'rounded-tl-2xl' : 'rounded-tl-md'} ${isLastInGroup ? 'rounded-bl-sm' : 'rounded-bl-md'}`;
 
+  // Avatar component for group member
+  const showGroupSenderAvatar = isGroup && !isOutgoing;
+  const avatarUrl = senderAvatar || msg.senderAvatar;
+  const displayName = msg.senderName || 'Thành viên';
+
+  const avatarSlot = showGroupSenderAvatar ? (
+    <div className="w-8 shrink-0 flex items-start justify-center select-none pt-0.5">
+      {isFirstInGroup ? (
+        <Avatar className="w-7 h-7 text-[11px] ring-1 ring-[var(--border)] shadow-2xs">
+          {avatarUrl ? (
+            <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover rounded-full" />
+          ) : null}
+          <AvatarFallback className="bg-gradient-to-br from-indigo-500/80 to-purple-600/80 text-white font-semibold">
+            {getInitial(displayName)}
+          </AvatarFallback>
+        </Avatar>
+      ) : (
+        <div className="w-7 h-7" />
+      )}
+    </div>
+  ) : null;
+
   if (isSticker) {
     const stickerUrl = imageUrl || att?.url || '';
     return (
-      <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-1'}`}>
-        <div className="group relative max-w-[160px]">
+      <div className={`flex items-start gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-1'}`}>
+        {avatarSlot}
+        <div className="flex flex-col items-start max-w-[160px]">
           {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
-            <div className="text-[11px] text-[#7fa8ff] font-medium mb-1 pl-1">{msg.senderName}</div>
+            <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-0.5">{msg.senderName}</div>
           )}
-          <div className="min-h-[120px] min-w-[120px] flex items-center justify-center">
-            <img src={stickerUrl} alt="Sticker" className="w-full h-auto block" loading="lazy" />
+          <div className="group relative">
+            <div className="min-h-[120px] min-w-[120px] flex items-center justify-center">
+              <img src={stickerUrl} alt="Sticker" className="w-full h-auto block" loading="lazy" />
+            </div>
+            <div className="text-[10px] text-[rgba(255,255,255,0.30)] mt-0.5 text-right">{formatTime(msg.timestamp)}</div>
+            {delivery}
+            {reactionDock}
           </div>
-          <div className="text-[10px] text-[rgba(255,255,255,0.30)] mt-0.5 text-right">{formatTime(msg.timestamp)}</div>
-          {delivery}
-          {reactionDock}
         </div>
       </div>
     );
@@ -112,12 +140,13 @@ export const MessageBubble = memo(function MessageBubble({
 
   if (msg.kind === 'poll') {
     return (
-      <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-1'}`}>
-        <div className="max-w-[85%] sm:max-w-[480px]">
+      <div className={`flex items-start gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-1'}`}>
+        {avatarSlot}
+        <div className="max-w-[85%] sm:max-w-[480px] flex flex-col items-start">
+          {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
+            <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-1">{msg.senderName}</div>
+          )}
           <div className={`group relative px-4 py-3 text-sm leading-relaxed bg-[rgba(255,255,255,0.06)] border border-white/10 text-[#ddd] ${roundedClass}`}>
-            {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
-              <div className="text-[11px] text-[#7fa8ff] font-medium mb-1">{msg.senderName}</div>
-            )}
             <div className="font-semibold text-[#eee] mb-2">📊 {msg.text}</div>
             <div className="flex flex-col gap-1.5">
               {(msg.attachments || []).slice(0, 1).map((a, i) => (
@@ -144,10 +173,11 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   return (
-    <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-0.5'}`}>
-      <div className="max-w-[85%] sm:max-w-[500px]">
+    <div className={`flex items-start gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-0.5'}`}>
+      {avatarSlot}
+      <div className="max-w-[85%] sm:max-w-[500px] flex flex-col items-start">
         {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
-          <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-1.5">{msg.senderName}</div>
+          <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-1">{msg.senderName}</div>
         )}
         <div className={`group relative px-3.5 py-2.5 text-[14px] leading-relaxed break-words shadow-xs ${roundedClass} ${
           isOutgoing

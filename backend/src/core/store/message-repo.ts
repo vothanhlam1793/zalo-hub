@@ -114,8 +114,8 @@ export class GoldMessageRepo {
 
     const query = before
       ? `
-        SELECT * FROM (
-          SELECT id, conversation_id, thread_id, conversation_type, friend_id, text, kind, image_url, direction, is_self, timestamp, sender_id, sender_name, provider_message_id, raw_message_json, reactions_json, created_at
+        SELECT sub.*, f.avatar AS sender_avatar FROM (
+          SELECT id, account_id, conversation_id, thread_id, conversation_type, friend_id, text, kind, image_url, direction, is_self, timestamp, sender_id, sender_name, provider_message_id, raw_message_json, reactions_json, created_at
           FROM messages
           WHERE account_id = ?
             AND (
@@ -126,11 +126,12 @@ export class GoldMessageRepo {
           ORDER BY timestamp DESC, created_at DESC
           LIMIT ?
         ) AS sub
-        ORDER BY timestamp ASC, created_at ASC
+        LEFT JOIN friends f ON f.account_id = sub.account_id AND f.friend_id = sub.sender_id
+        ORDER BY sub.timestamp ASC, sub.created_at ASC
       `
       : `
-        SELECT * FROM (
-          SELECT id, conversation_id, thread_id, conversation_type, friend_id, text, kind, image_url, direction, is_self, timestamp, sender_id, sender_name, provider_message_id, raw_message_json, reactions_json, created_at
+        SELECT sub.*, f.avatar AS sender_avatar FROM (
+          SELECT id, account_id, conversation_id, thread_id, conversation_type, friend_id, text, kind, image_url, direction, is_self, timestamp, sender_id, sender_name, provider_message_id, raw_message_json, reactions_json, created_at
           FROM messages
           WHERE account_id = ?
             AND (
@@ -140,7 +141,8 @@ export class GoldMessageRepo {
           ORDER BY timestamp DESC, created_at DESC
           LIMIT ?
         ) AS sub
-        ORDER BY timestamp ASC, created_at ASC
+        LEFT JOIN friends f ON f.account_id = sub.account_id AND f.friend_id = sub.sender_id
+        ORDER BY sub.timestamp ASC, sub.created_at ASC
       `;
 
     const bindings = before
@@ -213,6 +215,7 @@ export class GoldMessageRepo {
         attachments: canonical.attachments,
         senderId: row.sender_id ?? undefined,
         senderName: row.sender_name ?? undefined,
+        senderAvatar: row.sender_avatar ?? undefined,
         providerMessageId: row.provider_message_id ?? undefined,
         imageUrl: canonical.imageUrl,
         quote: raw ? normalizeMessageQuote(raw) : undefined,

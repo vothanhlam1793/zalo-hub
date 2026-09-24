@@ -90,6 +90,7 @@ export interface GoldConversationMessage {
   timestamp: string;
   senderId?: string;
   senderName?: string;
+  senderAvatar?: string;
   providerMessageId?: string;
   imageUrl?: string;
   quote?: GoldMessageQuote;

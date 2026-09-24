@@ -417,29 +417,35 @@ export function ChatPanel({
                 </div>
               )}
 
-              {groupedMessages.map((item) => (
-                <div key={item.msg.localId || item.msg.id} data-message-id={item.msg.localId || item.msg.id} className="flex flex-col">
-                  {item.showDateDivider && (
-                    <div className="flex items-center justify-center my-4 select-none">
-                      <span className="text-[11px] font-medium tracking-wide uppercase px-3 py-0.5 rounded-full bg-white/5 border border-white/5 text-[#94a3b8] shadow-sm">
-                        {item.showDateDivider}
-                      </span>
-                    </div>
-                  )}
-                  <MessageBubble
-                    msg={item.msg}
-                    isGroup={isGroupConversation}
-                    isFirstInGroup={item.isFirstInGroup}
-                    isLastInGroup={item.isLastInGroup}
-                    onReact={onReactMessage}
-                    onOpenLightbox={openLightbox}
-                    onRetryMessage={onRetryMessage}
-                    onQueryMessage={onQueryMessage}
-                    onCancelMessage={onCancelMessage}
-                    onRestoreDraft={onRestoreDraft}
-                  />
-                </div>
-              ))}
+              {groupedMessages.map((item) => {
+                const senderContact = item.msg.senderId && contacts ? contacts.find((c) => c.userId === item.msg.senderId) : undefined;
+                const resolvedSenderAvatar = item.msg.senderAvatar || senderContact?.avatar;
+
+                return (
+                  <div key={item.msg.localId || item.msg.id} data-message-id={item.msg.localId || item.msg.id} className="flex flex-col">
+                    {item.showDateDivider && (
+                      <div className="flex items-center justify-center my-4 select-none">
+                        <span className="text-[11px] font-medium tracking-wide uppercase px-3 py-0.5 rounded-full bg-white/5 border border-white/5 text-[#94a3b8] shadow-sm">
+                          {item.showDateDivider}
+                        </span>
+                      </div>
+                    )}
+                    <MessageBubble
+                      msg={item.msg}
+                      isGroup={isGroupConversation}
+                      isFirstInGroup={item.isFirstInGroup}
+                      isLastInGroup={item.isLastInGroup}
+                      senderAvatar={resolvedSenderAvatar}
+                      onReact={onReactMessage}
+                      onOpenLightbox={openLightbox}
+                      onRetryMessage={onRetryMessage}
+                      onQueryMessage={onQueryMessage}
+                      onCancelMessage={onCancelMessage}
+                      onRestoreDraft={onRestoreDraft}
+                    />
+                  </div>
+                );
+              })}
               <div ref={messagesEndRef} className="h-1 shrink-0" />
             </div>
 

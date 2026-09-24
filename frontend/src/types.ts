@@ -53,6 +53,7 @@ export interface Message {
   timestamp: string;
   senderId?: string;
   senderName?: string;
+  senderAvatar?: string;
   providerMessageId?: string;
   imageUrl?: string; // legacy
   quote?: MessageQuote;
