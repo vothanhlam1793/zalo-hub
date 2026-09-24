@@ -746,13 +746,42 @@ export class GoldConversationRepo {
     }
 
     const threadOrFriend = row.thread_id ?? row.friend_id;
+    return {
+      id: row.id,
+      accountId: resolvedAccountId,
+      threadId: threadOrFriend,
+      type: row.type ?? 'direct',
+      title: row.title
+        ?? row.display_name_snapshot
+        ?? (row.type === 'group'
+          ? (await this.getGroupDisplayNameFn(threadOrFriend, resolvedAccountId))
+          : (await this.getFriendDisplayNameFn(row.friend_id, resolvedAccountId)))
+        ?? threadOrFriend,
+      avatar: row.avatar ?? (row.type === 'group'
+        ? (await this.getGroupAvatarFn(threadOrFriend, resolvedAccountId))
+        : (await this.getFriendAvatarFn(row.friend_id, resolvedAccountId))),
+      lastMessageText: row.last_message_text,
+      lastMessageKind: toMessageKind(row.last_message_kind),
+      lastMessageTimestamp: row.last_message_timestamp,
+      lastDirection: row.last_direction,
+      messageCount: row.message_count,
+      unreadCount: row.unread_count,
+      lastReadAt: row.last_read_at,
+      labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
+      notes: row.notes || undefined,
+      notesUpdatedBy: row.notes_updated_by || undefined,
+      notesUpdatedAt: row.notes_updated_at || undefined,
+    } satisfies GoldConversationSummary;
+  }
+
   async updateConversationNotes(
     accountId: string,
     conversationId: string,
     notes: string | null,
     updatedBy?: string,
   ) {
-    const canonicalConversationId = parseConversationId(conversationId).conversationId;
+    const { type, threadId } = parseConversationId(conversationId);
+    const canonicalConversationId = `${type}:${threadId}`;
     const resolvedAccountId = this.resolveAccountId(accountId);
     if (!resolvedAccountId) return undefined;
 
@@ -765,6 +794,6 @@ export class GoldConversationRepo {
         notes_updated_at: now,
       });
 
-    return this.getConversationSummary(resolvedAccountId, canonicalConversationId);
+    return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);
   }
 }

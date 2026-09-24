@@ -553,7 +553,7 @@ export function createAccountsRouter(
       const updatedBy = (req as any).user?.username || (req as any).user?.email || 'sales';
       try {
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        const updated = await targetRuntime.store.conversationRepo.updateConversationNotes(
+        const updated = await targetRuntime.getStore().conversationRepo.updateConversationNotes(
           accountId,
           conversationId,
           notes,

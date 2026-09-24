@@ -571,6 +571,10 @@ export class GoldRuntime {
     };
   }
 
+  getStore(): GoldStore {
+    return this.state.store;
+  }
+
   getListenerState() {
     return this.listener.getListenerState();
   }

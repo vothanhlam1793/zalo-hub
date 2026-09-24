@@ -30,10 +30,10 @@ function createKnexConfig(env: string): Knex.Config {
 export class GoldStore {
   private readonly knex: Knex;
   readonly accountRepo: GoldAccountRepo;
-  private readonly contactRepo: GoldContactRepo;
-  private readonly groupRepo: GoldGroupRepo;
-  private readonly messageRepo: GoldMessageRepo;
-  private readonly conversationRepo: GoldConversationRepo;
+  readonly contactRepo: GoldContactRepo;
+  readonly groupRepo: GoldGroupRepo;
+  readonly messageRepo: GoldMessageRepo;
+  readonly conversationRepo: GoldConversationRepo;
   readonly tagRepo: GoldTagRepo;
 
   constructor(knex?: Knex) {
