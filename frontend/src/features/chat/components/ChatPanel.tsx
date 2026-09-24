@@ -281,18 +281,18 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#0b0e14]">
+    <div className="flex-1 flex flex-col min-h-0 bg-[var(--background)] transition-colors">
       {!activeConversationId ? (
         <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-sm gap-2">
-          <div className="w-12 h-12 rounded-2xl bg-white/4 flex items-center justify-center text-xl text-white/40">💬</div>
-          <span>Chọn một cuộc trò chuyện để bắt đầu</span>
+          <div className="w-14 h-14 rounded-2xl bg-[var(--card)] border border-[var(--border)] shadow-xs flex items-center justify-center text-2xl">💬</div>
+          <span className="font-medium">Chọn một cuộc trò chuyện để bắt đầu</span>
         </div>
       ) : (
         <>
           {/* Header */}
-          <div className="shrink-0 px-5 py-3 border-b border-[var(--border)] flex items-center gap-3 bg-[rgba(11,14,20,0.85)] backdrop-blur-md z-10">
+          <div className="shrink-0 px-5 py-3 border-b border-[var(--border)] flex items-center gap-3 bg-[var(--card)] shadow-2xs z-10 transition-colors">
             {headerLeading}
-            <Avatar className="w-10 h-10 text-sm shrink-0 ring-1 ring-white/10">
+            <Avatar className="w-10 h-10 text-sm shrink-0 ring-1 ring-[var(--border)]">
               {activeAvatar ? <img src={activeAvatar} alt={activeName} className="w-full h-full object-cover rounded-full" /> : null}
               <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] font-bold">
                 {getInitial(activeName)}
@@ -301,11 +301,11 @@ export function ChatPanel({
             <button
               type="button"
               onClick={onToggleDetails}
-              className="min-w-0 flex-1 text-left rounded-lg px-1.5 py-1 -mx-1.5 hover:bg-white/4 transition-colors"
+              className="min-w-0 flex-1 text-left rounded-lg px-1.5 py-1 -mx-1.5 hover:bg-[var(--accent)]/50 transition-colors"
               title="Xem thông tin hội thoại"
             >
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[15px] font-semibold text-[#f1f5f9] truncate">{activeName}</span>
+                <span className="text-[15px] font-bold text-[var(--foreground)] truncate">{activeName}</span>
                 {/* Header Tag Badges */}
                 {Array.isArray(activeConversation?.labels) && activeConversation.labels.length > 0 && (
                   <div className="flex items-center gap-1">
@@ -319,17 +319,17 @@ export function ChatPanel({
                       </span>
                     ))}
                     {activeConversation.labels.length > 3 && (
-                      <span className="text-[10px] text-muted-foreground">+{activeConversation.labels.length - 3}</span>
+                      <span className="text-[10px] text-muted-foreground font-semibold">+{activeConversation.labels.length - 3}</span>
                     )}
                   </div>
                 )}
                 {/* Note Indicator */}
                 {activeConversation?.notes && (
-                  <span className="text-xs text-amber-400" title="Có ghi chú khách hàng">📝</span>
+                  <span className="text-xs text-amber-500" title="Có ghi chú khách hàng">📝</span>
                 )}
               </div>
               {typingUsers.length > 0 ? (
-                <div className="text-xs text-[#7fa8ff] animate-pulse mt-0.5">
+                <div className="text-xs text-blue-500 animate-pulse mt-0.5 font-medium">
                   {typingUsers.length === 1
                     ? `${typingUsers[0]} đang nhập...`
                     : `${typingUsers.length} người đang nhập...`}
@@ -343,7 +343,7 @@ export function ChatPanel({
               variant="ghost"
               size="sm"
               onClick={onToggleDetails}
-              className={`text-xs shrink-0 h-8 px-3 rounded-lg border border-transparent ${detailsOpen ? 'bg-white/10 text-[#7fa8ff] border-white/10' : 'text-muted-foreground hover:text-white hover:bg-white/5'}`}
+              className={`text-xs shrink-0 h-8 px-3 rounded-lg border border-transparent ${detailsOpen ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold border-blue-500/20' : 'text-muted-foreground hover:text-foreground hover:bg-[var(--accent)]'}`}
             >
               {detailsOpen ? 'Ẩn info' : 'Info'}
             </Button>
@@ -440,16 +440,16 @@ export function ChatPanel({
           </div>
 
           {/* Composer */}
-          <form className="shrink-0 p-3 sm:p-4 border-t border-[var(--border)] flex flex-col gap-2 bg-[rgba(11,14,20,0.95)] backdrop-blur" onSubmit={onSend}>
-            {!canSend && <div className="text-xs text-amber-200">Tài khoản cần kết nối và quyền gửi tin nhắn.</div>}
-            {missingFileName && !attachFile && <div role="status" className="text-xs text-amber-200">Chọn lại tệp đính kèm: {missingFileName}
+          <form className="shrink-0 p-3 sm:p-4 border-t border-[var(--border)] flex flex-col gap-2 bg-[var(--card)] transition-colors shadow-lg" onSubmit={onSend}>
+            {!canSend && <div className="text-xs text-amber-500 font-medium">Tài khoản cần kết nối và quyền gửi tin nhắn.</div>}
+            {missingFileName && !attachFile && <div role="status" className="text-xs text-amber-500">Chọn lại tệp đính kèm: {missingFileName}
               <button type="button" className="underline p-2" onClick={onClearFile}>Bỏ tệp</button>
             </div>}
             {attachFile && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-[#4f7aff]/10 border border-[#4f7aff]/25 rounded-xl text-xs text-[#7fa8ff] animate-in fade-in">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/25 rounded-xl text-xs text-blue-600 dark:text-blue-400 animate-in fade-in">
                 {draftPreview && <img src={draftPreview} alt="Xem trước ảnh đính kèm" className="w-12 h-12 object-contain rounded" />}
-                <span className="min-w-0 truncate">📎 {attachFile.name} ({formatSize(attachFile.size)})</span>
-                <button type="button" aria-label="Bỏ tệp đính kèm" onClick={onClearFile} className="ml-auto text-rose-400 hover:text-rose-300 p-2">✕</button>
+                <span className="min-w-0 truncate font-medium">📎 {attachFile.name} ({formatSize(attachFile.size)})</span>
+                <button type="button" aria-label="Bỏ tệp đính kèm" onClick={onClearFile} className="ml-auto text-rose-500 hover:text-rose-400 p-2">✕</button>
               </div>
             )}
             <div className="flex gap-2 items-end">
@@ -467,7 +467,7 @@ export function ChatPanel({
                 variant="ghost"
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
-                className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-white hover:bg-white/5 shrink-0"
+                className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0"
                 title="Đính kèm file hoặc ảnh"
                 aria-label="Đính kèm file hoặc ảnh"
               >
@@ -484,13 +484,13 @@ export function ChatPanel({
                 onCompositionStart={onCompositionStart}
                 onCompositionEnd={onCompositionEnd}
                 rows={1}
-                className="min-h-[42px] max-h-[140px] resize-none flex-1 rounded-xl bg-white/5 border-white/10 focus:border-[#4f7aff]/50 text-sm py-2.5 px-3.5 leading-relaxed placeholder:text-muted-foreground/60"
+                className="min-h-[42px] max-h-[140px] resize-none flex-1 rounded-xl bg-[var(--muted)] border-[var(--border)] focus:border-blue-500 text-sm py-2.5 px-3.5 leading-relaxed text-[var(--foreground)] placeholder:text-muted-foreground"
               />
 
               <Button
                 type="submit"
                 disabled={!canSend || isComposing || (!text.trim() && !attachFile) || Boolean(missingFileName && !attachFile)}
-                className="h-10 px-4 rounded-xl bg-[#4f7aff] hover:bg-[#4068e8] text-white font-medium shrink-0 disabled:opacity-40 transition-opacity"
+                className="h-10 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold shrink-0 disabled:opacity-40 transition-opacity shadow-md shadow-blue-600/20"
               >
                 Gửi
               </Button>

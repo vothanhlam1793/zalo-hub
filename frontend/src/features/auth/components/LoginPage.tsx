@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card } from '@/components/ui/card';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { useAuthStore } from '@/stores/auth-store';
 
 export default function LoginPage() {
@@ -25,43 +26,49 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex-1 flex items-center justify-center flex-col gap-6 bg-gradient-to-br from-[#0f1117] to-[#1a2035] min-h-screen">
-      <h1 className="text-[32px] font-bold text-white m-0">Zalo Hub</h1>
-      <p className="text-[#888] text-[15px] m-0">Đăng nhập vào hệ thống</p>
+    <div className="flex-1 flex items-center justify-center flex-col gap-6 bg-[var(--background)] text-[var(--foreground)] min-h-screen p-4 transition-colors relative">
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
 
-      <Card className="bg-white/5 border-white/10 p-8 w-[360px] flex flex-col gap-4">
+      <div className="flex flex-col items-center text-center gap-1.5">
+        <div className="w-12 h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center text-2xl font-bold shadow-lg shadow-blue-600/30 mb-2">
+          Z
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-bold text-[var(--foreground)] tracking-tight">ZaloHub Workspace</h1>
+        <p className="text-muted-foreground text-xs sm:text-sm max-w-sm">Hệ thống quản lý tin nhắn và phân loại khách hàng Zalo đa tài khoản</p>
+      </div>
+
+      <Card className="bg-[var(--card)] border-[var(--border)] p-6 sm:p-8 w-full max-w-[380px] flex flex-col gap-4 shadow-xl">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="email" className="text-[#ccc]">Email</Label>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="email" className="text-xs font-semibold">Email đăng nhập</Label>
             <Input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="admin@zalohub.local"
-              className="h-10"
+              className="h-10 text-xs"
               autoFocus
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="password" className="text-[#ccc]">Mật khẩu</Label>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="password" className="text-xs font-semibold">Mật khẩu</Label>
             <Input
               id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="h-10"
+              className="h-10 text-xs"
             />
           </div>
-          {error && <p className="text-[#ff8888] text-[13px] m-0">{error}</p>}
-          <Button type="submit" disabled={isLoading} className="w-full">
-            {isLoading ? 'Đang đăng nhập...' : 'Đăng nhập'}
+          {error && <p className="text-red-500 text-xs m-0 font-medium">{error}</p>}
+          <Button type="submit" disabled={isLoading} className="w-full h-10 text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-md">
+            {isLoading ? 'Đang xác thực...' : 'Đăng nhập'}
           </Button>
         </form>
-        <p className="text-[#666] text-xs text-center m-0">
-          Mặc định: admin@zalohub.local / admin123
-        </p>
       </Card>
     </div>
   );

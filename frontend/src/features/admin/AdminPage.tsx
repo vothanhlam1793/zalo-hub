@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { bff } from '@/bff-api';
 import { useAuthStore } from '@/stores/auth-store';
 import { MyAccountsTab } from '@/features/accounts/components/MyAccountsTab';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { AdminUsersTab } from './AdminUsersTab';
 import { AdminTagsTab } from './AdminTagsTab';
 import DifyBotsTab from './DifyBotsTab';
@@ -52,12 +53,15 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex-1 flex min-h-screen bg-[#0f1117]">
-      <div className="w-[220px] min-w-[200px] border-r border-[var(--border)] flex flex-col bg-[#0d1015]">
-        <div className="px-4 py-4 border-b border-[var(--border)]">
-          <h1 className="text-sm font-bold text-[#eee]">Quản trị</h1>
-          <p className="text-[11px] text-muted-foreground truncate">{user?.email}</p>
-          <Badge variant={isSuperAdmin ? 'default' : 'secondary'} className="text-[10px]">{user?.role || 'user'}</Badge>
+    <div className="flex-1 flex min-h-screen bg-[var(--background)] text-[var(--foreground)] transition-colors">
+      <div className="w-[230px] min-w-[210px] border-r border-[var(--border)] flex flex-col bg-[var(--card)] transition-colors">
+        <div className="px-4 py-4 border-b border-[var(--border)] flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h1 className="text-sm font-bold text-[var(--foreground)]">Quản trị</h1>
+            <p className="text-[11px] text-muted-foreground truncate">{user?.email}</p>
+            <Badge variant={isSuperAdmin ? 'default' : 'secondary'} className="text-[10px] mt-1">{user?.role || 'user'}</Badge>
+          </div>
+          <ThemeToggle />
         </div>
 
         <nav className="flex-1 p-3 flex flex-col gap-1">
@@ -66,10 +70,10 @@ export default function AdminPage() {
               key={tab.key}
               onClick={() => { setActiveTab(tab.key); setError(''); setStatus(''); }}
               className={cn(
-                'flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left',
+                'flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all text-left',
                 activeTab === tab.key
-                  ? 'bg-[rgba(79,122,255,0.15)] text-[#9fc0ff] font-medium'
-                  : 'text-muted-foreground hover:text-[#ccc] hover:bg-white/[0.04]',
+                  ? 'bg-blue-500/15 text-blue-600 dark:text-blue-300 font-semibold border border-blue-500/30'
+                  : 'text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)]',
               )}
             >
               <span className="text-sm">{tab.icon}</span>
@@ -80,9 +84,9 @@ export default function AdminPage() {
 
         <div className="p-3 border-t border-[var(--border)] flex flex-col gap-2">
           <Button variant="ghost" size="sm" className="text-xs justify-start" onClick={() => navigate('/')}>
-            ← Dashboard
+            ← Dashboard Chat
           </Button>
-          <Button variant="ghost" size="sm" className="text-xs justify-start text-[#ff8888]" onClick={() => { logout(); navigate('/login'); }}>
+          <Button variant="ghost" size="sm" className="text-xs justify-start text-red-500 hover:text-red-600 hover:bg-red-500/10" onClick={() => { logout(); navigate('/login'); }}>
             Đăng xuất
           </Button>
         </div>

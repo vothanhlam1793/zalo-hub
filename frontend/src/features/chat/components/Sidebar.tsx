@@ -100,9 +100,9 @@ export function Sidebar({
   };
 
   return (
-    <div className={cn('w-[300px] min-w-[280px] border-r border-[var(--sidebar-border)] flex flex-col bg-[var(--sidebar)] overflow-hidden max-sm:w-[260px] max-sm:min-w-[240px]', className)}>
+    <div className={cn('w-[300px] min-w-[280px] border-r border-[var(--sidebar-border)] flex flex-col bg-[var(--sidebar)] text-[var(--sidebar-foreground)] overflow-hidden max-sm:w-[260px] max-sm:min-w-[240px] transition-colors', className)}>
       <div className="px-3.5 pt-3.5 pb-2.5 border-b border-[var(--sidebar-border)]">
-        <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--muted)] px-3 py-3 shadow-xs">
           <div className="flex items-center gap-3">
             <Avatar className="w-10 h-10 rounded-xl shrink-0">
               {accountAvatar ? <img src={accountAvatar} alt={resolvedAccountLabel} className="w-full h-full object-cover rounded-xl" /> : null}
@@ -112,13 +112,13 @@ export function Sidebar({
             </Avatar>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 min-w-0">
-                <div className="text-sm font-semibold text-[#eef2ff] truncate">
+                <div className="text-sm font-semibold text-[var(--foreground)] truncate">
                   {resolvedAccountLabel}
                 </div>
                 <button
                   type="button"
                   onClick={() => setRenameOpen(true)}
-                  className="shrink-0 text-[11px] text-muted-foreground hover:text-[#9fc0ff] transition-colors"
+                  className="shrink-0 text-[11px] text-muted-foreground hover:text-primary transition-colors"
                   title="Đổi tên account"
                 >
                   ✎
@@ -127,14 +127,14 @@ export function Sidebar({
                   <button
                     type="button"
                     onClick={() => onReconnectAccount(workspaceAccountId)}
-                    className="shrink-0 text-[11px] text-amber-400 hover:text-amber-300 transition-colors ml-auto flex items-center gap-0.5 bg-amber-400/10 px-1.5 py-0.5 rounded"
+                    className="shrink-0 text-[11px] text-amber-500 hover:text-amber-400 transition-colors ml-auto flex items-center gap-0.5 bg-amber-500/10 px-1.5 py-0.5 rounded font-medium"
                     title="Kết nối lại tài khoản Zalo"
                   >
                     ⚡ Reconnect
                   </button>
                 )}
               </div>
-              <div className="text-[11px] text-muted-foreground truncate mt-1">
+              <div className="text-[11px] text-muted-foreground truncate mt-0.5">
                 {resolvedAccountSubLabel}
               </div>
             </div>
@@ -194,8 +194,8 @@ export function Sidebar({
                   className={cn(
                     'flex-1 flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-colors select-none text-left',
                     selectedTagId
-                      ? 'bg-[#4f7aff]/15 border-[#4f7aff]/30 text-[#dde8ff]'
-                      : 'bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10 hover:text-white'
+                      ? 'bg-blue-500/15 border-blue-500/40 text-blue-600 dark:text-blue-300 font-semibold'
+                      : 'bg-[var(--muted)] border-[var(--border)] text-muted-foreground hover:text-[var(--foreground)]'
                   )}
                 >
                   <div className="flex items-center gap-1.5 truncate">
@@ -274,7 +274,7 @@ export function Sidebar({
               <div
                 key={entry.id}
                 onClick={() => onSelectConversation(entry.id)}
-                className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${isActive ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+                className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${isActive ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
               >
                 <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
                   {resolvedAvatar ? <img src={resolvedAvatar} alt={resolvedTitle} className="w-full h-full object-cover rounded-full" /> : null}
@@ -283,15 +283,15 @@ export function Sidebar({
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-sm truncate ${showUnread ? 'font-bold text-white' : 'font-semibold text-[#eee]'}`}>{resolvedTitle}{entry.type === 'group' ? ' (Nhóm)' : ''}</span>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className={`text-sm truncate ${showUnread ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]/90'}`}>{resolvedTitle}{entry.type === 'group' ? ' (Nhóm)' : ''}</span>
                     {showUnread && (
-                      <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-[#4f7aff] rounded-full leading-none">
+                      <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-blue-600 rounded-full leading-none">
                         {entry.unreadCount > 99 ? '99+' : entry.unreadCount}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-[#666] mt-0.5 truncate">
+                  <div className="text-xs text-muted-foreground mt-0.5 truncate">
                     {entry.lastDirection === 'outgoing' ? 'Bạn: ' : ''}
                     {entry.lastMessageKind !== 'text' ? `[${entry.lastMessageKind}] ` : ''}
                     {entry.lastMessageText}

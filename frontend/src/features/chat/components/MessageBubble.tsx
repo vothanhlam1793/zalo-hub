@@ -147,27 +147,27 @@ export const MessageBubble = memo(function MessageBubble({
     <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-0.5'}`}>
       <div className="max-w-[85%] sm:max-w-[500px]">
         {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
-          <div className="text-[11px] text-[#7fa8ff] font-medium mb-1 pl-1.5">{msg.senderName}</div>
+          <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-1.5">{msg.senderName}</div>
         )}
-        <div className={`group relative px-3.5 py-2.5 text-[14px] leading-relaxed break-words shadow-sm ${roundedClass} ${
+        <div className={`group relative px-3.5 py-2.5 text-[14px] leading-relaxed break-words shadow-xs ${roundedClass} ${
           isOutgoing
-            ? 'bg-[rgba(79,122,255,0.20)] border border-[rgba(79,122,255,0.30)] text-[#e8f0fe]'
-            : 'bg-[rgba(255,255,255,0.06)] border border-white/8 text-[#e2e8f0]'
+            ? 'bg-[var(--bubble-out)] border border-[var(--bubble-out-border)] text-blue-950 dark:text-blue-50 font-normal'
+            : 'bg-[var(--bubble-in)] border border-[var(--bubble-in-border)] text-[var(--foreground)]'
         }`}>
           {msg.quote && (
             <div className={`mb-2 rounded-xl border px-3 py-2 text-xs ${
               isOutgoing
-                ? 'border-[rgba(159,192,255,0.25)] bg-[rgba(7,16,34,0.20)] text-[#d7e4ff]'
-                : 'border-white/10 bg-black/20 text-[#d7dbe5]'
+                ? 'border-blue-300/40 bg-blue-100/50 dark:bg-black/20 text-blue-900 dark:text-blue-100'
+                : 'border-[var(--border)] bg-[var(--muted)] text-muted-foreground'
             }`}>
               <div className="font-semibold truncate">{quoteLabel}</div>
-              <div className="mt-0.5 truncate opacity-80">{quoteText}</div>
+              <div className="mt-0.5 truncate opacity-85">{quoteText}</div>
             </div>
           )}
 
           {shouldRenderImage ? (
             <button type="button" className="cursor-pointer block w-full text-left overflow-hidden rounded-xl" onClick={() => onOpenLightbox?.(msg.id)} title="Xem ảnh lớn">
-              <div className="min-h-[140px] max-w-[280px] bg-black/20 rounded-xl overflow-hidden flex items-center justify-center">
+              <div className="min-h-[140px] max-w-[280px] bg-black/5 dark:bg-black/20 rounded-xl overflow-hidden flex items-center justify-center">
                 <img src={imageUrl} alt={msg.text || 'Hình ảnh'} className="max-w-full max-h-[320px] w-auto h-auto object-cover rounded-xl block transition-transform hover:scale-[1.02]" loading="lazy" />
               </div>
             </button>
@@ -177,15 +177,15 @@ export const MessageBubble = memo(function MessageBubble({
                 <source src={att.url} type={att.mimeType ?? 'video/mp4'} />
               </video>
               <div className="flex gap-3 flex-wrap mt-1">
-                <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-[#9fc0ff] no-underline hover:underline">Mở video</a>
-                <a href={att.url} download={att.fileName ?? 'video'} className="text-xs text-[#9fc0ff] no-underline hover:underline">Tải xuống</a>
+                <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline">Mở video</a>
+                <a href={att.url} download={att.fileName ?? 'video'} className="text-xs text-blue-500 hover:underline">Tải xuống</a>
               </div>
             </div>
           ) : shouldRenderFile && att ? (
-            <div className="flex items-start gap-2.5 p-2.5 bg-black/20 rounded-xl border border-white/8">
+            <div className="flex items-start gap-2.5 p-2.5 bg-[var(--muted)]/60 rounded-xl border border-[var(--border)]">
               <span className="text-[26px] leading-none shrink-0">{fileIcon}</span>
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] text-[#eee] font-medium truncate">
+                <div className="text-[13px] text-[var(--foreground)] font-medium truncate">
                   {hasAttachmentUrl ? (
                     <a href={att.url} target="_blank" rel="noreferrer" className="text-inherit no-underline hover:underline">
                       {fallbackFileLabel}
@@ -196,7 +196,7 @@ export const MessageBubble = memo(function MessageBubble({
                 </div>
                 <div className="flex items-center gap-2 mt-1">
                   {att.mimeType && (
-                    <span className="text-[10px] font-bold text-[#8cb1ff] bg-[rgba(79,122,255,0.15)] border border-[rgba(79,122,255,0.22)] rounded-full px-1.5 py-0.2">
+                    <span className="text-[10px] font-bold text-blue-500 bg-blue-500/10 border border-blue-500/20 rounded-full px-1.5 py-0.2">
                       {att.mimeType.split('/').pop()?.toUpperCase()}
                     </span>
                   )}
@@ -204,8 +204,8 @@ export const MessageBubble = memo(function MessageBubble({
                 </div>
                 {hasAttachmentUrl && (
                   <div className="flex gap-3 flex-wrap mt-1.5">
-                    <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-[#9fc0ff] no-underline hover:underline">Xem file</a>
-                    <a href={att.url} download={att.fileName ?? 'download'} className="text-xs text-[#9fc0ff] no-underline hover:underline">Tải xuống</a>
+                    <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 no-underline hover:underline font-medium">Xem file</a>
+                    <a href={att.url} download={att.fileName ?? 'download'} className="text-xs text-blue-500 no-underline hover:underline font-medium">Tải xuống</a>
                   </div>
                 )}
               </div>
@@ -213,23 +213,17 @@ export const MessageBubble = memo(function MessageBubble({
           ) : null}
 
           {showText && (
-            <div className={`whitespace-pre-wrap ${att ? 'mt-2' : ''}`}>{msg.text}</div>
-          )}
-
-          {msg.reactions && msg.reactions.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {msg.reactions.map((reaction) => (
-                <span key={`${reaction.emoji}-${reaction.count}`} className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-[#eef2ff]">
-                  <span>{reaction.emoji}</span>
-                  <span className="opacity-80">{reaction.count}</span>
-                </span>
-              ))}
+            <div className={`whitespace-pre-wrap select-text ${shouldRenderImage || shouldRenderVideo || shouldRenderFile ? 'mt-2' : ''}`}>
+              {msg.text}
             </div>
           )}
 
-          <div className="text-[10px] text-[rgba(255,255,255,0.35)] mt-1 flex items-center justify-end gap-1 select-none">
-            <span>{formatTime(msg.timestamp)}</span>
+          <div className="flex items-center justify-end gap-1.5 mt-1 select-none">
+            <span className="text-[10px] text-muted-foreground/70 font-medium">
+              {formatTime(msg.timestamp)}
+            </span>
           </div>
+
           {delivery}
           {reactionDock}
         </div>

@@ -98,10 +98,10 @@ export function ConversationDetailsPanel({
   };
 
   return (
-    <aside className="w-[340px] max-w-[38vw] min-w-[300px] border-l border-[var(--border)] bg-[rgba(9,12,18,0.96)] flex flex-col max-lg:w-[320px] max-md:absolute max-md:right-0 max-md:top-0 max-md:bottom-0 max-md:z-20 max-md:shadow-[-12px_0_40px_rgba(0,0,0,0.35)]">
+    <aside className="w-[340px] max-w-[38vw] min-w-[300px] border-l border-[var(--border)] bg-[var(--card)] flex flex-col max-lg:w-[320px] max-md:absolute max-md:right-0 max-md:top-0 max-md:bottom-0 max-md:z-20 max-md:shadow-[-12px_0_40px_rgba(0,0,0,0.2)] transition-colors">
       <div className="px-4 py-3.5 border-b border-[var(--border)] flex items-center justify-between gap-3 shrink-0">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-[#eef2ff] truncate">Thông tin hội thoại</div>
+          <div className="text-sm font-semibold text-[var(--foreground)] truncate">Thông tin hội thoại</div>
           <div className="text-xs text-muted-foreground truncate">{isGroup ? 'Nhóm Zalo' : 'Khách hàng Zalo'}</div>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onClose} className="h-8 px-2 text-xs">
@@ -112,14 +112,14 @@ export function ConversationDetailsPanel({
       <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
         {/* Profile Card */}
         <div className="flex flex-col items-center text-center gap-3">
-          <Avatar className="w-16 h-16 rounded-2xl">
+          <Avatar className="w-16 h-16 rounded-2xl ring-2 ring-[var(--border)]">
             {avatar ? <img src={avatar} alt={title} className="w-full h-full object-cover rounded-2xl" /> : null}
             <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#08101d] text-xl font-extrabold rounded-2xl">
               {getInitial(title)}
             </AvatarFallback>
           </Avatar>
           <div>
-            <div className="text-base font-bold text-[#f3f6ff] break-words">{title}</div>
+            <div className="text-base font-bold text-[var(--foreground)] break-words">{title}</div>
             <div className="text-xs text-muted-foreground mt-0.5">{conversation.id}</div>
           </div>
         </div>
@@ -127,13 +127,13 @@ export function ConversationDetailsPanel({
         <Separator />
 
         {/* CUSTOMER NOTES SECTION (Mini-CRM) */}
-        <div className="space-y-2.5 p-3 rounded-xl bg-amber-500/5 border border-amber-500/20">
+        <div className="space-y-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30">
           <div className="flex items-center justify-between">
-            <div className="text-xs font-semibold text-amber-300 flex items-center gap-1.5">
+            <div className="text-xs font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
               <span>📝 Ghi chú khách hàng</span>
             </div>
             {conversation.notesUpdatedAt && (
-              <span className="text-[10px] text-amber-200/60">
+              <span className="text-[10px] text-amber-700/70 dark:text-amber-300/60 font-medium">
                 {new Date(conversation.notesUpdatedAt).toLocaleDateString('vi-VN', {
                   hour: '2-digit',
                   minute: '2-digit',
@@ -149,7 +149,7 @@ export function ConversationDetailsPanel({
             onChange={(e) => setNoteText(e.target.value)}
             placeholder="Ghi chú về khách hàng (yêu cầu, địa chỉ, ngân sách, nhắc nhở...)"
             rows={3}
-            className="w-full text-xs text-[#f1f5f9] bg-black/40 border border-amber-500/30 rounded-lg p-2.5 focus:outline-none focus:border-amber-400 placeholder:text-muted-foreground/60 resize-y leading-relaxed"
+            className="w-full text-xs text-[var(--foreground)] bg-[var(--background)] border border-amber-500/30 rounded-lg p-2.5 focus:outline-none focus:border-amber-500 placeholder:text-muted-foreground resize-y leading-relaxed"
           />
 
           <div className="flex items-center justify-between pt-1">
@@ -162,7 +162,7 @@ export function ConversationDetailsPanel({
               variant="secondary"
               onClick={handleSaveNote}
               disabled={isSavingNote || noteText === (conversation.notes ?? '')}
-              className="h-7 text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40"
+              className="h-7 text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-700 dark:text-amber-200 border border-amber-500/40 font-semibold"
             >
               {isSavingNote ? 'Đang lưu...' : 'Lưu ghi chú'}
             </Button>
@@ -173,7 +173,7 @@ export function ConversationDetailsPanel({
 
         {/* TAGS & LABELS SECTION */}
         <div className="space-y-3">
-          <div className="text-sm font-semibold text-[#eef2ff] flex items-center justify-between">
+          <div className="text-sm font-semibold text-[var(--foreground)] flex items-center justify-between">
             <span className="flex items-center gap-1.5">
               <span>🏷️ Nhãn hội thoại</span>
             </span>
@@ -182,7 +182,7 @@ export function ConversationDetailsPanel({
                 <button
                   type="button"
                   onClick={onSyncTags}
-                  className="text-[11px] text-blue-400 hover:text-blue-300 transition-colors p-1"
+                  className="text-[11px] text-blue-500 hover:text-blue-600 transition-colors p-1 font-medium"
                   title="Đồng bộ nhãn từ Zalo"
                 >
                   🔄 Zalo
@@ -191,7 +191,7 @@ export function ConversationDetailsPanel({
               <button
                 type="button"
                 onClick={() => setIsManagingTags(!isManagingTags)}
-                className="text-[11px] text-[#7fa8ff] hover:text-[#9dbdff] transition-colors p-1 font-medium"
+                className="text-[11px] text-blue-500 hover:text-blue-600 transition-colors p-1 font-medium"
               >
                 {isManagingTags ? 'Xong' : 'Quản lý'}
               </button>
