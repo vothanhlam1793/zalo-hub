@@ -104,6 +104,7 @@ export interface TagItem {
   source: 'zalo' | 'system' | 'ai';
   zaloLabelId?: number;
   accountId?: string;
+  usageCount?: number;
 }
 
 export interface ConversationSummary {

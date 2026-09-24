@@ -7,6 +7,7 @@ import { bff } from '@/bff-api';
 import { useAuthStore } from '@/stores/auth-store';
 import { MyAccountsTab } from '@/features/accounts/components/MyAccountsTab';
 import { AdminUsersTab } from './AdminUsersTab';
+import { AdminTagsTab } from './AdminTagsTab';
 import DifyBotsTab from './DifyBotsTab';
 import type { AccountSummary } from '@/types';
 
@@ -15,7 +16,7 @@ interface AdminUser {
   memberships: Array<{ account_id: string; role: string }>;
 }
 
-type TabKey = 'myaccounts' | 'users' | 'allaccounts' | 'difybots';
+type TabKey = 'myaccounts' | 'tags' | 'users' | 'allaccounts' | 'difybots';
 
 export default function AdminPage() {
   const { user, logout } = useAuthStore();
@@ -35,10 +36,11 @@ export default function AdminPage() {
     } catch { /* ignore */ }
   };
 
-  useEffect(() => { if (isSuperAdmin) loadData(); }, [isSuperAdmin]);
+  useEffect(() => { loadData(); }, [isSuperAdmin]);
 
   const tabs: Array<{ key: TabKey; label: string; icon: string }> = [
     { key: 'myaccounts', label: 'Tài khoản của tôi', icon: '📱' },
+    { key: 'tags', label: 'Quản lý Nhãn (Tags)', icon: '🏷️' },
   ];
 
   if (isSuperAdmin) {
@@ -96,6 +98,9 @@ export default function AdminPage() {
         <div className="flex-1 p-6 overflow-y-auto">
           {activeTab === 'myaccounts' && (
             <MyAccountsTab setError={setError} setStatus={setStatus} />
+          )}
+          {activeTab === 'tags' && (
+            <AdminTagsTab accounts={accounts} setError={setError} setStatus={setStatus} />
           )}
           {activeTab === 'users' && isSuperAdmin && (
             <AdminUsersTab users={users} accounts={accounts} onRefresh={loadData} setError={setError} setStatus={setStatus} />

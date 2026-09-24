@@ -141,6 +141,7 @@ export interface GoldTagItem {
   source: GoldTagSource;
   zaloLabelId?: number;
   accountId?: string;
+  usageCount?: number;
 }
 
 export interface GoldState {

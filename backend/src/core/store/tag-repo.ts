@@ -21,13 +21,19 @@ export class GoldTagRepo {
   }
 
   async listTags(accountId?: string): Promise<GoldTagItem[]> {
-    let query = this.knex('tags').select('*').orderBy('name', 'asc');
+    let query = this.knex('tags')
+      .leftJoin('conversation_tags', 'tags.id', 'conversation_tags.tag_id')
+      .select('tags.*')
+      .count('conversation_tags.conversation_id as usage_count')
+      .groupBy('tags.id')
+      .orderBy('tags.name', 'asc');
+
     if (accountId) {
       query = query.where((qb) => {
-        qb.whereNull('account_id').orWhere('account_id', accountId);
+        qb.whereNull('tags.account_id').orWhere('tags.account_id', accountId);
       });
     }
-    const rows: RawTagRow[] = await query;
+    const rows = (await query) as unknown as (RawTagRow & { usage_count?: string | number })[];
     return rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -36,6 +42,7 @@ export class GoldTagRepo {
       source: r.source,
       zaloLabelId: r.zalo_label_id ?? undefined,
       accountId: r.account_id ?? undefined,
+      usageCount: Number(r.usage_count || 0),
     }));
   }
 
