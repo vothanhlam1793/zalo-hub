@@ -118,6 +118,7 @@ export interface ConversationSummary {
   lastMessageKind: MessageKind;
   lastMessageTimestamp: string;
   lastDirection: 'incoming' | 'outgoing';
+  lastMessageSenderName?: string;
   messageCount: number;
   unreadCount: number;
   lastReadAt?: string;
@@ -139,12 +140,20 @@ export interface Contact {
   avatar?: string;
 }
 
+export interface GroupMember {
+  userId: string;
+  displayName?: string;
+  avatar?: string;
+  role?: string;
+}
+
 export interface Group {
   id: string;
   groupId: string;
   displayName: string;
   avatar?: string;
   memberCount?: number;
+  members?: GroupMember[];
 }
 
 export interface AccountSummary {

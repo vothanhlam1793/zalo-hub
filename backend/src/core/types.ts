@@ -122,6 +122,7 @@ export interface GoldConversationSummary {
   lastMessageKind: GoldMessageKind;
   lastMessageTimestamp: string;
   lastDirection: 'incoming' | 'outgoing';
+  lastMessageSenderName?: string;
   messageCount: number;
   unreadCount: number;
   lastReadAt?: string;

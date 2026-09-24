@@ -84,11 +84,12 @@ export class GoldConversationRepo {
         last_message_text,
         last_message_kind,
         last_direction,
+        last_message_sender_name,
         last_message_timestamp,
         message_count,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, friend_id) DO UPDATE SET
         id = EXCLUDED.id,
         thread_id = EXCLUDED.thread_id,
@@ -99,6 +100,7 @@ export class GoldConversationRepo {
         last_message_text = EXCLUDED.last_message_text,
         last_message_kind = EXCLUDED.last_message_kind,
         last_direction = EXCLUDED.last_direction,
+        last_message_sender_name = EXCLUDED.last_message_sender_name,
         last_message_timestamp = EXCLUDED.last_message_timestamp,
         message_count = EXCLUDED.message_count,
         updated_at = EXCLUDED.updated_at
@@ -114,6 +116,7 @@ export class GoldConversationRepo {
       lastMessage.text,
       lastMessage.kind,
       lastMessage.direction,
+      lastMessage.senderName ?? null,
       lastMessage.timestamp,
       messages.length,
       createdAt,
@@ -132,7 +135,7 @@ export class GoldConversationRepo {
     }
 
     const rows = (await this.knex.raw(`
-      SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_timestamp, c.message_count
+      SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count
            , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
            , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
            , c.notes, c.notes_updated_by, c.notes_updated_at
@@ -699,7 +702,7 @@ export class GoldConversationRepo {
     const rows = (await this.knex.raw(`
       SELECT c.id, c.thread_id, c.type, c.title, c.avatar, c.friend_id,
              c.display_name_snapshot, c.last_message_text, c.last_message_kind,
-             c.last_direction, c.last_message_timestamp, c.message_count,
+             c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count,
              c.labels_json, c.notes, c.notes_updated_by, c.notes_updated_at,
              COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at,
              (SELECT COUNT(*)::int FROM messages mr
@@ -725,6 +728,7 @@ export class GoldConversationRepo {
       last_message_text: string;
       last_message_kind: string;
       last_direction: 'incoming' | 'outgoing';
+      last_message_sender_name: string | null;
       last_message_timestamp: string;
       message_count: number;
       last_read_at: string;
@@ -760,11 +764,12 @@ export class GoldConversationRepo {
       avatar: row.avatar ?? (row.type === 'group'
         ? (await this.getGroupAvatarFn(threadOrFriend, resolvedAccountId))
         : (await this.getFriendAvatarFn(row.friend_id, resolvedAccountId))),
-      lastMessageText: row.last_message_text,
-      lastMessageKind: toMessageKind(row.last_message_kind),
-      lastMessageTimestamp: row.last_message_timestamp,
-      lastDirection: row.last_direction,
-      messageCount: row.message_count,
+        lastMessageText: row.last_message_text,
+        lastMessageKind: toMessageKind(row.last_message_kind),
+        lastMessageTimestamp: row.last_message_timestamp,
+        lastDirection: row.last_direction,
+        lastMessageSenderName: row.last_message_sender_name || undefined,
+        messageCount: row.message_count,
       unreadCount: row.unread_count,
       lastReadAt: row.last_read_at,
       labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,

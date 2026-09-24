@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useMemo, useCallback, useLayoutEffect } fr
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { GroupAvatar } from '@/components/GroupAvatar';
 import { formatSize, getInitial, isImageAttachment } from '@/utils';
 import { MessageBubble, type MessageGroupItem } from './MessageBubble';
 import Lightbox, { type LightboxImage } from './Lightbox';
@@ -292,12 +293,20 @@ export function ChatPanel({
           {/* Header */}
           <div className="shrink-0 px-5 py-3 border-b border-[var(--border)] flex items-center gap-3 bg-[var(--card)] shadow-2xs z-10 transition-colors">
             {headerLeading}
-            <Avatar className="w-10 h-10 text-sm shrink-0 ring-1 ring-[var(--border)]">
-              {activeAvatar ? <img src={activeAvatar} alt={activeName} className="w-full h-full object-cover rounded-full" /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] font-bold">
-                {getInitial(activeName)}
-              </AvatarFallback>
-            </Avatar>
+            {isGroupConversation ? (
+              <GroupAvatar
+                avatar={activeAvatar}
+                title={activeName}
+                size="md"
+              />
+            ) : (
+              <Avatar className="w-10 h-10 text-sm shrink-0 ring-1 ring-[var(--border)]">
+                {activeAvatar ? <img src={activeAvatar} alt={activeName} className="w-full h-full object-cover rounded-full" /> : null}
+                <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] font-bold">
+                  {getInitial(activeName)}
+                </AvatarFallback>
+              </Avatar>
+            )}
             <button
               type="button"
               onClick={onToggleDetails}

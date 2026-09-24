@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useEffect, useState } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { GroupAvatar } from '@/components/GroupAvatar';
 import { cn } from '@/lib/utils';
 import { getAccountDisplayName, getContactDisplayName, getInitial, directConversationId, groupConversationId, formatConversationTitle } from '@/utils';
 import type { Contact, ConversationSummary, Group, TagItem } from '@/types';
@@ -271,18 +272,37 @@ export function Sidebar({
             const isActive = activeConversationId === entry.id;
             const showUnread = !isActive && (entry.unreadCount ?? 0) > 0;
 
+            // Compute sender prefix for last message
+            const senderPrefix = (() => {
+              if (entry.lastDirection === 'outgoing') return 'Bạn: ';
+              if (entry.type === 'group' && entry.lastMessageSenderName) {
+                return `${entry.lastMessageSenderName}: `;
+              }
+              return '';
+            })();
+
             return (
               <div
                 key={entry.id}
                 onClick={() => onSelectConversation(entry.id)}
                 className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${isActive ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
               >
-                <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
-                  {resolvedAvatar ? <img src={resolvedAvatar} alt={resolvedTitle} className="w-full h-full object-cover rounded-full" /> : null}
-                  <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
-                    {getInitial(resolvedTitle)}
-                  </AvatarFallback>
-                </Avatar>
+                {entry.type === 'group' ? (
+                  <GroupAvatar
+                    avatar={resolvedAvatar}
+                    title={resolvedTitle}
+                    members={resolvedGroup?.members}
+                    memberCount={resolvedGroup?.memberCount}
+                    size="md"
+                  />
+                ) : (
+                  <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
+                    {resolvedAvatar ? <img src={resolvedAvatar} alt={resolvedTitle} className="w-full h-full object-cover rounded-full" /> : null}
+                    <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
+                      {getInitial(resolvedTitle)}
+                    </AvatarFallback>
+                  </Avatar>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
                     <span className={`text-sm truncate ${showUnread ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]/90'}`}>{resolvedTitle}{entry.type === 'group' && !resolvedTitle.includes('Nhóm') ? ' (Nhóm)' : ''}</span>
@@ -293,7 +313,7 @@ export function Sidebar({
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5 truncate">
-                    {entry.lastDirection === 'outgoing' ? 'Bạn: ' : ''}
+                    <span className={senderPrefix ? 'font-medium text-[var(--foreground)]/80' : ''}>{senderPrefix}</span>
                     {entry.lastMessageKind !== 'text' ? `[${entry.lastMessageKind}] ` : ''}
                     {entry.lastMessageText}
                   </div>
@@ -359,12 +379,13 @@ export function Sidebar({
             onClick={() => onOpenGroupConversation(entry)}
             className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${activeConversationId === groupConversationId(entry.groupId) ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
           >
-            <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
-              {entry.avatar ? <img src={entry.avatar} alt={entry.displayName} className="w-full h-full object-cover rounded-full" /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
-                {getInitial(entry.displayName)}
-              </AvatarFallback>
-            </Avatar>
+            <GroupAvatar
+              avatar={entry.avatar}
+              title={entry.displayName}
+              members={entry.members}
+              memberCount={entry.memberCount}
+              size="md"
+            />
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-[var(--foreground)] truncate">{entry.displayName}</div>
               <div className="text-xs text-muted-foreground mt-0.5 truncate">{entry.memberCount ? `${entry.memberCount} thành viên` : 'Nhấn để mở nhóm chat'}</div>

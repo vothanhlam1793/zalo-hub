@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { GroupAvatar } from '@/components/GroupAvatar';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cleanTechnicalId, formatConversationTitle, getAccountDisplayName, getContactDisplayName, getInitial } from '@/utils';
@@ -114,17 +115,27 @@ export function ConversationDetailsPanel({
       <div className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
         {/* Profile Card */}
         <div className="flex flex-col items-center text-center gap-3">
-          <Avatar className="w-16 h-16 rounded-2xl ring-2 ring-[var(--border)] shadow-xs">
-            {avatar ? <img src={avatar} alt={title} className="w-full h-full object-cover rounded-2xl" /> : null}
-            <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#08101d] text-xl font-extrabold rounded-2xl">
-              {getInitial(title)}
-            </AvatarFallback>
-          </Avatar>
+          {isGroup ? (
+            <GroupAvatar
+              avatar={avatar}
+              title={title}
+              members={group?.members}
+              memberCount={group?.memberCount}
+              size="xl"
+            />
+          ) : (
+            <Avatar className="w-16 h-16 rounded-2xl ring-2 ring-[var(--border)] shadow-xs">
+              {avatar ? <img src={avatar} alt={title} className="w-full h-full object-cover rounded-2xl" /> : null}
+              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#08101d] text-xl font-extrabold rounded-2xl">
+                {getInitial(title)}
+              </AvatarFallback>
+            </Avatar>
+          )}
           <div className="space-y-1.5">
             <div className="text-base font-bold text-[var(--foreground)] break-words">{title}</div>
             <div className="flex items-center justify-center gap-1.5 flex-wrap">
               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                {isGroup ? '👥 Nhóm Zalo' : '👤 Khách Zalo'}
+                {isGroup ? `👥 Nhóm Zalo ${group?.memberCount ? `(${group.memberCount} thành viên)` : ''}` : '👤 Khách Zalo'}
               </span>
               {contact?.phoneNumber && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
