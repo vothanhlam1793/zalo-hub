@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { bff, type AccountStatusSummary } from '@/bff-api';
+import { api } from '@/api';
 import { useWebSocket } from '@/useWebSocket';
 import { directConversationId, formatConversationSubtitle, formatConversationTitle, getContactDisplayName, groupConversationId } from '@/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { notificationService } from '@/features/notifications/notification-service';
 import type {
   AccountSummary,
   Contact,
@@ -139,6 +141,35 @@ export function useDashboardState() {
     onMessage: ({ accountId, message }: WsConversationMessagePayload) => {
       chat.updateConversationFromWs(accountId, message);
       messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
+
+      // Realtime Notification & Audio Chime
+      if (message.direction === 'incoming') {
+        const convs = chat.getAccountConversations(accountId);
+        const targetConv = convs.find((c) => c.id === message.conversationId);
+        const isMuted = targetConv?.isMuted === true;
+        const isGroup = message.conversationType === 'group' || targetConv?.type === 'group';
+        const settings = notificationService.getSettings();
+
+        // Check if muted or if group notifications are disabled
+        if (!isMuted && (!isGroup || settings.notifyGroupMessages)) {
+          // Play chime sound
+          notificationService.playChime();
+
+          // Show desktop notification and flash tab
+          const senderTitle = message.senderName || targetConv?.title || 'Tin nhắn mới';
+          const bodyText = message.kind === 'text' ? message.text : `[${message.kind}] ${message.text || ''}`;
+          
+          notificationService.showDesktopNotification(
+            senderTitle,
+            bodyText,
+            targetConv?.avatar || message.senderAvatar,
+            () => {
+              onSelectConversation(message.conversationId);
+            }
+          );
+          notificationService.startTabFlashing(`${senderTitle}: ${bodyText}`);
+        }
+      }
     },
     onSyncStatus: ({ accountId, status: syncStatus, requ18Received, historySynced, historyMsgs }) => {
       if (accountId !== resolveWorkspaceId()) return;
@@ -428,6 +459,30 @@ export function useDashboardState() {
       if (active()) composer.setStatusMsg(`Đã đồng bộ ${res.count} nhãn từ Zalo.`);
     } catch (err) {
       if (active()) composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ nhãn thất bại');
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
+  const onToggleMute = useCallback(async (action: 'mute' | 'unmute') => {
+    const id = resolveWorkspaceId();
+    const convId = chat.activeConversationId;
+    if (!id || !convId) return;
+    const session = chatSession.capture();
+    const key = useChatStore.getState().activeKey;
+    try {
+      const res = await api.setConversationMute(id, convId, action);
+      if (!chatSession.valid(session)) return;
+      const currentConvs = chat.getAccountConversations(id);
+      const updated = currentConvs.map((c) =>
+        c.id === convId ? { ...c, isMuted: res.isMuted, muteUntil: res.muteUntil } : c
+      );
+      chat.replaceAccountConversations(id, updated);
+      if (useChatStore.getState().activeKey === key) {
+        composer.setStatusMsg(action === 'mute' ? 'Đã tắt thông báo cuộc trò chuyện này.' : 'Đã bật lại thông báo.');
+      }
+    } catch (err) {
+      if (chatSession.valid(session) && useChatStore.getState().activeKey === key) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Thay đổi trạng thái thông báo thất bại');
+      }
     }
   }, [resolveWorkspaceId, chat, composer]);
 
@@ -734,5 +789,6 @@ export function useDashboardState() {
     onCreateTag,
     onDeleteTag,
     onUpdateNotes,
+    onToggleMute,
   };
 }

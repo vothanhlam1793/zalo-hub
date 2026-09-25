@@ -307,9 +307,12 @@ export function Sidebar({
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
-                    <span className={`text-sm truncate ${showUnread ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]/90'}`}>{resolvedTitle}{entry.type === 'group' && !resolvedTitle.includes('Nhóm') ? ' (Nhóm)' : ''}</span>
+                    <span className={`text-sm truncate flex items-center gap-1.5 ${showUnread ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]/90'}`}>
+                      <span className="truncate">{resolvedTitle}{entry.type === 'group' && !resolvedTitle.includes('Nhóm') ? ' (Nhóm)' : ''}</span>
+                      {entry.isMuted && <span className="text-xs text-muted-foreground shrink-0" title="Đã tắt thông báo">🔕</span>}
+                    </span>
                     {showUnread && (
-                      <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-blue-600 rounded-full leading-none">
+                      <span className={`shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white rounded-full leading-none ${entry.isMuted ? 'bg-slate-400 dark:bg-slate-600' : 'bg-blue-600'}`}>
                         {entry.unreadCount > 99 ? '99+' : entry.unreadCount}
                       </span>
                     )}

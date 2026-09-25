@@ -20,6 +20,7 @@ interface ConversationDetailsPanelProps {
   onDeleteTag?: (tagId: string) => void;
   onSyncTags?: () => void;
   onUpdateNotes?: (notes: string | null) => Promise<void>;
+  onToggleMute?: (action: 'mute' | 'unmute') => Promise<void>;
   onClose: () => void;
 }
 
@@ -62,6 +63,7 @@ export function ConversationDetailsPanel({
   onDeleteTag,
   onSyncTags,
   onUpdateNotes,
+  onToggleMute,
   onClose,
 }: ConversationDetailsPanelProps) {
   const [noteText, setNoteText] = useState('');
@@ -147,6 +149,21 @@ export function ConversationDetailsPanel({
                 </span>
               )}
             </div>
+
+            {/* Notification Mute/Unmute toggle button */}
+            {onToggleMute && (
+              <div className="pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onToggleMute(conversation.isMuted ? 'unmute' : 'mute')}
+                  className={`h-7.5 px-3 text-xs rounded-xl border font-semibold transition-all ${conversation.isMuted ? 'bg-amber-500/15 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25' : 'border-[var(--border)] text-muted-foreground hover:text-foreground'}`}
+                >
+                  {conversation.isMuted ? '🔕 Đang tắt thông báo (Bật lại)' : '🔔 Bật thông báo (Tắt tiếng)'}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 

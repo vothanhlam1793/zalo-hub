@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { getAccountDisplayName, getInitial } from '@/utils';
+import { UserSettingsModal } from './UserSettingsModal';
 import type { AccountSummary, ConversationSummary } from '@/types';
 
 interface MiniSidebarProps {
@@ -16,6 +18,7 @@ interface MiniSidebarProps {
 }
 
 export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, conversations, onSelectAccount, onOpenAdmin }: MiniSidebarProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const visibleAccounts = accounts.filter(a => a.visible !== false);
 
   // Tính tổng unread per account
@@ -102,8 +105,23 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
         </div>
       </div>
 
-      {/* Bottom: Theme toggle & Settings */}
+      {/* Bottom: Theme toggle, Notifications & Settings */}
       <div className="flex flex-col items-center gap-2.5 w-full pt-2 border-t border-[var(--border)]">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setSettingsOpen(true)}
+              className="w-9 h-9 rounded-xl border border-[var(--border)] text-muted-foreground hover:text-foreground hover:bg-[var(--accent)]"
+            >
+              🔔
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">Cài đặt thông báo</TooltipContent>
+        </Tooltip>
+
         <ThemeToggle />
 
         <Tooltip>
@@ -121,6 +139,8 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
           <TooltipContent side="right">Quản trị hệ thống</TooltipContent>
         </Tooltip>
       </div>
+
+      <UserSettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

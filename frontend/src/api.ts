@@ -352,6 +352,24 @@ export const api = {
       body: '{}',
     }),
 
+  // User Settings API
+  getUserSettings: () => req<{ ok: boolean; settings: import('./types').UserSettings }>('/api/user/settings'),
+  updateUserSettings: (settings: Partial<import('./types').UserSettings>) =>
+    req<{ ok: boolean; settings: import('./types').UserSettings }>('/api/user/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+
+  // Mute API
+  setConversationMute: (accountId: string, conversationId: string, action: 'mute' | 'unmute', duration = -1) =>
+    req<{ ok: boolean; conversationId: string; isMuted: boolean; muteUntil: number | null }>(
+      `/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/mute`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ action, duration }),
+      },
+    ),
+
   // Dify Bots
   adminBots: () => req<{ bots: Array<any> }>('/api/admin/bots'),
   adminBotCreate: (data: any) => req<any>('/api/admin/bots', { method: 'POST', body: JSON.stringify(data) }),

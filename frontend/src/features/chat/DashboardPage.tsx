@@ -152,6 +152,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           onDeleteTag={dashboard.onDeleteTag}
           onSyncTags={onSyncTags}
           onUpdateNotes={dashboard.onUpdateNotes}
+          onToggleMute={dashboard.onToggleMute}
           onClose={() => setDetailsOpen(false)}
         />
         </div>
@@ -366,6 +367,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               onDeleteTag={dashboard.onDeleteTag}
               onSyncTags={onSyncTags}
               onUpdateNotes={dashboard.onUpdateNotes}
+              onToggleMute={dashboard.onToggleMute}
               onClose={() => setDetailsOpen(false)}
             />
           </div>

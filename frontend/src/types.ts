@@ -124,10 +124,21 @@ export interface ConversationSummary {
   messageCount: number;
   unreadCount: number;
   lastReadAt?: string;
+  isMuted?: boolean;
+  muteUntil?: number | null;
+  isPinned?: boolean;
   labels?: TagItem[];
   notes?: string;
   notesUpdatedBy?: string;
   notesUpdatedAt?: string;
+}
+
+export interface UserSettings {
+  desktopNotification: boolean;
+  soundEnabled: boolean;
+  soundVolume: number;
+  notifyGroupMessages: boolean;
+  showMessagePreview: boolean;
 }
 
 export interface Contact {
