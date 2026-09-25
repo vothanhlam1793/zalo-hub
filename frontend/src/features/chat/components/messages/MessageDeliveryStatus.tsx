@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Message } from '../../../../types';
 import { canRetry } from '../../model/message-reconciliation';
 
@@ -7,27 +8,71 @@ export interface DeliveryActions {
   onCancelMessage?: (message: Message) => void;
   onRestoreDraft?: (message: Message) => void;
 }
-const labels = {
-  queued: 'Chờ gửi', sending: 'Đang gửi…', sent: 'Đã gửi',
-  failed: 'Gửi chưa thành công', unknown: 'Chưa xác nhận kết quả gửi',
-};
-export function MessageDeliveryStatus({ message, ...actions }: { message: Message } & DeliveryActions) {
-  if (!message.delivery) return null;
-  const actionClass = 'underline underline-offset-2 px-2 py-2 rounded focus-visible:outline focus-visible:outline-2';
-  return <div className="text-xs mt-1 text-slate-300 break-words">
-    <span role="status" aria-live="polite">{message.delivery === 'sent' ? '✓ ' : ''}{labels[message.delivery]}</span>
-    {message.errorText && message.delivery !== 'sent' && <div className="text-amber-200">{message.errorText}</div>}
-    {message.attachmentNeedsReselect && message.delivery === 'failed' && <div>Chọn lại tệp: {message.localFile?.name}</div>}
-    {message.delivery === 'queued' && <button type="button" className={actionClass} onClick={() => actions.onCancelMessage?.(message)}>Hủy trước khi gửi</button>}
-    {(message.delivery === 'unknown' || message.delivery === 'sending') && <button type="button" className={actionClass} onClick={() => actions.onQueryMessage?.(message)}>Kiểm tra trạng thái</button>}
-    {canRetry(message) && (message.attachmentNeedsReselect ? <label className={actionClass}>
-      Chọn lại tệp và thử lại
-      <input type="file" className="block max-w-full text-xs" aria-label="Chọn lại đúng tệp gốc để thử lại" onChange={(e) => {
-        if (e.target.files?.[0]) actions.onRetryMessage?.(message, e.target.files[0]);
-        e.target.value = '';
-      }} />
-    </label> : <button type="button" className={actionClass} onClick={() => actions.onRetryMessage?.(message)}>Thử lại</button>)}
-    {message.delivery === 'failed' && <button type="button" className={actionClass} onClick={() => actions.onRestoreDraft?.(message)}>Khôi phục bản nháp</button>}
-    {message.delivery === 'failed' && <button type="button" className={actionClass} onClick={() => actions.onCancelMessage?.(message)}>Hủy bỏ</button>}
-  </div>;
+
+export function MessageDeliveryIndicator({ message, ...actions }: { message: Message } & DeliveryActions) {
+  const [showErrorPopover, setShowErrorPopover] = useState(false);
+  const delivery = message.delivery;
+  if (!delivery) return null;
+
+  // 1. Sending / Queued: Tròn rỗng (hoặc viền xoay nhẹ)
+  if (delivery === 'queued' || delivery === 'sending') {
+    return (
+      <span
+        className="inline-flex items-center justify-center shrink-0 cursor-pointer"
+        title="Đang gửi tin nhắn..."
+        onClick={() => actions.onQueryMessage?.(message)}
+      >
+        <span className="w-2.5 h-2.5 rounded-full border-[1.5px] border-current border-t-transparent animate-spin opacity-80" />
+      </span>
+    );
+  }
+
+  // 2. Sent: Tròn đặc thành công (nhỏ gọn tinh tế)
+  if (delivery === 'sent') {
+    return (
+      <span
+        className="inline-flex items-center justify-center shrink-0"
+        title="Đã gửi thành công"
+      >
+        <span className="w-2 h-2 rounded-full bg-blue-500/80 dark:bg-blue-400/80" />
+      </span>
+    );
+  }
+
+  // 3. Failed: Tròn đỏ thất bại (bấm để xem lỗi và thử lại)
+  if (delivery === 'failed' || delivery === 'unknown') {
+    const actionClass = 'underline underline-offset-2 px-1.5 py-0.5 rounded text-[11px] hover:bg-red-500/10';
+    return (
+      <div className="relative inline-flex items-center">
+        <button
+          type="button"
+          onClick={() => setShowErrorPopover(!showErrorPopover)}
+          className="w-2.5 h-2.5 rounded-full bg-rose-500 ring-2 ring-rose-500/30 cursor-pointer animate-pulse shrink-0"
+          title="Gửi chưa thành công. Bấm để thử lại"
+        />
+
+        {showErrorPopover && (
+          <div className="absolute bottom-full right-0 mb-1.5 w-48 p-2.5 rounded-xl bg-[var(--card)] border border-[var(--border)] text-[11px] shadow-xl z-30 flex flex-col gap-1.5 text-[var(--foreground)]">
+            <div className="font-semibold text-rose-500">⚠️ Chưa gửi được</div>
+            {message.errorText && <div className="text-muted-foreground text-[10px] leading-tight">{message.errorText}</div>}
+            <div className="flex items-center gap-1.5 mt-1 pt-1 border-t border-[var(--border)]">
+              {canRetry(message) && (
+                <button type="button" className={actionClass} onClick={() => { setShowErrorPopover(false); actions.onRetryMessage?.(message); }}>
+                  Thử lại
+                </button>
+              )}
+              <button type="button" className={actionClass} onClick={() => { setShowErrorPopover(false); actions.onCancelMessage?.(message); }}>
+                Hủy
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return null;
 }
+
+// Giữ export backward compatible nếu có nơi khác import
+export { MessageDeliveryIndicator as MessageDeliveryStatus };

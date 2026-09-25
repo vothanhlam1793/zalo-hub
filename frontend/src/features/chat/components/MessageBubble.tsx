@@ -129,8 +129,10 @@ export const MessageBubble = memo(function MessageBubble({
             <div className="min-h-[120px] min-w-[120px] flex items-center justify-center">
               <img src={stickerUrl} alt="Sticker" className="w-full h-auto block" loading="lazy" />
             </div>
-            <div className="text-[10px] text-[rgba(255,255,255,0.30)] mt-0.5 text-right">{formatTime(msg.timestamp)}</div>
-            {delivery}
+            <div className="flex items-center justify-end gap-1 mt-0.5">
+              <span className="text-[10px] text-[rgba(255,255,255,0.30)]">{formatTime(msg.timestamp)}</span>
+              {isOutgoing && delivery}
+            </div>
             {reactionDock}
           </div>
         </div>
@@ -155,8 +157,10 @@ export const MessageBubble = memo(function MessageBubble({
                 </div>
               ))}
             </div>
-            <div className="text-[10px] text-[rgba(255,255,255,0.35)] mt-2 text-right">{formatTime(msg.timestamp)}</div>
-            {delivery}
+            <div className="flex items-center justify-end gap-1 mt-2">
+              <span className="text-[10px] text-[rgba(255,255,255,0.35)]">{formatTime(msg.timestamp)}</span>
+              {isOutgoing && delivery}
+            </div>
             {reactionDock}
           </div>
         </div>
@@ -252,9 +256,9 @@ export const MessageBubble = memo(function MessageBubble({
             <span className="text-[10px] opacity-60 font-medium">
               {formatTime(msg.timestamp)}
             </span>
+            {isOutgoing && delivery}
           </div>
 
-          {delivery}
           {reactionDock}
         </div>
       </div>
