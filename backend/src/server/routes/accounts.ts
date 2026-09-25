@@ -611,6 +611,64 @@ export function createAccountsRouter(
     })();
   });
 
+  router.post('/:accountId/conversations/:conversationId/mute', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const action = req.body?.action === 'unmute' ? 'unmute' : 'mute';
+      const duration = typeof req.body?.duration === 'number' ? req.body.duration : -1; // -1 = forever
+
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const { type, threadId } = targetRuntime.resolveConversationTarget(conversationId);
+        const api = (targetRuntime as any).state?.session?.api;
+
+        if (api && typeof api.setMute === 'function') {
+          try {
+            await api.setMute({
+              duration: action === 'unmute' ? -1 : duration,
+              action: action === 'unmute' ? 3 : 1, // 1=MUTE, 3=UNMUTE
+            }, threadId, type === 'group' ? 1 : 0);
+          } catch (zaloErr) {
+            // ignore or log
+          }
+        }
+
+        const isMuted = action === 'mute';
+        const muteUntil = isMuted && duration !== -1 ? Date.now() + duration * 1000 : null;
+        await targetRuntime.getStore().conversationRepo.setConversationMuteState(
+          accountId,
+          conversationId,
+          isMuted,
+          muteUntil,
+        );
+
+        broadcast({
+          type: 'conversation_mute_updated',
+          accountId,
+          conversationId,
+          isMuted,
+          muteUntil,
+        });
+
+        // Broadcast updated summaries so sidebar icon updates immediately
+        setImmediate(async () => {
+          try {
+            broadcast({
+              type: 'conversation_summaries',
+              accountId,
+              conversations: await targetRuntime.getConversationSummaries(),
+            });
+          } catch {}
+        });
+
+        res.json({ ok: true, conversationId, isMuted, muteUntil });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat trang thai mute that bai' });
+      }
+    })();
+  });
+
   router.post('/:accountId/conversations/:conversationId/read-state', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();

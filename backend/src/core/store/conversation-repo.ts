@@ -138,6 +138,7 @@ export class GoldConversationRepo {
       SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count
            , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
            , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
+           , c.is_muted, c.mute_until, c.is_pinned
            , c.notes, c.notes_updated_by, c.notes_updated_at
       FROM conversations c
       LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
@@ -145,6 +146,9 @@ export class GoldConversationRepo {
       ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
     `, [resolvedAccountId])).rows as (RawConversationRow & {
       labels_json?: any;
+      is_muted?: boolean;
+      mute_until?: number | string | null;
+      is_pinned?: boolean;
       notes?: string | null;
       notes_updated_by?: string | null;
       notes_updated_at?: string | null;
@@ -248,6 +252,9 @@ export class GoldConversationRepo {
         unreadCount: unreadMap.get(row.id) ?? 0,
         lastReadAt: effectiveLastReadAt,
         labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
+        isMuted: Boolean(row.is_muted),
+        muteUntil: row.mute_until ?? undefined,
+        isPinned: Boolean(row.is_pinned),
         notes: row.notes || undefined,
         notesUpdatedBy: row.notes_updated_by || undefined,
         notesUpdatedAt: row.notes_updated_at || undefined,
@@ -778,6 +785,9 @@ export class GoldConversationRepo {
       last_read_at: string;
       unread_count: number;
       labels_json?: any;
+      is_muted?: boolean;
+      mute_until?: number | string | null;
+      is_pinned?: boolean;
       notes?: string | null;
       notes_updated_by?: string | null;
       notes_updated_at?: string | null;
@@ -842,8 +852,11 @@ export class GoldConversationRepo {
       messageCount: row.message_count,
       unreadCount: row.unread_count,
       lastReadAt: row.last_read_at,
-      labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
-      notes: row.notes || undefined,
+        labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
+        isMuted: Boolean(row.is_muted),
+        muteUntil: row.mute_until ?? undefined,
+        isPinned: Boolean(row.is_pinned),
+        notes: row.notes || undefined,
       notesUpdatedBy: row.notes_updated_by || undefined,
       notesUpdatedAt: row.notes_updated_at || undefined,
     } satisfies GoldConversationSummary;
@@ -870,5 +883,63 @@ export class GoldConversationRepo {
       });
 
     return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);
+  }
+
+  async setConversationMuteState(
+    accountId: string,
+    conversationId: string,
+    isMuted: boolean,
+    muteUntil?: number | string | null,
+  ) {
+    const { type, threadId } = parseConversationId(conversationId);
+    const canonicalConversationId = `${type}:${threadId}`;
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
+
+    await this.knex('conversations')
+      .where({ account_id: resolvedAccountId })
+      .andWhere((qb) => {
+        qb.where('id', canonicalConversationId)
+          .orWhere('thread_id', threadId)
+          .orWhere('friend_id', threadId)
+          .orWhere('friend_id', `group:${threadId}`);
+      })
+      .update({
+        is_muted: isMuted,
+        mute_until: muteUntil !== undefined ? muteUntil : null,
+        updated_at: this.knex.fn.now(),
+      });
+
+    return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);
+  }
+
+  async batchUpdateMuteStates(
+    accountId: string,
+    mutedEntries: Array<{ id: string; duration: number; type: 'direct' | 'group' }>,
+  ) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return;
+
+    await this.knex.transaction(async (trx) => {
+      // First reset muted state
+      await trx('conversations').where('account_id', resolvedAccountId).update({ is_muted: false, mute_until: null });
+
+      for (const entry of mutedEntries) {
+        const threadId = entry.id;
+        const muteUntil = entry.duration === -1 ? null : Date.now() + entry.duration * 1000;
+        await trx('conversations')
+          .where('account_id', resolvedAccountId)
+          .andWhere((qb) => {
+            qb.where('thread_id', threadId)
+              .orWhere('friend_id', threadId)
+              .orWhere('friend_id', `group:${threadId}`)
+              .orWhere('id', `${entry.type}:${threadId}`);
+          })
+          .update({
+            is_muted: true,
+            mute_until: muteUntil,
+          });
+      }
+    });
   }
 }

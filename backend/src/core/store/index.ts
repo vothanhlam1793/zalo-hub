@@ -14,6 +14,7 @@ import { GoldConversationRepo } from './conversation-repo.js';
 import { GoldGroupRepo } from './group-repo.js';
 import { GoldMessageRepo } from './message-repo.js';
 import { GoldTagRepo } from './tag-repo.js';
+import { GoldUserSettingsRepo } from './user-settings-repo.js';
 
 function createKnexConfig(env: string): Knex.Config {
   return {
@@ -35,6 +36,7 @@ export class GoldStore {
   readonly messageRepo: GoldMessageRepo;
   readonly conversationRepo: GoldConversationRepo;
   readonly tagRepo: GoldTagRepo;
+  readonly userSettingsRepo: GoldUserSettingsRepo;
 
   constructor(knex?: Knex) {
     this.knex = knex ?? knexConstructor(createKnexConfig(process.env.NODE_ENV || 'development'));
@@ -66,6 +68,7 @@ export class GoldStore {
 
     this.messageRepo = new GoldMessageRepo(this.knex, resolveAccountId, requireAccountId);
     this.tagRepo = new GoldTagRepo(this.knex);
+    this.userSettingsRepo = new GoldUserSettingsRepo(this.knex);
   }
 
   async init() {

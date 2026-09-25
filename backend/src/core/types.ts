@@ -129,9 +129,24 @@ export interface GoldConversationSummary {
   unreadCount: number;
   lastReadAt?: string;
   labels?: GoldTagItem[];
+  isMuted?: boolean;
+  muteUntil?: number | string | null;
+  isPinned?: boolean;
   notes?: string;
   notesUpdatedBy?: string;
   notesUpdatedAt?: string;
+}
+
+export interface UserNotificationSettings {
+  id?: string;
+  userId: string;
+  desktopNotification: boolean;
+  soundEnabled: boolean;
+  soundVolume: number;
+  notifyGroupMessages: boolean;
+  showMessagePreview: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type GoldTagSource = 'zalo' | 'system' | 'ai';

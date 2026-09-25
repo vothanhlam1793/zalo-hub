@@ -527,10 +527,6 @@ export class GoldRuntime {
     return this.sync.listGroups();
   }
 
-  async syncLabels() {
-    return this.sync.syncLabels();
-  }
-
   async sendText(conversationId: string, text: string, lifecycle?: import('./send-contract.js').SendLifecycle) {
     return this.sender.sendText(conversationId, text, lifecycle);
   }
@@ -581,6 +577,14 @@ export class GoldRuntime {
     this.state.conversations.set(conversationId, messages);
     await this.state.store.updateMessageReactions(this.state.boundAccountId!, targetGlobalMsgId, next);
     return true;
+  }
+
+  async syncLabels() {
+    return this.sync.syncLabels();
+  }
+
+  async syncMuteStates() {
+    return this.sync.syncMuteStates();
   }
 
   async createPoll(groupId: string, question: string, options: string[]) {

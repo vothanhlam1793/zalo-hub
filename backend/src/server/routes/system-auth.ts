@@ -117,5 +117,86 @@ export function createSystemAuthRouter(
     });
   });
 
+  // --- User notification settings ---
+  router.get('/user/settings', requireAuth, async (req, res) => {
+    const userId = (req as any).systemUserId as string;
+    try {
+      const { rows } = await knex.raw('SELECT * FROM user_settings WHERE user_id = ?', [userId]);
+      const row = rows[0];
+      if (!row) {
+        res.json({
+          settings: {
+            userId,
+            desktopNotification: true,
+            soundEnabled: true,
+            soundVolume: 80,
+            notifyGroupMessages: true,
+            showMessagePreview: true,
+          }
+        });
+        return;
+      }
+      res.json({
+        settings: {
+          id: row.id,
+          userId: row.user_id,
+          desktopNotification: Boolean(row.desktop_notification),
+          soundEnabled: Boolean(row.sound_enabled),
+          soundVolume: Number(row.sound_volume ?? 80),
+          notifyGroupMessages: Boolean(row.notify_group_messages),
+          showMessagePreview: Boolean(row.show_message_preview),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Khong the lay cai dat nguoi dung' });
+    }
+  });
+
+  router.put('/user/settings', requireAuth, async (req, res) => {
+    const userId = (req as any).systemUserId as string;
+    const body = req.body || {};
+    try {
+      const { rows: existingRows } = await knex.raw('SELECT id FROM user_settings WHERE user_id = ?', [userId]);
+      const existing = existingRows[0];
+      if (existing) {
+        await knex('user_settings').where('user_id', userId).update({
+          ...(body.desktopNotification !== undefined ? { desktop_notification: Boolean(body.desktopNotification) } : {}),
+          ...(body.soundEnabled !== undefined ? { sound_enabled: Boolean(body.soundEnabled) } : {}),
+          ...(body.soundVolume !== undefined ? { sound_volume: Math.max(0, Math.min(100, Number(body.soundVolume))) } : {}),
+          ...(body.notifyGroupMessages !== undefined ? { notify_group_messages: Boolean(body.notifyGroupMessages) } : {}),
+          ...(body.showMessagePreview !== undefined ? { show_message_preview: Boolean(body.showMessagePreview) } : {}),
+          updated_at: knex.fn.now(),
+        });
+      } else {
+        await knex('user_settings').insert({
+          user_id: userId,
+          desktop_notification: body.desktopNotification !== undefined ? Boolean(body.desktopNotification) : true,
+          sound_enabled: body.soundEnabled !== undefined ? Boolean(body.soundEnabled) : true,
+          sound_volume: body.soundVolume !== undefined ? Number(body.soundVolume) : 80,
+          notify_group_messages: body.notifyGroupMessages !== undefined ? Boolean(body.notifyGroupMessages) : true,
+          show_message_preview: body.showMessagePreview !== undefined ? Boolean(body.showMessagePreview) : true,
+        });
+      }
+      const { rows } = await knex.raw('SELECT * FROM user_settings WHERE user_id = ?', [userId]);
+      const row = rows[0];
+      res.json({
+        ok: true,
+        settings: {
+          id: row.id,
+          userId: row.user_id,
+          desktopNotification: Boolean(row.desktop_notification),
+          soundEnabled: Boolean(row.sound_enabled),
+          soundVolume: Number(row.sound_volume ?? 80),
+          notifyGroupMessages: Boolean(row.notify_group_messages),
+          showMessagePreview: Boolean(row.show_message_preview),
+        }
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Khong the cap nhat cai dat nguoi dung' });
+    }
+  });
+
   return { router, requireAuth, requireSystemRole, requireAccountAccess, requireAccountMaster };
 }

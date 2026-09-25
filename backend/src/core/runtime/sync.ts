@@ -921,4 +921,34 @@ export class GoldSync {
       return await this.state.store.tagRepo.listTags(this.state.boundAccountId);
     }
   }
+
+  async syncMuteStates() {
+    if (!this.state.session) {
+      await this._loginWithStoredCredential?.();
+    }
+    const api = this.state.session?.api as { getMute?: () => Promise<any> } | undefined;
+    if (typeof api?.getMute !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await api.getMute();
+      const chatEntries = Array.isArray(response?.chatEntries) ? response.chatEntries : [];
+      const groupChatEntries = Array.isArray(response?.groupChatEntries) ? response.groupChatEntries : [];
+
+      const mutedList: Array<{ id: string; duration: number; type: 'direct' | 'group' }> = [
+        ...chatEntries.map((c: any) => ({ id: String(c.id), duration: Number(c.duration), type: 'direct' as const })),
+        ...groupChatEntries.map((g: any) => ({ id: String(g.id), duration: Number(g.duration), type: 'group' as const })),
+      ];
+
+      const boundAccId = this.state.boundAccountId || '';
+      await this.state.store.conversationRepo.batchUpdateMuteStates(boundAccId, mutedList);
+      this.state.logger.info('zalo_mute_states_synced', { accountId: boundAccId, count: mutedList.length });
+    } catch (error) {
+      this.state.logger.warn('zalo_mute_states_sync_failed', {
+        accountId: this.state.boundAccountId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }

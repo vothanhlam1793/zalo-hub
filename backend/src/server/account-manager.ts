@@ -355,6 +355,7 @@ export class AccountRuntimeManager {
           await runtime.listFriends().catch(() => undefined);
           await runtime.listGroups().catch(() => undefined);
           await runtime.syncLabels().catch(() => undefined);
+          await runtime.syncMuteStates().catch(() => undefined);
           const summaries = await runtime.getConversationSummaries().catch(() => []);
           this.broadcast?.({
             type: 'conversation_summaries',

@@ -78,6 +78,39 @@ export function createTagsRouter(
         accountId,
         tags,
       });
+
+      // 2-way Push to Zalo if tag belongs to Zalo
+      if (accountId) {
+        const targetRuntime = accountManager.getRuntime(accountId);
+        if (targetRuntime) {
+          const allTags = await store.tagRepo.listTags(accountId);
+          const targetTag = allTags.find((t) => t.id === tagId);
+          if (targetTag && targetTag.zaloLabelId) {
+            setImmediate(async () => {
+              try {
+                const api = (targetRuntime as any).state?.session?.api;
+                if (api && typeof api.getLabels === 'function' && typeof api.updateLabels === 'function') {
+                  const currentLabelsRes = await api.getLabels();
+                  const targetLabelData = currentLabelsRes.labelData.find((l: any) => l.id === targetTag.zaloLabelId);
+                  if (targetLabelData) {
+                    const { threadId } = targetRuntime.resolveConversationTarget(conversationId);
+                    if (!targetLabelData.conversations.includes(threadId)) {
+                      targetLabelData.conversations.push(threadId);
+                      await api.updateLabels({
+                        labelData: currentLabelsRes.labelData,
+                        version: currentLabelsRes.version,
+                      });
+                    }
+                  }
+                }
+              } catch (zaloPushErr) {
+                // ignore
+              }
+            });
+          }
+        }
+      }
+
       res.json({ ok: true, conversationId, tags });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -100,6 +133,37 @@ export function createTagsRouter(
         accountId,
         tags,
       });
+
+      // 2-way Remove from Zalo if tag belongs to Zalo
+      if (accountId) {
+        const targetRuntime = accountManager.getRuntime(accountId);
+        if (targetRuntime) {
+          const allTags = await store.tagRepo.listTags(accountId);
+          const targetTag = allTags.find((t) => t.id === tagId);
+          if (targetTag && targetTag.zaloLabelId) {
+            setImmediate(async () => {
+              try {
+                const api = (targetRuntime as any).state?.session?.api;
+                if (api && typeof api.getLabels === 'function' && typeof api.updateLabels === 'function') {
+                  const currentLabelsRes = await api.getLabels();
+                  const targetLabelData = currentLabelsRes.labelData.find((l: any) => l.id === targetTag.zaloLabelId);
+                  if (targetLabelData) {
+                    const { threadId } = targetRuntime.resolveConversationTarget(conversationId);
+                    targetLabelData.conversations = targetLabelData.conversations.filter((c: string) => c !== threadId);
+                    await api.updateLabels({
+                      labelData: currentLabelsRes.labelData,
+                      version: currentLabelsRes.version,
+                    });
+                  }
+                }
+              } catch (zaloPushErr) {
+                // ignore
+              }
+            });
+          }
+        }
+      }
+
       res.json({ ok: true, conversationId, tags });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
