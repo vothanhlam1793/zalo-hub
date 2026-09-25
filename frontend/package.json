@@ -1,6 +1,6 @@
 {
   "name": "zalohub-frontend",
-  "version": "5.0.9",
+  "version": "5.2.0",
   "private": true,
   "type": "module",
   "scripts": {
