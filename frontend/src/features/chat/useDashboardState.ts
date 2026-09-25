@@ -641,6 +641,39 @@ export function useDashboardState() {
     }
   });
 
+  const sidebarAccounts = useMemo(() => {
+    let list: AccountSummary[];
+    if (currentAccountId && !workspace.knownAccounts.some((e) => e.accountId === currentAccountId)) {
+      list = [...workspace.knownAccounts, {
+        accountId: currentAccountId,
+        displayName: status?.account?.displayName ?? currentAccountId,
+        phoneNumber: status?.account?.phoneNumber,
+        avatar: status?.account?.avatar,
+        isActive: true,
+      } satisfies AccountSummary];
+    } else {
+      list = workspace.knownAccounts;
+    }
+    const visibleList = list.map(a => ({
+      ...a,
+      visible: myAccountsMap.has(a.accountId) ? myAccountsMap.get(a.accountId) : true,
+    }));
+
+    // Deterministic sorting based on accountOrder saved in localStorage
+    if (accountOrder.length > 0) {
+      return [...visibleList].sort((a, b) => {
+        const idxA = accountOrder.indexOf(a.accountId);
+        const idxB = accountOrder.indexOf(b.accountId);
+        const orderA = idxA >= 0 ? idxA : 9999;
+        const orderB = idxB >= 0 ? idxB : 9999;
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.displayName || a.accountId).localeCompare(b.displayName || b.accountId);
+      });
+    }
+
+    return visibleList;
+  }, [currentAccountId, workspace.knownAccounts, status?.account?.avatar, status?.account?.displayName, status?.account?.phoneNumber, myAccountsMap, accountOrder]);
+
   const onReorderAccounts = useCallback((newOrder: string[]) => {
     setAccountOrder(newOrder);
     try {
@@ -700,39 +733,6 @@ export function useDashboardState() {
       }
     }
   }, [resolveWorkspaceId, chat, composer]);
-
-  const sidebarAccounts = useMemo(() => {
-    let list: AccountSummary[];
-    if (currentAccountId && !workspace.knownAccounts.some((e) => e.accountId === currentAccountId)) {
-      list = [...workspace.knownAccounts, {
-        accountId: currentAccountId,
-        displayName: status?.account?.displayName ?? currentAccountId,
-        phoneNumber: status?.account?.phoneNumber,
-        avatar: status?.account?.avatar,
-        isActive: true,
-      } satisfies AccountSummary];
-    } else {
-      list = workspace.knownAccounts;
-    }
-    const visibleList = list.map(a => ({
-      ...a,
-      visible: myAccountsMap.has(a.accountId) ? myAccountsMap.get(a.accountId) : true,
-    }));
-
-    // Deterministic sorting based on accountOrder saved in localStorage
-    if (accountOrder.length > 0) {
-      return [...visibleList].sort((a, b) => {
-        const idxA = accountOrder.indexOf(a.accountId);
-        const idxB = accountOrder.indexOf(b.accountId);
-        const orderA = idxA >= 0 ? idxA : 9999;
-        const orderB = idxB >= 0 ? idxB : 9999;
-        if (orderA !== orderB) return orderA - orderB;
-        return (a.displayName || a.accountId).localeCompare(b.displayName || b.accountId);
-      });
-    }
-
-    return visibleList;
-  }, [currentAccountId, workspace.knownAccounts, status?.account?.avatar, status?.account?.displayName, status?.account?.phoneNumber, myAccountsMap, accountOrder]);
   const workspaceAccount = useMemo(() => {
     const workspaceId = resolveWorkspaceId();
     return sidebarAccounts.find((account) => account.accountId === workspaceId);
