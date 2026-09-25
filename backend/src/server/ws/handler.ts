@@ -118,15 +118,18 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
   }
 
   const removeMessageListener = accountManager.onConversationMessage(({ accountId, message }) => {
+    // Deliver incoming message frame immediately to connected clients
     broadcastConversationMessage(accountId, message);
-    // Do not replace/intercept the manager's event stream: webhook and other
-    // backend listeners must see the same incoming and local outgoing events.
-    void (async () => {
-      const runtime = accountManager.getRuntime(accountId);
-      if (!runtime) return;
-      broadcast({ type: 'conversation_summaries', accountId, conversations: await runtime.getConversationSummaries() });
-      broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(runtime) });
-    })().catch(() => { /* Snapshot failure must not suppress the message or leak an unhandled rejection. */ });
+
+    // Compute and broadcast updated summaries in background asynchronously
+    setImmediate(async () => {
+      try {
+        const runtime = accountManager.getRuntime(accountId);
+        if (!runtime) return;
+        broadcast({ type: 'conversation_summaries', accountId, conversations: await runtime.getConversationSummaries() });
+        broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(runtime) });
+      } catch {}
+    });
   });
 
   async function initialSnapshots(socket: WebSocket, state: SocketState) {

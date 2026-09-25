@@ -7,6 +7,8 @@ const ThreadType = { User: 0, Group: 1 };
 
 export class GoldListener {
   private readonly state: SharedState;
+  private _knownGroupIdsCache = new Set<string>();
+  private _knownGroupIdsCachedAt = 0;
   private _resolveGroupSenderName?: (groupId: string, senderId?: string) => Promise<string | undefined>;
   private _ensureGroupMetadata?: (groupId: string) => Promise<void>;
   private _appendConversationMessage?: (message: GoldConversationMessage) => Promise<boolean>;
@@ -205,10 +207,20 @@ export class GoldListener {
     }
   }
 
+  private async getKnownGroupIds(): Promise<Set<string>> {
+    const now = Date.now();
+    if (this._knownGroupIdsCache.size > 0 && now - this._knownGroupIdsCachedAt < 60_000) {
+      return this._knownGroupIdsCache;
+    }
+    const groups = await this.state.store.listGroupsByAccount(this.state.boundAccountId);
+    this._knownGroupIdsCache = new Set(groups.map((group) => group.groupId));
+    this._knownGroupIdsCachedAt = now;
+    return this._knownGroupIdsCache;
+  }
+
   private async normalizeListenerMessage(message: ListenerMessage, forcedType?: GoldConversationType): Promise<GoldConversationMessage | undefined> {
     const threadId = String(message.threadId ?? '').trim();
-    const groups = await this.state.store.listGroupsByAccount(this.state.boundAccountId);
-    const knownGroupIds = new Set(groups.map((group) => group.groupId));
+    const knownGroupIds = await this.getKnownGroupIds();
     const conversationType = forcedType
       ?? (message.type === ThreadType.Group ? 'group' : undefined)
       ?? getConversationTypeFromThreadId(threadId, knownGroupIds);
@@ -311,12 +323,13 @@ export class GoldListener {
     const imageUrl = normalizeImageUrl(data);
 
     if (message.type === ThreadType.Group && threadId) {
-      await this._ensureGroupMetadata?.(threadId);
+      // Refresh group metadata in background so incoming message stream is never blocked
+      void this._ensureGroupMetadata?.(threadId).catch(() => {});
     }
 
     const normalizedMessage = await this.normalizeListenerMessage(message);
 
-      this.state.logger.info('conversation_listener_message_received', {
+    this.state.logger.info('conversation_listener_message_received', {
       threadId,
       isSelf: Boolean(message.isSelf),
       textLength: text.length,
@@ -350,15 +363,29 @@ export class GoldListener {
       return;
     }
 
-    const persistedMessage = await this._persistMessageAttachmentsLocally?.(normalizedMessage) ?? normalizedMessage;
-
-    if (await this._appendConversationMessage?.(persistedMessage)) {
-        this.state.logger.info('conversation_message_captured', {
+    // Fast-path: append and broadcast the message immediately with remote source URL
+    if (await this._appendConversationMessage?.(normalizedMessage)) {
+      this.state.logger.info('conversation_message_captured', {
         conversationId: normalizedMessage.conversationId,
-        direction: persistedMessage.direction,
+        direction: normalizedMessage.direction,
         kind,
         textLength: text.length,
       });
+
+      // Background persist/mirror attachments without blocking message delivery
+      if (normalizedMessage.attachments.length > 0 && this._persistMessageAttachmentsLocally) {
+        const persistAttachments = this._persistMessageAttachmentsLocally;
+        setImmediate(async () => {
+          try {
+            await persistAttachments(normalizedMessage);
+          } catch (error) {
+            this.state.logger.warn('background_attachment_persist_failed', {
+              messageId: normalizedMessage.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        });
+      }
       return;
     }
 

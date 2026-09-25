@@ -37,6 +37,8 @@ export class GoldRuntime {
   private readonly sender: GoldSender;
   private readonly sync: GoldSync;
   private readonly state: SharedState;
+  private readonly senderNameCache = new Map<string, string>();
+  private knownGroupIdsCache = new Set<string>();
 
   constructor(
     store: GoldStore,
@@ -255,11 +257,22 @@ export class GoldRuntime {
 
     const attachments = await Promise.all(message.attachments.map((attachment) => this.persistAttachmentLocally(message.id, attachment)));
     const imageAttachment = attachments.find((attachment) => attachment.type === 'image' && attachment.url);
-    return {
+    const updated: GoldConversationMessage = {
       ...message,
       attachments,
       imageUrl: imageAttachment?.url ?? message.imageUrl,
-    } satisfies GoldConversationMessage;
+    };
+
+    // Update DB row and memory cache with mirrored local URLs
+    await this.state.store.appendConversationMessageByAccount(this.state.boundAccountId, updated);
+    const existing = this.state.conversations.get(updated.conversationId);
+    if (existing) {
+      const idx = existing.findIndex((m) => m.id === updated.id || (m.providerMessageId && m.providerMessageId === updated.providerMessageId));
+      if (idx >= 0) {
+        existing[idx] = updated;
+      }
+    }
+    return updated;
   }
 
   private repairMessageFromRawPayload(message: GoldConversationMessage) {
@@ -317,14 +330,25 @@ export class GoldRuntime {
     }
 
     this.state.seenMessageKeys.add(key);
+    // Keep sliding window of seen keys to prevent memory leak
+    if (this.state.seenMessageKeys.size > 5000) {
+      const keysToDelete = Array.from(this.state.seenMessageKeys).slice(0, 1000);
+      for (const k of keysToDelete) this.state.seenMessageKeys.delete(k);
+    }
     existing.push(message);
     existing.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.state.conversations.set(message.conversationId, existing);
 
-    await this.state.store.appendConversationMessageByAccount(this.state.boundAccountId, message);
+    // Fast-path: Notify live WebSocket subscribers first before awaiting Postgres persistence
     for (const listener of this.state.conversationListeners) {
-      listener(message);
+      try {
+        listener(message);
+      } catch (listenerError) {
+        this.logger.error('conversation_listener_dispatch_failed', { error: listenerError });
+      }
     }
+
+    await this.state.store.appendConversationMessageByAccount(this.state.boundAccountId, message);
     return true;
   }
 
@@ -357,13 +381,24 @@ export class GoldRuntime {
 
   private async resolveGroupSenderName(groupId: string, senderId?: string) {
     if (!senderId) return undefined;
+    const cacheKey = `${groupId}:${senderId}`;
+    const cached = this.senderNameCache.get(cacheKey);
+    if (cached) return cached;
+
     const groups = await this.state.store.listGroupsByAccount(this.state.boundAccountId);
     const group = groups.find((entry) => entry.groupId === groupId);
     const member = group?.members?.find((entry) => entry.userId === senderId);
-    if (member?.displayName) return member.displayName;
+    if (member?.displayName) {
+      this.senderNameCache.set(cacheKey, member.displayName);
+      return member.displayName;
+    }
     const contacts = await this.state.store.listContactsByAccount(this.state.boundAccountId);
     const contact = contacts.find((entry) => entry.userId === senderId);
-    return contact?.displayName;
+    if (contact?.displayName) {
+      this.senderNameCache.set(cacheKey, contact.displayName);
+      return contact.displayName;
+    }
+    return undefined;
   }
 
   // --- Public API delegation ---
