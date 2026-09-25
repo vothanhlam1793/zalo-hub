@@ -116,28 +116,55 @@ export function Sidebar({
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="text-sm font-semibold text-[var(--foreground)] truncate">
-                  {resolvedAccountLabel}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setRenameOpen(true)}
-                  className="shrink-0 text-[11px] text-muted-foreground hover:text-primary transition-colors"
-                  title="Đổi tên account"
-                >
-                  ✎
-                </button>
-                {!isSessionActive && onReconnectAccount && (
+              <div className="flex items-center justify-between gap-1.5 min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="text-sm font-semibold text-[var(--foreground)] truncate">
+                    {resolvedAccountLabel}
+                  </div>
                   <button
                     type="button"
-                    onClick={() => onReconnectAccount(workspaceAccountId)}
-                    className="shrink-0 text-[11px] text-amber-500 hover:text-amber-400 transition-colors ml-auto flex items-center gap-0.5 bg-amber-500/10 px-1.5 py-0.5 rounded font-medium"
-                    title="Kết nối lại tài khoản Zalo"
+                    onClick={() => setRenameOpen(true)}
+                    className="shrink-0 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                    title="Đổi tên account"
                   >
-                    ⚡ Reconnect
+                    ✎
                   </button>
-                )}
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  {onSyncUnread && (
+                    <button
+                      type="button"
+                      onClick={onSyncUnread}
+                      className="w-6.5 h-6.5 rounded-lg inline-flex items-center justify-center text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors border border-[var(--border)]"
+                      title="Đồng bộ lại số tin chưa đọc từ Zalo gốc"
+                    >
+                      🔄
+                    </button>
+                  )}
+
+                  {onMarkAllRead && (
+                    <button
+                      type="button"
+                      onClick={onMarkAllRead}
+                      className="w-6.5 h-6.5 rounded-lg inline-flex items-center justify-center text-xs font-bold text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors border border-[var(--border)]"
+                      title="Đánh dấu tất cả là đã đọc"
+                    >
+                      ✓✓
+                    </button>
+                  )}
+
+                  {!isSessionActive && onReconnectAccount && (
+                    <button
+                      type="button"
+                      onClick={() => onReconnectAccount(workspaceAccountId)}
+                      className="shrink-0 text-[11px] text-amber-500 hover:text-amber-400 transition-colors flex items-center gap-0.5 bg-amber-500/10 px-1.5 py-0.5 rounded font-medium"
+                      title="Kết nối lại tài khoản Zalo"
+                    >
+                      ⚡
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="text-[11px] text-muted-foreground truncate mt-0.5">
                 {resolvedAccountSubLabel}
@@ -253,32 +280,6 @@ export function Sidebar({
                 title="Đồng bộ danh sách nhãn từ Zalo"
               >
                 🏷️ Nhãn
-              </Button>
-            )}
-
-            {onSyncUnread && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={onSyncUnread}
-                className="h-8 px-2 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)]"
-                title="Đồng bộ lại số tin chưa đọc từ Zalo gốc"
-              >
-                🔄
-              </Button>
-            )}
-
-            {onMarkAllRead && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={onMarkAllRead}
-                className="h-8 px-2 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)]"
-                title="Đánh dấu tất cả là đã đọc"
-              >
-                ✓✓
               </Button>
             )}
           </div>

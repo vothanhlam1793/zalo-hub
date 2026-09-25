@@ -297,6 +297,8 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               selectedTagId={selectedTagId}
               onSelectTag={setSelectedTagId}
               onSyncTags={onSyncTags}
+              onMarkAllRead={dashboard.onMarkAllRead}
+              onSyncUnread={dashboard.onSyncUnread}
               onRenameAccount={onRenameAccount}
               onSelectConversation={handleSelectConversation}
               onOpenDirectConversation={handleOpenDirectConversation}
