@@ -77,49 +77,70 @@ export function AdminUsersTab({ users, accounts, onRefresh, setError, setStatus 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-bold text-[#eee]">Người dùng ({users.length})</h2>
+        <h2 className="text-base font-bold text-[var(--foreground)]">Người dùng hệ thống ({users.length})</h2>
         <Button size="sm" onClick={() => { setShowAdd(true); setForm({ email: '', password: '', displayName: '', role: 'user', type: 'human' }); }}>
           + Thêm người dùng
         </Button>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--card)]">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-white/8 text-left text-xs text-muted-foreground">
-              <th className="pb-2 pr-4">Tên hiển thị</th>
-              <th className="pb-2 pr-4">Email</th>
-              <th className="pb-2 pr-4">System Role</th>
-              <th className="pb-2 pr-4">Type</th>
-              <th className="pb-2 pr-4">Zalo Accounts</th>
-              <th className="pb-2"></th>
+            <tr className="border-b border-[var(--border)] text-left text-xs text-muted-foreground bg-[var(--accent)]/40">
+              <th className="py-2.5 px-4">Tên hiển thị</th>
+              <th className="py-2.5 px-4">Email</th>
+              <th className="py-2.5 px-4">System Role</th>
+              <th className="py-2.5 px-4">Type</th>
+              <th className="py-2.5 px-4">Zalo Accounts quản lý</th>
+              <th className="py-2.5 px-4 text-right">Thao tác</th>
             </tr>
           </thead>
           <tbody>
             {users.map((u) => (
-              <tr key={u.id} className="border-b border-white/4 hover:bg-white/[0.02]">
-                <td className="py-2.5 pr-4 text-[#eee]">{u.displayName}</td>
-                <td className="py-2.5 pr-4 text-[#999]">{u.email}</td>
-                <td className="py-2.5 pr-4">
+              <tr key={u.id} className="border-b border-[var(--border)]/50 hover:bg-[var(--accent)]/30">
+                <td className="py-2.5 px-4 font-medium text-[var(--foreground)]">{u.displayName}</td>
+                <td className="py-2.5 px-4 text-muted-foreground">{u.email}</td>
+                <td className="py-2.5 px-4">
                   <Select value={u.role || 'user'} onValueChange={(v) => handleRoleChange(u.id, v)}>
                     <SelectTrigger className="h-7 w-24 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="super_admin">super_admin</SelectItem>
                       <SelectItem value="admin">admin</SelectItem>
                       <SelectItem value="user">user</SelectItem>
                     </SelectContent>
                   </Select>
                 </td>
-                <td className="py-2.5 pr-4">
+                <td className="py-2.5 px-4">
                   <Badge variant="secondary" className="text-[10px]">{u.type}</Badge>
                 </td>
-                <td className="py-2.5 pr-4">
-                  <span className="text-[#7fa8ff] text-xs">{u.memberships?.length || 0} accounts</span>
+                <td className="py-2.5 px-4">
+                  <div className="flex flex-wrap gap-1 items-center">
+                    {u.memberships && u.memberships.length > 0 ? (
+                      u.memberships.map((m) => {
+                        const acc = accounts.find((a) => a.accountId === m.account_id);
+                        const label = acc?.hubAlias || acc?.displayName || m.account_id.slice(-6);
+                        return (
+                          <span
+                            key={m.account_id}
+                            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20"
+                            title={`Vai trò: ${m.role}`}
+                          >
+                            {label} ({m.role})
+                          </span>
+                        );
+                      })
+                    ) : (
+                      <span className="text-muted-foreground text-xs italic">Chưa gán</span>
+                    )}
+                  </div>
                 </td>
-                <td className="py-2.5 flex gap-1">
-                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openEdit(u)}>✏️</Button>
-                  <Button variant="ghost" size="sm" className="h-7 text-xs text-[#ff8888]" onClick={() => handleDelete(u.id)}>🗑️</Button>
+                <td className="py-2.5 px-4 text-right">
+                  <div className="inline-flex gap-1 justify-end">
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEdit(u)} title="Sửa thông tin">✏️</Button>
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-500/10" onClick={() => handleDelete(u.id)} title="Xóa">🗑️</Button>
+                  </div>
                 </td>
               </tr>
             ))}

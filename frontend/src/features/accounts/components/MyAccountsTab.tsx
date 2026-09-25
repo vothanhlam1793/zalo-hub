@@ -235,17 +235,32 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
             <DialogTitle className="text-[#eee]">Chuyển quyền Master</DialogTitle>
           </DialogHeader>
           <p className="text-[11px] text-muted-foreground">
-            Chọn người nhận quyền master. Bạn sẽ trở thành Admin sau khi chuyển.
+            Chọn thành viên nhận quyền Master. Bạn sẽ trở thành Admin sau khi chuyển.
           </p>
-          <Input
-            placeholder="Email người nhận"
-            value={transferEmail}
-            onChange={(e) => setTransferEmail(e.target.value)}
-            className="bg-[#0d1015] border-[var(--border)]"
-          />
+          {members.filter(m => m.role !== 'master').length > 0 ? (
+            <Select value={transferEmail} onValueChange={setTransferEmail}>
+              <SelectTrigger className="bg-[#0d1015] border-[var(--border)]">
+                <SelectValue placeholder="Chọn thành viên nhận quyền..." />
+              </SelectTrigger>
+              <SelectContent>
+                {members.filter(m => m.role !== 'master').map((m) => (
+                  <SelectItem key={m.userId} value={m.email}>
+                    {m.displayName} ({m.email})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Input
+              placeholder="Email người nhận..."
+              value={transferEmail}
+              onChange={(e) => setTransferEmail(e.target.value)}
+              className="bg-[#0d1015] border-[var(--border)]"
+            />
+          )}
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setTransferOpen(false)}>Hủy</Button>
-            <Button variant="destructive" size="sm" onClick={handleTransferMaster}>Chuyển</Button>
+            <Button variant="destructive" size="sm" onClick={handleTransferMaster} disabled={!transferEmail}>Chuyển</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -291,8 +306,16 @@ function AccountCard({
   return (
     <Card className={`border-[var(--border)] bg-[#0d1015] ${acc.visible ? '' : 'opacity-60'}`}>
       <CardContent className="p-4 flex items-start gap-4">
-        <div className="w-10 h-10 rounded-full bg-[rgba(79,122,255,0.15)] flex items-center justify-center text-sm font-bold text-[#9fc0ff] shrink-0">
-          {(acc.displayName || acc.accountId).charAt(0).toUpperCase()}
+        <div className="relative shrink-0">
+          <div className="w-10 h-10 rounded-full bg-[rgba(79,122,255,0.15)] flex items-center justify-center text-sm font-bold text-[#9fc0ff]">
+            {(acc.displayName || acc.accountId).charAt(0).toUpperCase()}
+          </div>
+          <span
+            className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#0d1015] ${
+              acc.hasSession ? 'bg-emerald-500' : 'bg-amber-500'
+            }`}
+            title={acc.hasSession ? 'Online / Session Active' : 'Offline / Mất kết nối'}
+          />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -305,6 +328,11 @@ function AccountCard({
                   Đăng nhập lại
                 </Button>
               </>
+            )}
+            {acc.hasSession && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-normal">
+                Online
+              </span>
             )}
             {acc.hasSession && (
               <Button

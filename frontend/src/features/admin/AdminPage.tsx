@@ -9,6 +9,7 @@ import { MyAccountsTab } from '@/features/accounts/components/MyAccountsTab';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AdminUsersTab } from './AdminUsersTab';
 import { AdminTagsTab } from './AdminTagsTab';
+import { AdminAccountsTab } from './AdminAccountsTab';
 import DifyBotsTab from './DifyBotsTab';
 import type { AccountSummary } from '@/types';
 
@@ -128,45 +129,12 @@ export default function AdminPage() {
             <AdminUsersTab users={users} accounts={accounts} onRefresh={loadData} setError={setError} setStatus={setStatus} />
           )}
           {activeTab === 'allaccounts' && isSuperAdmin && (
-            <SuperAdminAccountsTab accounts={accounts} onRefresh={loadData} setError={setError} setStatus={setStatus} />
+            <AdminAccountsTab accounts={accounts} onRefresh={loadData} setError={setError} setStatus={setStatus} />
           )}
           {activeTab === 'difybots' && isSuperAdmin && (
             <DifyBotsTab setError={setError} setStatus={setStatus} />
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function SuperAdminAccountsTab({ accounts, onRefresh, setError, setStatus }: { accounts: AccountSummary[]; onRefresh: () => void; setError: (msg: string) => void; setStatus: (msg: string) => void }) {
-  const [allAccounts, setAllAccounts] = useState<Array<any>>([]);
-
-  useEffect(() => {
-    bff.adminAllAccounts().then((r: any) => setAllAccounts(r.accounts)).catch(() => {});
-  }, []);
-
-  return (
-    <div>
-      <h2 className="text-sm font-bold text-[#eee] mb-4">Tất cả tài khoản Zalo</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {allAccounts.map((acc: any) => (
-          <div key={acc.accountId} className="p-4 rounded-lg border border-[var(--border)] bg-[#0d1015]">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-full bg-[rgba(79,122,255,0.15)] flex items-center justify-center text-sm font-bold text-[#9fc0ff]">
-                {(acc.displayName || acc.accountId).charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <p className="text-sm font-medium text-[#eee]">{acc.displayName || acc.accountId}</p>
-                <p className="text-[11px] text-muted-foreground">{acc.accountId}</p>
-              </div>
-            </div>
-            <div className="text-[11px] space-y-1 text-muted-foreground">
-              {acc.master && <p>Master: {acc.master.displayName} ({acc.master.email})</p>}
-              <p>Thành viên: {acc.memberCount}</p>
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );
