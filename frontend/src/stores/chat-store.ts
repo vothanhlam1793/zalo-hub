@@ -181,6 +181,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const current = state.conversationsByAccount[accountId] ?? [];
     const idx = current.findIndex((e) => e.id === msg.conversationId);
     if (idx < 0) return state;
+    const isViewing = state.activeConversationId === msg.conversationId;
+    const isIncoming = msg.direction === 'incoming';
     const next = [...current];
     next[idx] = {
       ...next[idx],
@@ -188,6 +190,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
       lastMessageTimestamp: msg.timestamp,
       lastDirection: msg.direction as 'incoming' | 'outgoing',
+      unreadCount: isViewing ? 0 : (isIncoming ? (next[idx].unreadCount || 0) + 1 : (next[idx].unreadCount || 0)),
     };
     next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
     return {

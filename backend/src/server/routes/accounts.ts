@@ -696,6 +696,14 @@ export function createAccountsRouter(
           rowCount: typeof updateResult?.rowCount === 'number' ? updateResult.rowCount : undefined,
         });
 
+        // 2-way sync: Remove unread mark on Zalo server
+        setImmediate(async () => {
+          try {
+            const { type, threadId } = targetRuntime.resolveConversationTarget(conversationId);
+            await targetRuntime.markConversationRead(threadId, type === 'group').catch(() => undefined);
+          } catch { /* ignore */ }
+        });
+
         broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
 
         res.json({ ok: true, readAt });
@@ -706,6 +714,54 @@ export function createAccountsRouter(
           error: error instanceof Error ? error.message : String(error),
         });
         res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat read state that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/mark-all-read', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        await targetRuntime.getStore().conversationRepo.markAllAsRead(accountId);
+
+        // 2-way sync: Remove all unread marks on Zalo server
+        setImmediate(async () => {
+          try {
+            const unreads = await targetRuntime.getUnreadMark().catch(() => ({ direct: [], group: [] }));
+            for (const d of unreads.direct) {
+              await targetRuntime.markConversationRead(d.threadId, false).catch(() => undefined);
+            }
+            for (const g of unreads.group) {
+              await targetRuntime.markConversationRead(g.threadId, true).catch(() => undefined);
+            }
+          } catch { /* ignore */ }
+        });
+
+        const summaries = await targetRuntime.getConversationSummaries();
+        broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+
+        res.json({ ok: true, count: summaries.length });
+      } catch (error) {
+        logger.error('mark_all_read_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Danh dau tat ca da doc that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/sync-unread', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        await targetRuntime.syncUnreadMarks();
+        const summaries = await targetRuntime.getConversationSummaries();
+        broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+
+        res.json({ ok: true, count: summaries.length });
+      } catch (error) {
+        logger.error('sync_unread_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Dong bo unread that bai' });
       }
     })();
   });

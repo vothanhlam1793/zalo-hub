@@ -951,4 +951,37 @@ export class GoldSync {
       });
     }
   }
+
+  async syncUnreadMarks() {
+    if (!this.state.session) {
+      await this._loginWithStoredCredential?.();
+    }
+    const api = this.state.session?.api as { getUnreadMark?: () => Promise<any> } | undefined;
+    if (typeof api?.getUnreadMark !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await api.getUnreadMark();
+      const direct = Array.isArray(response?.data?.convsUser) ? response.data.convsUser : [];
+      const group = Array.isArray(response?.data?.convsGroup) ? response.data.convsGroup : [];
+
+      const activeUnreadThreadIds = [
+        ...direct.map((d: any) => String(d.id || d.threadId || '')).filter(Boolean),
+        ...group.map((g: any) => String(g.id || g.threadId || '')).filter(Boolean),
+      ];
+
+      const boundAccId = this.state.boundAccountId || '';
+      await this.state.store.conversationRepo.syncUnreadFromZalo(boundAccId, activeUnreadThreadIds);
+      this.state.logger.info('zalo_unread_marks_synced', {
+        accountId: boundAccId,
+        activeUnreadCount: activeUnreadThreadIds.length,
+      });
+    } catch (error) {
+      this.state.logger.warn('zalo_unread_marks_sync_failed', {
+        accountId: this.state.boundAccountId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }

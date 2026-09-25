@@ -69,6 +69,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           conversations={Object.values(chat.conversationsByAccount).flat()}
           onSelectAccount={onSelectAccount}
           onOpenAdmin={() => navigate('/admin')}
+          onMoveAccount={dashboard.onMoveAccount}
         />
         <Sidebar
           sidebarTab={workspace.sidebarTab}
@@ -89,6 +90,8 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           selectedTagId={selectedTagId}
           onSelectTag={setSelectedTagId}
           onSyncTags={onSyncTags}
+          onMarkAllRead={dashboard.onMarkAllRead}
+          onSyncUnread={dashboard.onSyncUnread}
           onReconnectAccount={onReconnectAccount}
           onRenameAccount={onRenameAccount}
           onSelectConversation={onSelectConversation}

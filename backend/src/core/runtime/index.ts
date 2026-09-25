@@ -587,6 +587,10 @@ export class GoldRuntime {
     return this.sync.syncMuteStates();
   }
 
+  async syncUnreadMarks() {
+    return this.sync.syncUnreadMarks();
+  }
+
   async createPoll(groupId: string, question: string, options: string[]) {
     return this.sender.createPoll(groupId, question, options);
   }

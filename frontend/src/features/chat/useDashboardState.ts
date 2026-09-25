@@ -632,6 +632,75 @@ export function useDashboardState() {
     });
   }, [activeContact, activeGroup, activeConversation, chat.activeConversationId]);
 
+  const [accountOrder, setAccountOrder] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('zalohub_account_order');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const onReorderAccounts = useCallback((newOrder: string[]) => {
+    setAccountOrder(newOrder);
+    try {
+      localStorage.setItem('zalohub_account_order', JSON.stringify(newOrder));
+    } catch { /* ignore */ }
+  }, []);
+
+  const onMoveAccount = useCallback((accountId: string, direction: 'up' | 'down') => {
+    const currentList = sidebarAccounts.map((a) => a.accountId);
+    const idx = currentList.indexOf(accountId);
+    if (idx < 0) return;
+    if (direction === 'up' && idx === 0) return;
+    if (direction === 'down' && idx === currentList.length - 1) return;
+
+    const nextList = [...currentList];
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+    const temp = nextList[idx];
+    nextList[idx] = nextList[targetIdx];
+    nextList[targetIdx] = temp;
+
+    onReorderAccounts(nextList);
+  }, [sidebarAccounts, onReorderAccounts]);
+
+  const onMarkAllRead = useCallback(async () => {
+    const id = resolveWorkspaceId();
+    if (!id) return;
+    const session = chatSession.capture();
+    try {
+      await api.markAllRead(id);
+      if (!chatSession.valid(session)) return;
+      const convs = chat.getAccountConversations(id);
+      const updated = convs.map((c) => ({ ...c, unreadCount: 0 }));
+      chat.replaceAccountConversations(id, updated);
+      composer.setStatusMsg('Đã đánh dấu tất cả là đã đọc.');
+    } catch (err) {
+      if (chatSession.valid(session)) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Đánh dấu đã đọc thất bại');
+      }
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
+  const onSyncUnread = useCallback(async () => {
+    const id = resolveWorkspaceId();
+    if (!id) return;
+    const session = chatSession.capture();
+    try {
+      composer.setStatusMsg('Đang đồng bộ số tin chưa đọc từ Zalo...');
+      const res = await api.syncUnread(id);
+      if (!chatSession.valid(session)) return;
+      const fresh = await bff.chatGetConversations(id);
+      if (!chatSession.valid(session)) return;
+      chat.replaceAccountConversations(id, fresh.conversations);
+      composer.setStatusMsg(`Đã đồng bộ ${res.count} cuộc trò chuyện từ Zalo.`);
+    } catch (err) {
+      if (chatSession.valid(session)) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ unread thất bại');
+      }
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
   const sidebarAccounts = useMemo(() => {
     let list: AccountSummary[];
     if (currentAccountId && !workspace.knownAccounts.some((e) => e.accountId === currentAccountId)) {
@@ -645,11 +714,25 @@ export function useDashboardState() {
     } else {
       list = workspace.knownAccounts;
     }
-    return list.map(a => ({
+    const visibleList = list.map(a => ({
       ...a,
       visible: myAccountsMap.has(a.accountId) ? myAccountsMap.get(a.accountId) : true,
     }));
-  }, [currentAccountId, workspace.knownAccounts, status?.account?.avatar, status?.account?.displayName, status?.account?.phoneNumber, myAccountsMap]);
+
+    // Deterministic sorting based on accountOrder saved in localStorage
+    if (accountOrder.length > 0) {
+      return [...visibleList].sort((a, b) => {
+        const idxA = accountOrder.indexOf(a.accountId);
+        const idxB = accountOrder.indexOf(b.accountId);
+        const orderA = idxA >= 0 ? idxA : 9999;
+        const orderB = idxB >= 0 ? idxB : 9999;
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.displayName || a.accountId).localeCompare(b.displayName || b.accountId);
+      });
+    }
+
+    return visibleList;
+  }, [currentAccountId, workspace.knownAccounts, status?.account?.avatar, status?.account?.displayName, status?.account?.phoneNumber, myAccountsMap, accountOrder]);
   const workspaceAccount = useMemo(() => {
     const workspaceId = resolveWorkspaceId();
     return sidebarAccounts.find((account) => account.accountId === workspaceId);
@@ -790,5 +873,8 @@ export function useDashboardState() {
     onDeleteTag,
     onUpdateNotes,
     onToggleMute,
+    onMoveAccount,
+    onMarkAllRead,
+    onSyncUnread,
   };
 }

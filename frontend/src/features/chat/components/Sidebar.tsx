@@ -39,6 +39,8 @@ interface SidebarProps {
   selectedTagId?: string | null;
   onSelectTag?: (tagId: string | null) => void;
   onSyncTags?: () => void;
+  onMarkAllRead?: () => void;
+  onSyncUnread?: () => void;
   onReconnectAccount?: (accountId?: string) => void;
   onRenameAccount: (nextDisplayName: string) => Promise<void>;
   onSelectConversation: (id: string) => void;
@@ -66,6 +68,8 @@ export function Sidebar({
   selectedTagId,
   onSelectTag,
   onSyncTags,
+  onMarkAllRead,
+  onSyncUnread,
   onReconnectAccount,
   onRenameAccount,
   onSelectConversation,
@@ -248,7 +252,33 @@ export function Sidebar({
                 className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)]"
                 title="Đồng bộ danh sách nhãn từ Zalo"
               >
-                🔄 Đồng bộ
+                🏷️ Nhãn
+              </Button>
+            )}
+
+            {onSyncUnread && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onSyncUnread}
+                className="h-8 px-2 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)]"
+                title="Đồng bộ lại số tin chưa đọc từ Zalo gốc"
+              >
+                🔄
+              </Button>
+            )}
+
+            {onMarkAllRead && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onMarkAllRead}
+                className="h-8 px-2 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)]"
+                title="Đánh dấu tất cả là đã đọc"
+              >
+                ✓✓
               </Button>
             )}
           </div>

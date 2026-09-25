@@ -370,6 +370,18 @@ export const api = {
       },
     ),
 
+  markAllRead: (accountId: string) =>
+    req<{ ok: boolean; count: number }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/mark-all-read`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  syncUnread: (accountId: string) =>
+    req<{ ok: boolean; count: number }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/sync-unread`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
   // Dify Bots
   adminBots: () => req<{ bots: Array<any> }>('/api/admin/bots'),
   adminBotCreate: (data: any) => req<any>('/api/admin/bots', { method: 'POST', body: JSON.stringify(data) }),
