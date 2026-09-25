@@ -44,10 +44,15 @@ export function createAccountsRouter(
     const result = input.attachment
       ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text }, lifecycle)
       : await targetRuntime.sendText(input.conversationId, input.text, lifecycle);
-    void (async () => {
-      broadcast({ type: 'conversation_summaries', accountId: input.accountId, conversations: await targetRuntime.getConversationSummaries() });
-      broadcast({ type: 'session_state', accountId: input.accountId, status: await getStatusForRuntime(targetRuntime) });
-    })().catch(() => logger.error('send_summary_refresh_failed', { accountId: input.accountId }));
+    
+    // Background async broadcast — does not block or add latency to HTTP Send response
+    setImmediate(() => {
+      void (async () => {
+        broadcast({ type: 'conversation_summaries', accountId: input.accountId, conversations: await targetRuntime.getConversationSummaries() });
+        broadcast({ type: 'session_state', accountId: input.accountId, status: await getStatusForRuntime(targetRuntime) });
+      })().catch(() => logger.error('send_summary_refresh_failed', { accountId: input.accountId }));
+    });
+
     return result;
   };
 

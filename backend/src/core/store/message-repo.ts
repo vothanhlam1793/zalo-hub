@@ -415,9 +415,121 @@ export class GoldMessageRepo {
     message: GoldConversationMessage,
     upsertConversation: (accountId: string, conversationId: string, messages: GoldConversationMessage[], trx?: Knex.Transaction) => Promise<void>,
   ) {
-    const existing = await this.listConversationMessages(activeAccountId, message.conversationId);
-    existing.push(message);
-    return this.replaceConversationMessages(activeAccountId, message.conversationId, existing, upsertConversation);
+    const resolvedAccountId = this.requireAccountId(activeAccountId);
+    const parsedConversation = parseConversationId(message.conversationId);
+    const canonicalType = await this.resolveCanonicalConversationType(resolvedAccountId, parsedConversation.threadId, parsedConversation.type);
+    const canonicalConversationId = `${canonicalType}:${parsedConversation.threadId}`;
+    const messageThreadId = message.threadId || parsedConversation.threadId;
+    const prefix = `${resolvedAccountId}::`;
+    const storedMessageId = message.id.startsWith(prefix) ? message.id : buildStoredMessageId(resolvedAccountId, message.id);
+    const legacyImageUrl = message.imageUrl
+      ?? (message.kind === 'image' && message.attachments?.[0]?.url ? message.attachments[0].url : null);
+    const timestamp = nowIso();
+
+    await this.knex.transaction(async (trx) => {
+      // 1. Direct single-row insert for the message
+      await trx.raw(`
+        INSERT INTO messages (
+          id, conversation_id, account_id, thread_id, conversation_type,
+          friend_id, provider_message_id, sender_id, sender_name,
+          direction, kind, text, image_url, is_self, timestamp,
+          raw_summary_json, raw_message_json, reactions_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          reactions_json = COALESCE(EXCLUDED.reactions_json, messages.reactions_json),
+          raw_message_json = COALESCE(EXCLUDED.raw_message_json, messages.raw_message_json),
+          text = EXCLUDED.text,
+          image_url = COALESCE(EXCLUDED.image_url, messages.image_url)
+      `, [
+        storedMessageId,
+        canonicalConversationId,
+        resolvedAccountId,
+        messageThreadId,
+        canonicalType,
+        canonicalType === 'direct' ? messageThreadId : '',
+        message.providerMessageId ?? null,
+        message.senderId ?? null,
+        message.senderName ?? null,
+        message.direction,
+        message.kind,
+        message.text,
+        legacyImageUrl ?? null,
+        message.isSelf ? 1 : 0,
+        message.timestamp,
+        message.rawMessageJson ?? null,
+        message.reactions && message.reactions.length > 0 ? JSON.stringify(message.reactions) : null,
+        timestamp,
+      ]);
+
+      // 2. Direct single-row insert for attachments if any
+      for (const att of message.attachments ?? []) {
+        if (att.id.startsWith('legacy-')) continue;
+        const storedAttachmentId = att.id.startsWith(prefix) ? att.id : buildStoredAttachmentId(resolvedAccountId, att.id);
+        await trx.raw(`
+          INSERT INTO attachments (
+            id, message_id, type, url, source_url, local_path,
+            thumbnail_url, thumbnail_source_url, thumbnail_local_path,
+            file_name, mime_type, size, width, height, duration, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO NOTHING
+        `, [
+          storedAttachmentId,
+          storedMessageId,
+          att.type,
+          att.url ?? null,
+          att.sourceUrl ?? null,
+          att.localPath ?? null,
+          att.thumbnailUrl ?? null,
+          att.thumbnailSourceUrl ?? null,
+          att.thumbnailLocalPath ?? null,
+          att.fileName ?? null,
+          att.mimeType ?? null,
+          att.size ?? null,
+          att.width ?? null,
+          att.height ?? null,
+          att.duration ?? null,
+          timestamp,
+        ]);
+      }
+
+      // 3. Fast direct update to conversations table without full-scan
+      const friendId = canonicalType === 'direct' ? messageThreadId : `group:${messageThreadId}`;
+
+      await trx.raw(`
+        INSERT INTO conversations (
+          id, account_id, thread_id, type, title, avatar, friend_id,
+          display_name_snapshot, last_message_text, last_message_kind,
+          last_direction, last_message_sender_name, last_message_timestamp,
+          message_count, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(account_id, friend_id) DO UPDATE SET
+          id = EXCLUDED.id,
+          last_message_text = EXCLUDED.last_message_text,
+          last_message_kind = EXCLUDED.last_message_kind,
+          last_direction = EXCLUDED.last_direction,
+          last_message_sender_name = EXCLUDED.last_message_sender_name,
+          last_message_timestamp = EXCLUDED.last_message_timestamp,
+          message_count = conversations.message_count + 1,
+          updated_at = EXCLUDED.updated_at
+      `, [
+        canonicalConversationId,
+        resolvedAccountId,
+        messageThreadId,
+        canonicalType,
+        messageThreadId,
+        friendId,
+        canonicalType === 'direct' ? messageThreadId : null,
+        message.text,
+        message.kind,
+        message.direction,
+        message.senderName ?? null,
+        message.timestamp,
+        timestamp,
+        timestamp,
+      ]);
+    });
+
+    return [message];
   }
 
   async updateMessageReactions(
