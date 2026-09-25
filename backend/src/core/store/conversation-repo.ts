@@ -946,43 +946,45 @@ export class GoldConversationRepo {
   async syncUnreadFromZalo(accountId: string, activeUnreadThreadIds: string[]) {
     const resolvedAccountId = this.resolveAccountId(accountId);
     if (!resolvedAccountId) return;
+    const nowIso = new Date().toISOString();
 
     if (activeUnreadThreadIds.length === 0) {
       await this.knex.raw(`
         INSERT INTO conversation_read_state (account_id, conversation_id, last_read_at, updated_at)
-        SELECT c.account_id, c.id, COALESCE(c.last_message_timestamp, NOW()::text), NOW()
+        SELECT c.account_id, c.id, ?, NOW()
         FROM conversations c
         WHERE c.account_id = ?
         ON CONFLICT (account_id, conversation_id) DO UPDATE SET
           last_read_at = EXCLUDED.last_read_at,
           updated_at = NOW()
-      `, [resolvedAccountId]);
+      `, [nowIso, resolvedAccountId]);
     } else {
       await this.knex.raw(`
         INSERT INTO conversation_read_state (account_id, conversation_id, last_read_at, updated_at)
-        SELECT c.account_id, c.id, COALESCE(c.last_message_timestamp, NOW()::text), NOW()
+        SELECT c.account_id, c.id, ?, NOW()
         FROM conversations c
         WHERE c.account_id = ?
           AND COALESCE(c.thread_id, c.friend_id) != ALL(?)
         ON CONFLICT (account_id, conversation_id) DO UPDATE SET
           last_read_at = EXCLUDED.last_read_at,
           updated_at = NOW()
-      `, [resolvedAccountId, activeUnreadThreadIds]);
+      `, [nowIso, resolvedAccountId, activeUnreadThreadIds]);
     }
   }
 
   async markAllAsRead(accountId: string) {
     const resolvedAccountId = this.resolveAccountId(accountId);
     if (!resolvedAccountId) return;
+    const nowIso = new Date().toISOString();
 
     await this.knex.raw(`
       INSERT INTO conversation_read_state (account_id, conversation_id, last_read_at, updated_at)
-      SELECT c.account_id, c.id, NOW()::text, NOW()
+      SELECT c.account_id, c.id, ?, NOW()
       FROM conversations c
       WHERE c.account_id = ?
       ON CONFLICT (account_id, conversation_id) DO UPDATE SET
         last_read_at = EXCLUDED.last_read_at,
         updated_at = NOW()
-    `, [resolvedAccountId]);
+    `, [nowIso, resolvedAccountId]);
   }
 }
