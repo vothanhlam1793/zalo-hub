@@ -108,6 +108,9 @@ export const bff = {
   updateNotes: (accountId: string, conversationId: string, notes: string | null) =>
     api.accountUpdateNotes(accountId, conversationId, notes),
 
+  updateRestriction: (accountId: string, conversationId: string, isRestricted: boolean) =>
+    api.accountUpdateRestriction(accountId, conversationId, isRestricted),
+
   forwardMessage: (accountId: string, conversationId: string, messageId: string, toThreadId: string, toType: string) =>
     api.accountForwardMessage(accountId, conversationId, messageId, toThreadId, toType),
 
@@ -141,6 +144,13 @@ export const bff = {
     api.adminCreateUser(email, password, displayName),
   adminUpdateUser: (userId: string, updates: { role?: string; displayName?: string; password?: string; type?: string }) =>
     api.adminUpdateUser(userId, updates),
+
+  adminGetUserTagPermissions: (userId: string, accountId?: string) =>
+    api.adminGetUserTagPermissions(userId, accountId),
+
+  adminUpdateUserTagPermissions: (userId: string, accountId: string, tagIds: string[]) =>
+    api.adminUpdateUserTagPermissions(userId, accountId, tagIds),
+
   adminDeleteUser: (userId: string) => api.adminDeleteUser(userId),
 
   status: () => api.status(),

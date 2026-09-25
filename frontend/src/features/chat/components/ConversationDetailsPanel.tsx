@@ -20,6 +20,7 @@ interface ConversationDetailsPanelProps {
   onDeleteTag?: (tagId: string) => void;
   onSyncTags?: () => void;
   onUpdateNotes?: (notes: string | null) => Promise<void>;
+  onUpdateRestriction?: (isRestricted: boolean) => Promise<void>;
   onToggleMute?: (action: 'mute' | 'unmute') => Promise<void>;
   onClose: () => void;
 }
@@ -63,6 +64,7 @@ export function ConversationDetailsPanel({
   onDeleteTag,
   onSyncTags,
   onUpdateNotes,
+  onUpdateRestriction,
   onToggleMute,
   onClose,
 }: ConversationDetailsPanelProps) {
@@ -210,6 +212,37 @@ export function ConversationDetailsPanel({
               {isSavingNote ? 'Đang lưu...' : 'Lưu ghi chú'}
             </Button>
           </div>
+        </div>
+
+        <Separator />
+
+        {/* ACCESS RESTRICTION SECTION */}
+        <div className="space-y-2 bg-[var(--accent)]/30 p-3 rounded-lg border border-[var(--border)]">
+          <div className="text-xs font-semibold text-[var(--foreground)] flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <span>🔒 Quyền riêng tư</span>
+            </span>
+            {onUpdateRestriction && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onUpdateRestriction(!conversation.isRestricted)}
+                className={`h-6.5 text-[11px] px-2 font-medium ${
+                  conversation.isRestricted
+                    ? 'bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {conversation.isRestricted ? 'Mở công khai' : 'Khóa hội thoại'}
+              </Button>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            {conversation.isRestricted
+              ? 'Cuộc trò chuyện này đang BỊ KHÓA — chỉ Quản lý (Master/Admin) mới xem và nhắn tin được.'
+              : 'Cuộc trò chuyện đang CÔNG KHAI — nhân viên được phân quyền có thể xem và xử lý.'}
+          </p>
         </div>
 
         <Separator />

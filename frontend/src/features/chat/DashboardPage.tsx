@@ -140,6 +140,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onReactMessage={onReactMessage}
+            onUpdateRestriction={dashboard.onUpdateRestriction}
           />
         <ConversationDetailsPanel
           open={detailsOpen}
@@ -155,6 +156,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           onDeleteTag={dashboard.onDeleteTag}
           onSyncTags={onSyncTags}
           onUpdateNotes={dashboard.onUpdateNotes}
+          onUpdateRestriction={dashboard.onUpdateRestriction}
           onToggleMute={dashboard.onToggleMute}
           onClose={() => setDetailsOpen(false)}
         />
@@ -374,6 +376,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               onDeleteTag={dashboard.onDeleteTag}
               onSyncTags={onSyncTags}
               onUpdateNotes={dashboard.onUpdateNotes}
+              onUpdateRestriction={dashboard.onUpdateRestriction}
               onToggleMute={dashboard.onToggleMute}
               onClose={() => setDetailsOpen(false)}
             />

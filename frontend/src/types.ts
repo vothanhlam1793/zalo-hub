@@ -127,6 +127,9 @@ export interface ConversationSummary {
   isMuted?: boolean;
   muteUntil?: number | null;
   isPinned?: boolean;
+  isRestricted?: boolean;
+  restrictedBy?: string;
+  restrictedAt?: string;
   labels?: TagItem[];
   notes?: string;
   notesUpdatedBy?: string;

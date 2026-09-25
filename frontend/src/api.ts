@@ -210,6 +210,15 @@ export const api = {
       },
     ),
 
+  accountUpdateRestriction: (accountId: string, conversationId: string, isRestricted: boolean) =>
+    req<{ ok: boolean; conversationId: string; isRestricted: boolean; restrictedBy?: string; restrictedAt?: string }>(
+      `/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/restriction`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ isRestricted }),
+      },
+    ),
+
   accountUpdateReadState: (accountId: string, conversationId: string, readAt: string) =>
     req<{ ok: boolean; readAt: string }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/read-state`, {
       method: 'POST',
@@ -300,6 +309,20 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(updates),
     }),
+
+  adminGetUserTagPermissions: (userId: string, accountId?: string) =>
+    req<{ permissions: Array<{ account_id: string; tag_id: string }> }>(
+      `/api/admin/users/${encodeURIComponent(userId)}/tag-permissions${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ''}`,
+    ),
+
+  adminUpdateUserTagPermissions: (userId: string, accountId: string, tagIds: string[]) =>
+    req<{ ok: boolean; userId: string; accountId: string; tagIds: string[] }>(
+      `/api/admin/users/${encodeURIComponent(userId)}/tag-permissions`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ accountId, tagIds }),
+      },
+    ),
 
   adminDeleteAccount: (accountId: string) =>
     req<{ ok: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),

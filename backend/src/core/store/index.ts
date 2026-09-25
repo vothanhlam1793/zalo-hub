@@ -365,4 +365,13 @@ export class GoldStore {
   ) {
     return this.conversationRepo.getConversationSummaryByAccountAndId(accountId, conversationId);
   }
+
+  async setConversationRestriction(
+    accountId: string,
+    conversationId: string,
+    isRestricted: boolean,
+    restrictedBy?: string,
+  ) {
+    return this.conversationRepo.setConversationRestriction(accountId, conversationId, isRestricted, restrictedBy);
+  }
 }

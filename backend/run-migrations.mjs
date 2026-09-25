@@ -47,7 +47,42 @@ async function main() {
   )`);
   await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS unread_count INTEGER NOT NULL DEFAULT 0`);
   await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at TEXT NULL`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_restricted BOOLEAN NOT NULL DEFAULT false`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS restricted_by TEXT NULL`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS restricted_at TIMESTAMPTZ NULL`);
   console.log("OK conversations");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS tags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    color VARCHAR(50) NOT NULL DEFAULT '#1890ff',
+    emoji VARCHAR(50),
+    source VARCHAR(50) NOT NULL DEFAULT 'system',
+    zalo_label_id INTEGER,
+    account_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  console.log("OK tags");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS conversation_tags (
+    conversation_id TEXT NOT NULL,
+    tag_id UUID NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    assigned_by VARCHAR(50) NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (conversation_id, tag_id)
+  )`);
+  console.log("OK conversation_tags");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS user_tag_permissions (
+    user_id TEXT NOT NULL REFERENCES system_users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    tag_id UUID NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, account_id, tag_id)
+  )`);
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_user_tag_perms_lookup ON user_tag_permissions(user_id, account_id)");
+  console.log("OK user_tag_permissions");
 
   await knex.raw(`CREATE TABLE IF NOT EXISTS conversation_read_state (
     account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,

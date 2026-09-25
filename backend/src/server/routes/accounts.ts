@@ -8,6 +8,7 @@ import { getRuntimeForAccount } from '../helpers/context.js';
 import { SendRequestRepo } from '../../core/store/send-request-repo.js';
 import { SendRequestError, SendRequestService, type NormalizedSend } from '../services/send-request-service.js';
 import { SendFailure, type SendLifecycle } from '../../core/runtime/send-contract.js';
+import { canUserAccessConversation, filterConversationsForUser } from '../helpers/conversation-access.js';
 
 export function createAccountsRouter(
   logger: GoldLogger,
@@ -267,22 +268,30 @@ export function createAccountsRouter(
   router.get('/:accountId/conversations', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
+      const userId = (req as any).systemUserId as string;
       try {
+        let conversations: any[] = [];
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
         if (targetRuntime && targetRuntime.isSessionActive()) {
-          const conversations = await targetRuntime.getConversationSummaries().catch(() => []);
-          if (conversations.length > 0) {
-            res.json({ conversations, count: conversations.length });
-            return;
-          }
+          conversations = await targetRuntime.getConversationSummaries().catch(() => []);
         }
 
-        // Offline / Inactive session fallback to DB store
-        const offlineConversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
-        res.json({ conversations: offlineConversations, count: offlineConversations.length, offline: true });
+        if (conversations.length === 0) {
+          // Offline / Inactive session fallback to DB store
+          conversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
+        }
+
+        if (userId) {
+          conversations = await filterConversationsForUser(knex, userId, accountId, conversations);
+        }
+
+        res.json({ conversations, count: conversations.length });
       } catch (error) {
         logger.warn('account_conversations_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
-        const offlineConversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
+        let offlineConversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
+        if (userId) {
+          offlineConversations = await filterConversationsForUser(knex, userId, accountId, offlineConversations);
+        }
         res.json({ conversations: offlineConversations, count: offlineConversations.length, offline: true });
       }
     })();
@@ -292,6 +301,7 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
+      const userId = (req as any).systemUserId as string;
       const since = typeof req.query.since === 'string' ? req.query.since : undefined;
       const before = typeof req.query.before === 'string' ? req.query.before : undefined;
       const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
@@ -300,6 +310,14 @@ export function createAccountsRouter(
         return;
       }
       try {
+        if (userId) {
+          const allowed = await canUserAccessConversation(knex, userId, accountId, conversationId);
+          if (!allowed) {
+            res.status(403).json({ error: 'Bạn không có quyền truy cập cuộc trò chuyện này' });
+            return;
+          }
+        }
+
         if ((limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000))
           || (since && !Number.isFinite(Date.parse(since))) || (before && !Number.isFinite(Date.parse(before)))) {
           res.status(400).json({ error: 'Tham số phân trang không hợp lệ.' });
@@ -474,8 +492,17 @@ export function createAccountsRouter(
   router.post('/:accountId/send', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
+      const userId = (req as any).systemUserId as string;
       try {
         const body = req.body ?? {};
+        if (userId && body.conversationId) {
+          const allowed = await canUserAccessConversation(knex, userId, accountId, body.conversationId);
+          if (!allowed) {
+            res.status(403).json({ error: 'Bạn không có quyền gửi tin nhắn vào cuộc trò chuyện này' });
+            return;
+          }
+        }
+
         let attachment;
         if (body.imageBase64) {
           if (typeof body.imageBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.imageBase64)
@@ -607,6 +634,70 @@ export function createAccountsRouter(
         });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat ghi chu that bai' });
+      }
+    })();
+  });
+
+  router.put('/:accountId/conversations/:conversationId/restriction', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const userId = (req as any).systemUserId as string;
+      const isRestricted = Boolean(req.body?.isRestricted);
+
+      try {
+        // Only Master / Admin / Super Admin can toggle restriction
+        const { rows: userRows } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [userId]);
+        const systemRole = userRows[0]?.role;
+        const { rows: memberRows } = await knex.raw(
+          'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
+          [userId, accountId],
+        );
+        const accountRole = memberRows[0]?.role;
+
+        const isAllowed =
+          systemRole === 'super_admin' ||
+          systemRole === 'admin' ||
+          accountRole === 'master' ||
+          accountRole === 'admin';
+
+        if (!isAllowed) {
+          res.status(403).json({ error: 'Chỉ Quản lý (Master/Admin) mới có quyền khóa/mở hội thoại' });
+          return;
+        }
+
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const updated = await targetRuntime.getStore().setConversationRestriction(
+          accountId,
+          conversationId,
+          isRestricted,
+          userId,
+        );
+
+        broadcast({
+          type: 'conversation_restriction_updated',
+          accountId,
+          conversationId,
+          isRestricted: updated?.isRestricted ?? isRestricted,
+          restrictedBy: updated?.restrictedBy,
+          restrictedAt: updated?.restrictedAt,
+        });
+
+        broadcast({
+          type: 'conversation_summaries',
+          accountId,
+          conversations: await targetRuntime.getConversationSummaries(),
+        });
+
+        res.json({
+          ok: true,
+          conversationId,
+          isRestricted: updated?.isRestricted ?? isRestricted,
+          restrictedBy: updated?.restrictedBy,
+          restrictedAt: updated?.restrictedAt,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Cập nhật trạng thái khóa thất bại' });
       }
     })();
   });

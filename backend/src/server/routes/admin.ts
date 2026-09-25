@@ -88,6 +88,75 @@ export function createAdminRouter(
     }
   });
 
+  // ---- USER TAG PERMISSIONS (admin or master) ----
+  router.get('/admin/users/:id/tag-permissions', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const targetUserId = String(req.params.id);
+      const accountId = req.query.accountId ? String(req.query.accountId) : undefined;
+      let query = 'SELECT account_id, tag_id FROM user_tag_permissions WHERE user_id = ?';
+      const params: any[] = [targetUserId];
+      if (accountId) {
+        query += ' AND account_id = ?';
+        params.push(accountId);
+      }
+      const { rows } = await knex.raw(query, params);
+      res.json({ permissions: rows });
+    } catch (err) {
+      res.status(500).json({ error: 'Lỗi tải phân quyền tag' });
+    }
+  });
+
+  router.put('/admin/users/:id/tag-permissions', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const targetUserId = String(req.params.id);
+      const accountId = String(req.body?.accountId ?? '');
+      const tagIds: string[] = Array.isArray(req.body?.tagIds) ? req.body.tagIds : [];
+
+      if (!accountId) {
+        res.status(400).json({ error: 'Thiếu accountId' });
+        return;
+      }
+
+      // Authorization check: Caller must be admin, super_admin, or master/admin of this account
+      const callerUserId = (req as any).systemUserId as string;
+      const { rows: callerUser } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [callerUserId]);
+      const systemRole = callerUser[0]?.role;
+
+      const { rows: callerMem } = await knex.raw(
+        'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
+        [callerUserId, accountId],
+      );
+      const accountRole = callerMem[0]?.role;
+
+      const isAllowed =
+        systemRole === 'super_admin' ||
+        systemRole === 'admin' ||
+        accountRole === 'master' ||
+        accountRole === 'admin';
+
+      if (!isAllowed) {
+        res.status(403).json({ error: 'Không có quyền cấu hình tag permissions cho account này' });
+        return;
+      }
+
+      await knex.transaction(async (trx) => {
+        await trx.raw('DELETE FROM user_tag_permissions WHERE user_id = ? AND account_id = ?', [targetUserId, accountId]);
+        for (const tid of tagIds) {
+          if (tid) {
+            await trx.raw(
+              'INSERT INTO user_tag_permissions (user_id, account_id, tag_id) VALUES (?, ?, ?)',
+              [targetUserId, accountId, tid],
+            );
+          }
+        }
+      });
+
+      res.json({ ok: true, userId: targetUserId, accountId, tagIds });
+    } catch (err) {
+      res.status(500).json({ error: 'Cập nhật phân quyền tag thất bại' });
+    }
+  });
+
   // ---- SUPER ADMIN: all Zalo accounts view ----
   router.get('/admin/accounts/all', requireAuth, requireAdminOrSuper, async (_req: Request, res: Response) => {
     try {

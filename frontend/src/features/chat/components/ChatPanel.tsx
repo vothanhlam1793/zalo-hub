@@ -47,6 +47,7 @@ interface ChatPanelProps extends DeliveryActions {
   onClearFile: () => void;
   onToggleDetails: () => void;
   onReactMessage: (message: Message, reaction: MessageReactionOption) => void;
+  onUpdateRestriction?: (isRestricted: boolean) => Promise<void>;
 }
 
 function formatDateDivider(dateStr: string): string {
@@ -97,6 +98,7 @@ export function ChatPanel({
   onClearFile,
   onToggleDetails,
   onReactMessage,
+  onUpdateRestriction,
   loadState, onRetryLoad, isComposing, canSend = true,
   onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
 }: ChatPanelProps) {
@@ -343,6 +345,12 @@ export function ChatPanel({
                 {activeConversation?.notes && (
                   <span className="text-xs text-amber-500" title="Có ghi chú khách hàng">📝</span>
                 )}
+                {/* Restriction Indicator */}
+                {activeConversation?.isRestricted && (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-red-500/15 text-red-400 border border-red-500/30 font-semibold" title="Cuộc trò chuyện này đang bị khóa đối với nhân viên thường">
+                    🔒 Riêng tư
+                  </span>
+                )}
               </div>
               {typingUsers.length > 0 ? (
                 <div className="text-xs text-blue-500 animate-pulse mt-0.5 font-medium">
@@ -354,6 +362,22 @@ export function ChatPanel({
                 <div className="text-xs text-muted-foreground mt-0.5 truncate">{activeSubtitle || '👤 Khách hàng Zalo'}</div>
               )}
             </button>
+            {onUpdateRestriction && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => onUpdateRestriction(!activeConversation?.isRestricted)}
+                className={`text-xs shrink-0 h-8 px-2.5 rounded-lg border ${
+                  activeConversation?.isRestricted
+                    ? 'bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20'
+                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-[var(--accent)]'
+                }`}
+                title={activeConversation?.isRestricted ? 'Nhấn để mở công khai cho nhân viên' : 'Nhấn để khóa (chỉ Quản lý xem được)'}
+              >
+                <span>{activeConversation?.isRestricted ? '🔒 Đã khóa' : '🔓 Khóa'}</span>
+              </Button>
+            )}
             <Button
               type="button"
               variant="ghost"

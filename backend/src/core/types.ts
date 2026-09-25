@@ -132,6 +132,9 @@ export interface GoldConversationSummary {
   isMuted?: boolean;
   muteUntil?: number | string | null;
   isPinned?: boolean;
+  isRestricted?: boolean;
+  restrictedBy?: string;
+  restrictedAt?: string;
   notes?: string;
   notesUpdatedBy?: string;
   notesUpdatedAt?: string;

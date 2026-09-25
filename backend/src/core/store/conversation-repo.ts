@@ -139,6 +139,7 @@ export class GoldConversationRepo {
            , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
            , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
            , c.is_muted, c.mute_until, c.is_pinned
+           , c.is_restricted, c.restricted_by, c.restricted_at
            , c.notes, c.notes_updated_by, c.notes_updated_at
       FROM conversations c
       LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
@@ -149,6 +150,9 @@ export class GoldConversationRepo {
       is_muted?: boolean;
       mute_until?: number | string | null;
       is_pinned?: boolean;
+      is_restricted?: boolean;
+      restricted_by?: string | null;
+      restricted_at?: string | null;
       notes?: string | null;
       notes_updated_by?: string | null;
       notes_updated_at?: string | null;
@@ -255,6 +259,9 @@ export class GoldConversationRepo {
         isMuted: Boolean(row.is_muted),
         muteUntil: row.mute_until ?? undefined,
         isPinned: Boolean(row.is_pinned),
+        isRestricted: Boolean(row.is_restricted),
+        restrictedBy: row.restricted_by || undefined,
+        restrictedAt: row.restricted_at || undefined,
         notes: row.notes || undefined,
         notesUpdatedBy: row.notes_updated_by || undefined,
         notesUpdatedAt: row.notes_updated_at || undefined,
@@ -788,6 +795,9 @@ export class GoldConversationRepo {
       is_muted?: boolean;
       mute_until?: number | string | null;
       is_pinned?: boolean;
+      is_restricted?: boolean;
+      restricted_by?: string | null;
+      restricted_at?: string | null;
       notes?: string | null;
       notes_updated_by?: string | null;
       notes_updated_at?: string | null;
@@ -856,6 +866,9 @@ export class GoldConversationRepo {
         isMuted: Boolean(row.is_muted),
         muteUntil: row.mute_until ?? undefined,
         isPinned: Boolean(row.is_pinned),
+        isRestricted: Boolean(row.is_restricted),
+        restrictedBy: row.restricted_by || undefined,
+        restrictedAt: row.restricted_at || undefined,
         notes: row.notes || undefined,
       notesUpdatedBy: row.notes_updated_by || undefined,
       notesUpdatedAt: row.notes_updated_at || undefined,
@@ -880,6 +893,36 @@ export class GoldConversationRepo {
         notes: notes ? notes.trim() : null,
         notes_updated_by: updatedBy || null,
         notes_updated_at: now,
+      });
+
+    return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);
+  }
+
+  async setConversationRestriction(
+    accountId: string,
+    conversationId: string,
+    isRestricted: boolean,
+    restrictedBy?: string,
+  ) {
+    const { type, threadId } = parseConversationId(conversationId);
+    const canonicalConversationId = `${type}:${threadId}`;
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
+
+    const now = nowIso();
+    await this.knex('conversations')
+      .where({ account_id: resolvedAccountId })
+      .andWhere((qb) => {
+        qb.where('id', canonicalConversationId)
+          .orWhere('thread_id', threadId)
+          .orWhere('friend_id', threadId)
+          .orWhere('friend_id', `group:${threadId}`);
+      })
+      .update({
+        is_restricted: isRestricted,
+        restricted_by: isRestricted ? (restrictedBy || null) : null,
+        restricted_at: isRestricted ? now : null,
+        updated_at: this.knex.fn.now(),
       });
 
     return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);

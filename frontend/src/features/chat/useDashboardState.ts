@@ -589,6 +589,37 @@ export function useDashboardState() {
     }
   }, [resolveWorkspaceId, chat, composer]);
 
+  const onUpdateRestriction = useCallback(async (isRestricted: boolean) => {
+    const id = resolveWorkspaceId();
+    const convId = chat.activeConversationId;
+    if (!id || !convId) return;
+    const session = chatSession.capture();
+    const key = useChatStore.getState().activeKey;
+    try {
+      const res = await bff.updateRestriction(id, convId, isRestricted);
+      if (!chatSession.valid(session)) return;
+      const currentConvs = chat.getAccountConversations(id);
+      const updated = currentConvs.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              isRestricted: res.isRestricted,
+              restrictedBy: res.restrictedBy,
+              restrictedAt: res.restrictedAt,
+            }
+          : c,
+      );
+      chat.replaceAccountConversations(id, updated);
+      if (useChatStore.getState().activeKey === key) {
+        composer.setStatusMsg(isRestricted ? 'Đã khóa cuộc trò chuyện (chỉ Quản lý xem được).' : 'Đã mở công khai cuộc trò chuyện.');
+      }
+    } catch (err) {
+      if (chatSession.valid(session) && useChatStore.getState().activeKey === key) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Thay đổi quyền riêng tư thất bại');
+      }
+    }
+  }, [resolveWorkspaceId, chat, composer]);
+
   const onCreateTag = useCallback(async (name: string, color: string) => {
     const id = resolveWorkspaceId();
     if (!id || !name.trim()) return;
@@ -910,6 +941,7 @@ export function useDashboardState() {
     onCreateTag,
     onDeleteTag,
     onUpdateNotes,
+    onUpdateRestriction,
     onToggleMute,
     onMoveAccount,
     onMarkAllRead,

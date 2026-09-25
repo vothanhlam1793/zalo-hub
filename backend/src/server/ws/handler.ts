@@ -6,6 +6,7 @@ import type { AccountRuntimeManager } from '../account-manager.js';
 import type { GoldConversationMessage } from '../../core/types.js';
 import { getStatusForRuntime, getEmptyStatus } from '../helpers/status.js';
 import { readAccountPolicy } from '../helpers/account-policy.js';
+import { canUserAccessConversation, filterConversationsForUser } from '../helpers/conversation-access.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'zalohub-dev-secret-change-in-production';
 const AUTH_TIMEOUT_MS = 10_000;
@@ -100,6 +101,23 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
       // A queued command or prior delivery may have changed eligibility. Fresh
       // DB policy and before/after-query expiry checks remain mandatory to send.
       if (!eligible() || !(await refreshPolicy(socket, state)) || !eligible()) return;
+
+      // Scoped check for conversation messages: verify user has permission on conversationId
+      if (payload.type === 'conversation_message') {
+        const msg = payload.message as GoldConversationMessage | undefined;
+        if (msg?.conversationId && state.userId) {
+          const allowed = await canUserAccessConversation(knex, state.userId, accountId, msg.conversationId).catch(() => false);
+          if (!allowed) return;
+        }
+      }
+
+      // Filter conversation summaries according to user's permissions
+      if (payload.type === 'conversation_summaries' && Array.isArray(payload.conversations) && state.userId) {
+        const filtered = await filterConversationsForUser(knex, state.userId, accountId, payload.conversations as any[]).catch(() => []);
+        send(socket, { ...payload, conversations: filtered });
+        return;
+      }
+
       send(socket, payload);
     });
   }
