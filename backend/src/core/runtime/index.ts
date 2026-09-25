@@ -321,7 +321,7 @@ export class GoldRuntime {
     existing.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.state.conversations.set(message.conversationId, existing);
 
-    await this.state.store.replaceConversationMessagesByAccount(this.state.boundAccountId, message.conversationId, existing);
+    await this.state.store.appendConversationMessageByAccount(this.state.boundAccountId, message);
     for (const listener of this.state.conversationListeners) {
       listener(message);
     }

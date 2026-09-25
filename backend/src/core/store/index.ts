@@ -236,6 +236,12 @@ export class GoldStore {
     return this.messageRepo.appendConversationMessage(this.accountRepo.activeAccountId, message, upsertConversation);
   }
 
+  async appendConversationMessageByAccount(accountId: string | undefined, message: GoldConversationMessage): Promise<GoldConversationMessage[]> {
+    const upsertConversation = (acctId: string, convId: string, msgs: GoldConversationMessage[], trx?: Knex.Transaction) =>
+      this.conversationRepo.upsertConversation(acctId, convId, msgs, trx);
+    return this.messageRepo.appendConversationMessage(accountId, message, upsertConversation);
+  }
+
   async updateMessageReactions(accountId: string, providerMessageId: string, reactions: { emoji: string; count: number; userIds?: string[] }[]) {
     return this.messageRepo.updateMessageReactions(accountId, providerMessageId, reactions);
   }
