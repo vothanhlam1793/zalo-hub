@@ -234,40 +234,45 @@ if [[ $FORCED_MODE -eq 0 ]]; then
   fi
 fi
 
+REMOTE_FRONTEND_DIR="/var/www/zalohub-frontend"
+
 deploy_frontend() {
-  blue "[frontend] Building frontend (React Router SSR)"
+  blue "[frontend] Building frontend"
   npm run build --prefix "$FRONTEND_DIR"
 
-  blue "[frontend] Restarting frontend via systemd"
-  if systemctl is-active --quiet zalohub-frontend.service; then
-    sudo systemctl restart zalohub-frontend.service
-  else
-    sudo systemctl start zalohub-frontend.service
-  fi
+  blue "[frontend] Packaging dist"
+  tar -C "$FRONTEND_DIR" -czf "$FRONTEND_ARCHIVE" dist
 
-  blue "[frontend] Waiting for :3400"
-  for _ in $(seq 1 10); do
-    if curl -fsS http://127.0.0.1:3400/ >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
+  blue "[frontend] Uploading archive to $REMOTE_HOST"
+  scp -o StrictHostKeyChecking=accept-new "$FRONTEND_ARCHIVE" "$REMOTE_HOST:/tmp/zalohub-frontend-dist.tgz"
 
-  red "Frontend did not become ready on :3400 within 10 seconds."
-  red "Check log: /tmp/zalohub-frontend.log"
-  exit 1
+  blue "[frontend] Replacing remote dist"
+  ssh "$REMOTE_HOST" "set -e; mkdir -p '$REMOTE_FRONTEND_DIR'; rm -rf '$REMOTE_FRONTEND_DIR/dist.bak'; if [ -d '$REMOTE_FRONTEND_DIR/dist' ]; then mv '$REMOTE_FRONTEND_DIR/dist' '$REMOTE_FRONTEND_DIR/dist.bak'; fi; if ! tar -xzf /tmp/zalohub-frontend-dist.tgz -C '$REMOTE_FRONTEND_DIR'; then rm -rf '$REMOTE_FRONTEND_DIR/dist'; if [ -d '$REMOTE_FRONTEND_DIR/dist.bak' ]; then mv '$REMOTE_FRONTEND_DIR/dist.bak' '$REMOTE_FRONTEND_DIR/dist'; fi; exit 1; fi; test -f '$REMOTE_FRONTEND_DIR/dist/index.html'"
 }
 
 deploy_backend() {
   blue "[backend] Building backend"
   npm run build --prefix "$BACKEND_DIR"
 
-  blue "[backend] Restarting backend via systemd"
-  if systemctl is-active --quiet zalohub.service; then
-    sudo systemctl restart zalohub.service
-  else
-    sudo systemctl start zalohub.service
+  blue "[backend] Restarting backend"
+  local pid
+  pid="$(ss -ltnp 2>/dev/null | awk '/:3399 / { if (match($0, /pid=([0-9]+)/, a)) { print a[1]; exit } }')"
+  if [[ -n "$pid" ]]; then
+    kill "$pid"
+    sleep 2
   fi
+
+  nohup env \
+    NODE_ENV=production \
+    DATABASE_URL="postgresql://zalohub:zalohub@localhost:5433/zalohub" \
+    MINIO_ENDPOINT=localhost \
+    MINIO_PORT=9000 \
+    MINIO_ACCESS_KEY=zalohub \
+    MINIO_SECRET_KEY=zalohub-minio-secret \
+    MINIO_BUCKET=zalohub-media \
+    JWT_SECRET=zalohub-prod-jwt-secret-2026 \
+    node "$BACKEND_DIR/dist/server/index.js" \
+    > /tmp/zalohub-backend-prod.log 2>&1 & disown
 
   blue "[backend] Waiting for :3399"
   for _ in $(seq 1 20); do
@@ -277,9 +282,9 @@ deploy_backend() {
     sleep 1
   done
 
-    red "Backend did not become ready on :3399 within 20 seconds."
-    red "Check log: /tmp/zalohub-backend-prod.log"
-    exit 1
+  red "Backend did not become ready on :3399 within 20 seconds."
+  red "Check log: /tmp/zalohub-backend-prod.log"
+  exit 1
 }
 
 deploy_bff() {
@@ -307,10 +312,6 @@ deploy_bff() {
 }
 
 verify_all() {
-  blue '[verify] Frontend health'
-  curl -fsS "$FRONTEND_HEALTH_URL" || true
-  printf '\n'
-
   blue '[verify] Local backend status'
   curl -fsS "$LOCAL_STATUS_URL"
   printf '\n'
