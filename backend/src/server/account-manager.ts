@@ -191,12 +191,18 @@ export class AccountRuntimeManager {
         this.logger.info('dify_bot_executor_attached', { accountId: normalizedAccountId });
       }
 
-      await runtime.startBoundAccount();
+      try {
+        await runtime.startBoundAccount();
+        this.logger.info('account_runtime_ready', { accountId: normalizedAccountId });
+        void this.backgroundSyncAfterLogin(runtime, normalizedAccountId);
+      } catch (startError) {
+        this.logger.warn('account_runtime_start_offline', {
+          accountId: normalizedAccountId,
+          error: startError instanceof Error ? startError.message : String(startError),
+        });
+      }
+
       this.runtimes.set(normalizedAccountId, runtime);
-      this.logger.info('account_runtime_ready', { accountId: normalizedAccountId });
-
-      void this.backgroundSyncAfterLogin(runtime, normalizedAccountId);
-
       return runtime;
     })();
 

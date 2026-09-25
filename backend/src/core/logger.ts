@@ -48,11 +48,15 @@ export class GoldLogger {
     this.write('INFO', message, details);
   }
 
+  warn(message: string, details?: unknown) {
+    this.write('WARN', message, details);
+  }
+
   error(message: string, details?: unknown) {
     this.write('ERROR', message, details);
   }
 
-  private write(level: 'INFO' | 'ERROR', message: string, details?: unknown) {
+  private write(level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: unknown) {
     const lines = [
       `[${new Date().toISOString()}] ${level} ${message}`,
       details === undefined ? undefined : serialize(details),

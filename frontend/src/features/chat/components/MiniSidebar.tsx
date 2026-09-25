@@ -74,7 +74,7 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
                       <span className="absolute right-1 bottom-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-[var(--card)]" />
                     )}
                     {isInactive && (
-                      <span className="absolute right-1 bottom-1 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-[var(--card)]" />
+                      <span className="absolute right-0.5 bottom-0.5 w-3 h-3 rounded-full border-2 border-amber-400 border-t-transparent animate-spin ring-1 ring-[var(--card)] bg-amber-400/20" />
                     )}
                     {needsLogin && (
                       <span className="absolute right-1 bottom-1 w-2.5 h-2.5 rounded-full bg-slate-400 ring-2 ring-[var(--card)]" />
@@ -91,7 +91,7 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
                     <div className="font-semibold">{label}</div>
                     {subtitle && <div className="text-muted-foreground">{subtitle}</div>}
                     {isCurrent && <div className="text-emerald-500 font-medium mt-1">Đang hoạt động</div>}
-                    {isInactive && <div className="text-amber-500 font-medium mt-1">Chưa active session</div>}
+                    {isInactive && <div className="text-amber-500 font-medium mt-1 flex items-center gap-1.5"><span className="inline-block w-2 h-2 border border-amber-400 border-t-transparent rounded-full animate-spin" />Đang kết nối lại / Chưa active</div>}
                     {needsLogin && <div className="text-slate-400 font-medium mt-1">Chưa đăng nhập</div>}
                     {unreadCount > 0 && <div className="text-red-500 font-bold mt-1">{unreadCount} tin chưa đọc</div>}
                   </div>

@@ -373,20 +373,23 @@ export function ChatPanel({
             </div>
           )}
           {showDisconnectBanner && (
-            <div className="shrink-0 px-5 py-2 text-xs bg-amber-500/10 text-amber-300 border-b border-amber-500/20 flex items-center justify-between gap-2">
-              <span>⚠️ Tài khoản mất kết nối hoặc chưa active.</span>
-              <div className="flex items-center gap-2">
+            <div className="shrink-0 px-5 py-2.5 text-xs bg-amber-500/10 text-amber-300 border-b border-amber-500/20 flex items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="inline-block w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                <span className="truncate font-medium">Tài khoản mất kết nối Zalo — Hệ thống đang tự động kết nối lại hoặc cần xác thực lại.</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
                 {onReconnectAccount && (
                   <Button
                     type="button"
                     size="sm"
                     onClick={() => onReconnectAccount(workspaceAccountId || activeConversation?.accountId)}
-                    className="h-6 px-2 text-[11px] bg-amber-500 hover:bg-amber-600 text-black font-semibold shrink-0"
+                    className="h-6.5 px-2.5 text-[11px] bg-amber-500 hover:bg-amber-600 text-black font-semibold shrink-0 gap-1"
                   >
-                    ⚡ Kết nối lại
+                    <span>⚡ Kết nối lại</span>
                   </Button>
                 )}
-                <a href="/admin" className="underline text-[11px] shrink-0 text-amber-200">Admin</a>
+                <a href="/admin" className="underline text-[11px] shrink-0 text-amber-200 hover:text-white">Admin</a>
               </div>
             </div>
           )}

@@ -168,19 +168,25 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
+        const refresh = req.query.refresh === '1';
+
+        if (targetRuntime && targetRuntime.isSessionActive()) {
+          const contactCache = await targetRuntime.getContactCache();
+          const contacts = refresh || contactCache.length === 0
+            ? await targetRuntime.listFriends().catch(() => contactCache)
+            : contactCache;
+          res.json({ contacts, count: contacts.length });
           return;
         }
-        const refresh = req.query.refresh === '1';
-        const contactCache = await targetRuntime.getContactCache();
-        const contacts = refresh || contactCache.length === 0
-          ? await targetRuntime.listFriends()
-          : contactCache;
-        res.json({ contacts, count: contacts.length });
+
+        // Offline / Inactive session fallback to DB store
+        const offlineContacts = await accountManager.getRegistryStore().listContactsByAccount(accountId).catch(() => []);
+        res.json({ contacts: offlineContacts, count: offlineContacts.length, offline: true });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Tai contacts that bai' });
+        logger.warn('account_contacts_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
+        const offlineContacts = await accountManager.getRegistryStore().listContactsByAccount(accountId).catch(() => []);
+        res.json({ contacts: offlineContacts, count: offlineContacts.length, offline: true });
       }
     })();
   });
@@ -214,37 +220,41 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
-          return;
-        }
-        const groupCache = await targetRuntime.getGroupCache();
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
         const refresh = req.query.refresh === '1';
 
-        // DB-First: return cached groups immediately if present
-        if (groupCache.length > 0 && !refresh) {
-          res.json({ groups: groupCache, count: groupCache.length });
+        if (targetRuntime && targetRuntime.isSessionActive()) {
+          const groupCache = await targetRuntime.getGroupCache();
+          if (groupCache.length > 0 && !refresh) {
+            res.json({ groups: groupCache, count: groupCache.length });
+            return;
+          }
+
+          // Fetch from Zalo with timeout protection
+          const groups = await Promise.race([
+            targetRuntime.listGroups(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Fetch groups timeout')), 7000)),
+          ]).catch(async (error) => {
+            logger.error('account_groups_refresh_failed', {
+              accountId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            const fallbackGroups = await targetRuntime.getGroupCache();
+            if (fallbackGroups.length > 0) return fallbackGroups;
+            return [];
+          });
+
+          res.json({ groups, count: groups.length });
           return;
         }
 
-        // Fetch from Zalo with timeout protection
-        const groups = await Promise.race([
-          targetRuntime.listGroups(),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Fetch groups timeout')), 7000)),
-        ]).catch(async (error) => {
-          logger.error('account_groups_refresh_failed', {
-            accountId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          const fallbackGroups = await targetRuntime.getGroupCache();
-          if (fallbackGroups.length > 0) return fallbackGroups;
-          return [];
-        });
-
-        res.json({ groups, count: groups.length });
+        // Offline / Inactive session fallback to DB store
+        const offlineGroups = await accountManager.getRegistryStore().listGroupsByAccount(accountId).catch(() => []);
+        res.json({ groups: offlineGroups, count: offlineGroups.length, offline: true });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Tai groups that bai' });
+        logger.warn('account_groups_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
+        const offlineGroups = await accountManager.getRegistryStore().listGroupsByAccount(accountId).catch(() => []);
+        res.json({ groups: offlineGroups, count: offlineGroups.length, offline: true });
       }
     })();
   });
@@ -253,15 +263,22 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
-          return;
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
+        if (targetRuntime && targetRuntime.isSessionActive()) {
+          const conversations = await targetRuntime.getConversationSummaries().catch(() => []);
+          if (conversations.length > 0) {
+            res.json({ conversations, count: conversations.length });
+            return;
+          }
         }
-        const conversations = await targetRuntime.getConversationSummaries();
-        res.json({ conversations, count: conversations.length });
+
+        // Offline / Inactive session fallback to DB store
+        const offlineConversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
+        res.json({ conversations: offlineConversations, count: offlineConversations.length, offline: true });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversations that bai' });
+        logger.warn('account_conversations_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
+        const offlineConversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
+        res.json({ conversations: offlineConversations, count: offlineConversations.length, offline: true });
       }
     })();
   });
