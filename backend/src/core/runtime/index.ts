@@ -74,7 +74,7 @@ export class GoldRuntime {
         closeWindowStart: 0,
         needsRelogin: false,
       },
-      historySyncState: undefined,
+      historySyncStates: new Map(),
       pendingHistorySyncs: new Map(),
       cipherKey: undefined,
     };

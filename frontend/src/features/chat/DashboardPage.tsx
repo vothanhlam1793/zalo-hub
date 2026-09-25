@@ -220,6 +220,8 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
     selectedTagId,
     setSelectedTagId,
     onSyncTags,
+    onAssignTag,
+    onUnassignTag,
   } = dashboard;
   const [screen, setScreen] = useState<'list' | 'chat'>('list');
 

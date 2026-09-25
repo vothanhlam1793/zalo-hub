@@ -263,17 +263,29 @@ export class GoldListener {
   }
 
   private async handleOldMessages(messages: ListenerMessage[], threadType: number) {
-    const sync = this.state.historySyncState;
-    if (!sync) {
+    if (this.state.historySyncStates.size === 0) {
       this.state.logger.info('history_sync_old_messages_ignored', { reason: 'no_pending_sync', count: messages.length, threadType });
       return;
     }
 
     const forcedType = threadType === ThreadType.Group ? 'group' : 'direct';
     const normalizedCandidates = await Promise.all(messages.map((message) => this.normalizeListenerMessage(message, forcedType)));
-    const normalized = normalizedCandidates
-      .filter((message): message is GoldConversationMessage => message !== undefined)
-      .filter((message) => message.threadId === sync.threadId && message.conversationType === sync.type)
+    const allNormalized = normalizedCandidates.filter((message): message is GoldConversationMessage => message !== undefined);
+
+    // Identify target threadId from candidate messages or fallback to single pending sync
+    const firstThreadId = allNormalized[0]?.threadId ?? String(messages[0]?.threadId ?? '').trim();
+    let sync = firstThreadId ? this.state.historySyncStates.get(firstThreadId) : undefined;
+    if (!sync && this.state.historySyncStates.size === 1) {
+      sync = this.state.historySyncStates.values().next().value;
+    }
+
+    if (!sync) {
+      this.state.logger.info('history_sync_old_messages_ignored', { reason: 'sync_target_not_matched', count: messages.length, threadType, firstThreadId });
+      return;
+    }
+
+    const normalized = allNormalized
+      .filter((message) => message.threadId === sync!.threadId && message.conversationType === sync!.type)
       .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
 
     let insertedCount = 0;
@@ -302,7 +314,7 @@ export class GoldListener {
     };
 
     clearTimeout(sync.timer);
-    this.state.historySyncState = undefined;
+    this.state.historySyncStates.delete(sync.threadId);
     this.state.logger.info('history_sync_completed', result);
     sync.resolve(result);
   }
@@ -377,7 +389,14 @@ export class GoldListener {
         const persistAttachments = this._persistMessageAttachmentsLocally;
         setImmediate(async () => {
           try {
-            await persistAttachments(normalizedMessage);
+            const updated = await persistAttachments(normalizedMessage);
+            if (updated) {
+              for (const listener of this.state.conversationListeners) {
+                try {
+                  listener(updated);
+                } catch {}
+              }
+            }
           } catch (error) {
             this.state.logger.warn('background_attachment_persist_failed', {
               messageId: normalizedMessage.id,

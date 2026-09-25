@@ -268,11 +268,12 @@ export class GoldSync {
   ): Promise<HistorySyncResult> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (this.state.historySyncState?.conversationId !== conversationId) {
+        const sync = this.state.historySyncStates.get(target.threadId);
+        if (sync?.conversationId !== conversationId) {
           return;
         }
 
-        this.state.historySyncState = undefined;
+        this.state.historySyncStates.delete(target.threadId);
         this.state.pendingHistorySyncs.delete(conversationId);
         const result: HistorySyncResult = {
           conversationId,
@@ -288,7 +289,7 @@ export class GoldSync {
         resolve(result);
       }, timeoutMs);
 
-      this.state.historySyncState = {
+      this.state.historySyncStates.set(target.threadId, {
         conversationId,
         threadId: target.threadId,
         type: target.type as HistorySyncResult['type'],
@@ -297,7 +298,7 @@ export class GoldSync {
         resolve,
         reject,
         timer,
-      };
+      });
 
       listener.requestOldMessages?.(
         target.type === 'group' ? ThreadType.Group : ThreadType.User,

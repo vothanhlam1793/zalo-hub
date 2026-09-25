@@ -117,17 +117,24 @@ test('SDK acceptance precedes local failure; later GET retains sent and no provi
 });
 
 test('server timeout becomes unknown; late success upgrades same attempt without resend', async () => {
-  const repo = new FakeSendRepo(); const service = new SendRequestService(repo, logger, { text: 10, attachment: 10 });
-  const release = deferred<void>(); const completed = deferred<void>(); let calls = 0;
-  const keepAlive = delay(60);
+  const repo = new FakeSendRepo(); const service = new SendRequestService(repo, logger, { text: 5, attachment: 5 });
+  const release = deferred<void>(); const finished = deferred<void>(); let calls = 0;
   const result = await service.send(input, async (_, life) => {
-    calls++; life.onDispatch?.(); await release.promise; const result = await accept(life); completed.resolve(); return result;
+    calls++; life.onDispatch?.(); await release.promise;
+    try {
+      const result = await accept(life);
+      return result;
+    } finally {
+      finished.resolve();
+    }
   });
   assert.equal(result.status, 202); assert.equal(result.body.receipt?.status, 'unknown');
   await service.send({ ...input, retry: true }, async () => { calls++; return execution(); });
-  release.resolve(); await completed.promise; await delay(0);
+  release.resolve();
+  await finished.promise;
+  await service.drain();
   assert.equal((await service.get(input.accountId, requestId, input.systemUserId, false)).status, 'sent');
-  assert.equal(calls, 1); await keepAlive;
+  assert.equal(calls, 1);
 });
 
 test('acceptance checkpoint write failure retains evidence and never permits provider retry', async () => {
@@ -148,15 +155,17 @@ test('acceptance checkpoint write failure retains evidence and never permits pro
 test('pre-dispatch timeout fences a late runtime acquisition; explicit retry remains safe', async () => {
   const repo = new FakeSendRepo(); const service = new SendRequestService(repo, logger, { text: 10, attachment: 10 });
   const release = deferred<void>(); const finished = deferred<void>(); let providerCalls = 0;
-  const keepAlive = delay(60);
   const result = await service.send(input, async (_, life) => {
     await release.promise;
     try { life.onDispatch?.(); providerCalls++; return execution(); } finally { finished.resolve(); }
   });
   assert.equal(result.body.receipt?.status, 'failed');
   await service.send({ ...input, retry: true }, async (_, life) => { life.onDispatch?.(); providerCalls++; return accept(life); });
-  release.resolve(); await finished.promise; await delay(0);
-  assert.equal(providerCalls, 1); assert.equal((await repo.get(input.accountId, requestId))?.status, 'sent'); await keepAlive;
+  release.resolve();
+  await finished.promise;
+  await service.drain();
+  assert.equal(providerCalls, 1);
+  assert.equal((await repo.get(input.accountId, requestId))?.status, 'sent');
 });
 
 test('legacy callers keep method/result, but intentionally have no registry guarantee', async () => {

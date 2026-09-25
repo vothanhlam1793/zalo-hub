@@ -136,6 +136,44 @@ export function useDashboardState() {
     },
     onConversations: ({ accountId, conversations: nextConversations }: WsConversationSummariesPayload) => {
       if (!accountId) return;
+      const prevConvs = chat.getAccountConversations(accountId);
+
+      // Detect incoming messages for background (non-active) conversations
+      if (prevConvs && prevConvs.length > 0 && initialBootstrapDoneRef.current) {
+        const activeConvId = activeConversationIdRef.current;
+        for (const next of nextConversations) {
+          // If active conversation, onMessage already handles notification & sound
+          if (next.id === activeConvId) continue;
+          if (next.lastDirection !== 'incoming') continue;
+
+          const prev = prevConvs.find((c) => c.id === next.id);
+          const isNewer = !prev || (next.lastMessageTimestamp && (!prev.lastMessageTimestamp || next.lastMessageTimestamp > prev.lastMessageTimestamp));
+          const unreadIncreased = (next.unreadCount ?? 0) > (prev?.unreadCount ?? 0);
+
+          if (isNewer || unreadIncreased) {
+            const isMuted = next.isMuted === true;
+            const isGroup = next.type === 'group';
+            const settings = notificationService.getSettings();
+
+            if (!isMuted && (!isGroup || settings.notifyGroupMessages)) {
+              notificationService.playChime();
+              const senderTitle = next.lastMessageSenderName || next.title || 'Tin nhắn mới';
+              const bodyText = next.lastMessageKind === 'text' ? next.lastMessageText : `[${next.lastMessageKind}] ${next.lastMessageText || ''}`;
+
+              notificationService.showDesktopNotification(
+                senderTitle,
+                bodyText,
+                next.avatar,
+                () => {
+                  onSelectConversation(next.id);
+                }
+              );
+              notificationService.startTabFlashing(`${senderTitle}: ${bodyText}`);
+            }
+          }
+        }
+      }
+
       chat.replaceAccountConversations(accountId, nextConversations);
     },
     onMessage: ({ accountId, message }: WsConversationMessagePayload) => {

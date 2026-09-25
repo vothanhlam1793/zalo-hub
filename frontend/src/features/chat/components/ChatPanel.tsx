@@ -6,7 +6,7 @@ import { GroupAvatar } from '@/components/GroupAvatar';
 import { formatSize, getInitial, isImageAttachment } from '@/utils';
 import { MessageBubble, type MessageGroupItem } from './MessageBubble';
 import Lightbox, { type LightboxImage } from './Lightbox';
-import type { ConversationSummary, Message, MessageReactionOption } from '@/types';
+import type { Contact, ConversationSummary, GroupMember, Message, MessageReactionOption } from '@/types';
 import { useComposerStore } from '@/stores/composer-store';
 import type { DeliveryActions } from './messages/MessageDeliveryStatus';
 

@@ -86,6 +86,11 @@ export class SendRequestService {
   // Held until dispatch AND local persistence settle, not merely until HTTP times out.
   private readonly persisting = new Set<string>();
   private readonly repairing = new Set<string>();
+  private readonly activeSends = new Set<Promise<unknown>>();
+
+  async drain() {
+    await Promise.allSettled([...this.activeSends]);
+  }
   constructor(private readonly repo: SendRequestRepository, private readonly logger: Pick<GoldLogger, 'info' | 'error'>,
     private readonly timeouts = { text: 30_000, attachment: 120_000 }) {}
 
@@ -160,7 +165,7 @@ export class SendRequestService {
     const finish = (async () => {
       try {
         const execution = await dispatch(normalized, { clientRequestId: row.client_request_id,
-          onDispatch: () => { if (expired) throw new SendFailure('PRE_DISPATCH_FAILED', errorMessages.PRE_DISPATCH_FAILED, true, 409); dispatched = true; },
+          onDispatch: () => { if (expired && !dispatched) throw new SendFailure('PRE_DISPATCH_FAILED', errorMessages.PRE_DISPATCH_FAILED, true, 409); dispatched = true; },
           onAccepted: acceptance });
         if (execution.status === 'sent') await acceptance(execution, true);
         else if (row.status !== 'sent') await save({ status: 'unknown', error_code: 'OUTCOME_UNKNOWN', retryable: false,
@@ -176,6 +181,10 @@ export class SendRequestService {
             this.logger.error('send_acceptance_checkpoint_failed', { accountId: row.account_id, clientRequestId: row.client_request_id });
           });
         } else {
+          const current = await this.repo.get(row.account_id, row.client_request_id);
+          if (current && (current.status === 'sent' || current.attempt_count > row.attempt_count)) {
+            return response(current);
+          }
           const definite = !dispatched || error instanceof SendFailure;
           const patch: Partial<SendRequestRow> = { status: definite ? 'failed' : 'unknown',
             error_code: error instanceof SendFailure ? error.code : definite ? 'PRE_DISPATCH_FAILED' : 'OUTCOME_UNKNOWN',
@@ -191,21 +200,26 @@ export class SendRequestService {
           attempt: row.attempt_count, status: row.status, durationMs: Date.now() - started });
       }
     })();
+    this.activeSends.add(finish);
+    finish.finally(() => this.activeSends.delete(finish));
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelTimeout: (() => void) | undefined;
     const timeout = new Promise<SendResponse>((resolve) => {
       timer = setTimeout(() => {
         expired = true;
-        void (async () => {
-          if (row.status !== 'sent') {
-            await save({ status: dispatched ? 'unknown' : 'failed', error_code: dispatched ? 'OUTCOME_UNKNOWN' : 'PRE_DISPATCH_FAILED',
-              retryable: !dispatched }).catch(() => { row.status = 'unknown'; row.retryable = false; });
-          }
+        (row.status !== 'sent'
+          ? save({ status: dispatched ? 'unknown' : 'failed', error_code: dispatched ? 'OUTCOME_UNKNOWN' : 'PRE_DISPATCH_FAILED', retryable: !dispatched })
+          : Promise.resolve()
+        ).catch(() => { row.status = 'unknown'; row.retryable = false; }).finally(() => {
           resolve(response(row));
-        })();
-       }, normalized.attachment ? this.timeouts.attachment : this.timeouts.text);
-      timer.unref?.();
+        });
+      }, normalized.attachment ? this.timeouts.attachment : this.timeouts.text);
+      cancelTimeout = () => {
+        if (timer) clearTimeout(timer);
+        resolve(response(row));
+      };
     });
     try { return await Promise.race([finish, timeout]); }
-    finally { if (timer) clearTimeout(timer); }
+    finally { cancelTimeout?.(); }
   }
 }

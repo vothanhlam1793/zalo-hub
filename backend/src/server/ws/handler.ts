@@ -117,19 +117,32 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
     broadcast({ type: 'conversation_message', accountId, message });
   }
 
+  const summaryDebounceTimers = new Map<string, NodeJS.Timeout>();
+
+  function scheduleAccountSummaryBroadcast(accountId: string) {
+    if (summaryDebounceTimers.has(accountId)) return;
+    const timer = setTimeout(async () => {
+      summaryDebounceTimers.delete(accountId);
+      try {
+        const runtime = accountManager.getRuntime(accountId);
+        if (!runtime) return;
+        const [conversations, status] = await Promise.all([
+          runtime.getConversationSummaries(),
+          getStatusForRuntime(runtime),
+        ]);
+        broadcast({ type: 'conversation_summaries', accountId, conversations });
+        broadcast({ type: 'session_state', accountId, status });
+      } catch {}
+    }, 150);
+    summaryDebounceTimers.set(accountId, timer);
+  }
+
   const removeMessageListener = accountManager.onConversationMessage(({ accountId, message }) => {
     // Deliver incoming message frame immediately to connected clients
     broadcastConversationMessage(accountId, message);
 
-    // Compute and broadcast updated summaries in background asynchronously
-    setImmediate(async () => {
-      try {
-        const runtime = accountManager.getRuntime(accountId);
-        if (!runtime) return;
-        broadcast({ type: 'conversation_summaries', accountId, conversations: await runtime.getConversationSummaries() });
-        broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(runtime) });
-      } catch {}
-    });
+    // Compute and broadcast updated summaries in background asynchronously (debounced)
+    scheduleAccountSummaryBroadcast(accountId);
   });
 
   async function initialSnapshots(socket: WebSocket, state: SocketState) {
@@ -245,6 +258,8 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
   }, POLICY_INTERVAL_MS);
   policyTimer.unref();
   wsServer.on('close', () => {
+    for (const timer of summaryDebounceTimers.values()) clearTimeout(timer);
+    summaryDebounceTimers.clear();
     clearInterval(policyTimer);
     removeMessageListener();
     for (const state of states.values()) { state.closed = true; clearTimeout(state.timer); }

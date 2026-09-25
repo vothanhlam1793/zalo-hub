@@ -95,7 +95,7 @@ export interface SharedState {
   listenerStarted: boolean;
   listenerAttached: boolean;
   listenerState: ListenerState;
-  historySyncState: HistorySyncState | undefined;
+  historySyncStates: Map<string, HistorySyncState>;
   pendingHistorySyncs: Map<string, Promise<HistorySyncResult>>;
   cipherKey: string | undefined;
 }
