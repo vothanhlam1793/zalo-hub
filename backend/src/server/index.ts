@@ -127,11 +127,11 @@ async function main() {
 
   const mediaBucket = process.env.MINIO_BUCKET || 'zalohub-media';
   const mediaClient = new MinioClient({
-    endPoint: process.env.MINIO_ENDPOINT || 'localhost',
+    endPoint: process.env.MINIO_ENDPOINT || '127.0.0.1',
     port: Number(process.env.MINIO_PORT || 9000),
     useSSL: false,
-    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-    secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+    accessKey: process.env.MINIO_ACCESS_KEY || process.env.MINIO_USER || 'zalohub',
+    secretKey: process.env.MINIO_SECRET_KEY || process.env.MINIO_PASSWORD || 'zalohub-minio-secret',
   });
 
   const storageRepo = new GoldStorageRepo(knex);
