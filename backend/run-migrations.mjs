@@ -138,6 +138,41 @@ async function main() {
   )`);
   console.log("OK attachments");
 
+  await knex.raw(`CREATE TABLE IF NOT EXISTS storage_drives (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'gdrive',
+    account_email VARCHAR(255),
+    credentials JSONB NOT NULL DEFAULT '{}',
+    root_folder_id VARCHAR(255),
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+    assigned_accounts JSONB NOT NULL DEFAULT '[]',
+    is_default BOOLEAN NOT NULL DEFAULT false,
+    quota_bytes BIGINT,
+    used_bytes BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_storage_drives_provider ON storage_drives(provider)");
+  console.log("OK storage_drives");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS storage_settings (
+    key VARCHAR(100) PRIMARY KEY,
+    value JSONB NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  console.log("OK storage_settings");
+
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS storage_tier VARCHAR(20) NOT NULL DEFAULT 'hot'`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS storage_provider VARCHAR(50) NOT NULL DEFAULT 'minio'`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS storage_drive_id UUID NULL REFERENCES storage_drives(id) ON DELETE SET NULL`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS remote_file_id TEXT NULL`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS remote_web_view_link TEXT NULL`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS offloaded_at TIMESTAMPTZ NULL`);
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_attachments_tier_created ON attachments(storage_tier, created_at)");
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_attachments_local_path ON attachments(local_path)");
+  console.log("OK attachments extension for tiered storage");
+
   await knex.raw(`CREATE TABLE IF NOT EXISTS system_users (
     id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
     display_name TEXT NOT NULL, role VARCHAR(50) NOT NULL DEFAULT 'user',

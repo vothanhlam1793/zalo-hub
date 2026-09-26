@@ -34,7 +34,10 @@ import { SendRequestRepo } from '../core/store/send-request-repo.js';
 import { SendRequestService } from './services/send-request-service.js';
 import { createLegacyRouter } from './routes/legacy.js';
 import { createAdminRouter } from './routes/admin.js';
+import { createStorageRouter } from './routes/storage.js';
 import { createMonitorRouter } from './routes/monitor.js';
+import { GoldStorageRepo } from '../core/storage/storage-repo.js';
+import { MediaOffloaderService } from '../core/storage/offloader.js';
 import { getEmptyStatus } from './helpers/status.js';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
@@ -131,16 +134,72 @@ async function main() {
     secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
   });
 
+  const storageRepo = new GoldStorageRepo(knex);
+  const mediaOffloaderService = new MediaOffloaderService({
+    storageRepo,
+    minioClient: mediaClient,
+    minioBucket: mediaBucket,
+  });
+  mediaOffloaderService.startCronWorker();
+
   app.get('/media/*', async (req, res) => {
     try {
       const objPath = req.path.slice('/media/'.length);
       if (!objPath) { res.status(400).send('Missing file path'); return; }
+
+      // 1. Check if attachment is archived on Google Drive (cold tier)
+      const attachment = await storageRepo.getAttachmentByPath(req.path);
+      if (attachment && attachment.storageTier === 'cold' && attachment.remoteFileId && attachment.storageDriveId) {
+        const drive = await storageRepo.getDriveById(attachment.storageDriveId);
+        if (drive) {
+          try {
+            const driveClient = mediaOffloaderService.getDriveClient(drive);
+            const rangeHeader = req.headers.range as string | undefined;
+            const driveStream = await driveClient.getFileStream(attachment.remoteFileId, rangeHeader);
+
+            res.status(driveStream.statusCode);
+            res.setHeader('Content-Type', driveStream.contentType || attachment.mimeType || 'application/octet-stream');
+            if (driveStream.contentLength) res.setHeader('Content-Length', String(driveStream.contentLength));
+            if (driveStream.contentRange) res.setHeader('Content-Range', driveStream.contentRange);
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+            driveStream.stream.pipe(res);
+            return;
+          } catch (driveErr) {
+            logger.warn('gdrive_stream_failed_fallback_minio', { path: req.path, error: String(driveErr) });
+          }
+        }
+      }
+
+      // 2. Stream from MinIO (hot tier)
       const stat = await mediaClient.statObject(mediaBucket, objPath);
-      res.setHeader('Content-Type', (stat.metaData as Record<string, string>)?.['content-type'] || 'application/octet-stream');
-      res.setHeader('Content-Length', String(stat.size));
+      const contentType = (stat.metaData as Record<string, string>)?.['content-type'] || 'application/octet-stream';
+      const fileSize = stat.size ?? 0;
+      const range = req.headers.range;
+
+      res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      const stream = await mediaClient.getObject(mediaBucket, objPath);
-      stream.pipe(res);
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunkSize = end - start + 1;
+
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        res.setHeader('Content-Length', String(chunkSize));
+        res.setHeader('Content-Type', contentType);
+
+        const stream = await mediaClient.getPartialObject(mediaBucket, objPath, start, chunkSize);
+        stream.pipe(res);
+      } else {
+        res.status(200);
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Length', String(fileSize));
+        const stream = await mediaClient.getObject(mediaBucket, objPath);
+        stream.pipe(res);
+      }
     } catch {
       res.status(404).send('Not found');
     }
@@ -178,6 +237,7 @@ async function main() {
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api/tags', createTagsRouter(loginStore, accountManager, broadcast, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
+  app.use('/api', createStorageRouter(logger, storageRepo, mediaOffloaderService, systemAuth.requireAuth, systemAuth.requireSystemRole));
   app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
   app.use('/api/bot', createBotApiRouter(accountManager, difyBotService, loginStore));
 

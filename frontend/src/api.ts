@@ -411,4 +411,54 @@ export const api = {
   adminBotUpdate: (id: string, data: any) => req<any>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
   adminBotDelete: (id: string) => req<{ ok: boolean }>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   adminAccountEntities: (accountId: string) => req<{ accountId: string; entities: Array<{ id: string; name: string; type: 'group' | 'contact' | 'conversation' }> }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/entities`),
+
+  // Storage & Google Drive
+  getStorageSettings: () => req<{ settings: import('./types').StorageSettings; stats: import('./types').StorageStats }>('/api/admin/storage/settings'),
+  updateStorageSettings: (data: Partial<import('./types').StorageSettings>) =>
+    req<{ ok: boolean; settings: import('./types').StorageSettings }>('/api/admin/storage/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  getStorageDrives: () => req<{ drives: import('./types').StorageDrive[] }>('/api/admin/storage/drives'),
+  createStorageDrive: (data: {
+    name: string;
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+    accountEmail?: string;
+    rootFolderId?: string;
+    assignedAccounts?: string[];
+    isDefault?: boolean;
+  }) =>
+    req<{ ok: boolean; drive: import('./types').StorageDrive }>('/api/admin/storage/drives', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateStorageDrive: (id: string, data: Partial<{
+    name: string;
+    accountEmail: string;
+    rootFolderId: string;
+    assignedAccounts: string[];
+    isDefault: boolean;
+    status: 'active' | 'disabled' | 'full' | 'error';
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+  }>) =>
+    req<{ ok: boolean; drive: import('./types').StorageDrive }>(`/api/admin/storage/drives/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteStorageDrive: (id: string) =>
+    req<{ ok: boolean }>(`/api/admin/storage/drives/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  testStorageDrive: (id: string) =>
+    req<{ ok: boolean; displayName?: string; email?: string; quotaLimit?: number; quotaUsage?: number }>(
+      `/api/admin/storage/drives/${encodeURIComponent(id)}/test`,
+      { method: 'POST', body: '{}' }
+    ),
+  triggerOffloadNow: (limit = 100) =>
+    req<{ ok: boolean; result: { totalScanned: number; totalOffloaded: number; totalFailed: number; bytesSaved: number; errors: Array<{ attachmentId: string; message: string }> } }>(
+      '/api/admin/storage/offload-now',
+      { method: 'POST', body: JSON.stringify({ limit }) }
+    ),
 };

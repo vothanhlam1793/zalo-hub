@@ -209,3 +209,38 @@ export interface WsConversationMessagePayload {
   accountId: string;
   message: Message;
 }
+
+export interface StorageDrive {
+  id: string;
+  name: string;
+  provider: 'gdrive';
+  accountEmail?: string;
+  rootFolderId?: string;
+  status: 'active' | 'disabled' | 'full' | 'error';
+  assignedAccounts: string[];
+  isDefault: boolean;
+  quotaBytes?: number;
+  usedBytes?: number;
+  createdAt: string;
+  updatedAt: string;
+  credentials?: {
+    clientId?: string;
+    hasRefreshToken?: boolean;
+  };
+}
+
+export interface StorageSettings {
+  hotRetentionDays: number;
+  autoOffloadEnabled: boolean;
+  cronIntervalMinutes: number;
+  defaultDriveStrategy: 'round_robin' | 'fill_first' | 'account_mapping';
+}
+
+export interface StorageStats {
+  hotAttachmentsCount: number;
+  coldAttachmentsCount: number;
+  hotTotalBytes: number;
+  coldTotalBytes: number;
+  drivesCount: number;
+}
+

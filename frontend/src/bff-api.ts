@@ -177,4 +177,13 @@ export const bff = {
   adminBotCreate: (data: Record<string, unknown>) => api.adminBotCreate(data),
   adminBotUpdate: (id: string, data: Record<string, unknown>) => api.adminBotUpdate(id, data),
   adminBotDelete: (id: string) => api.adminBotDelete(id),
+
+  getStorageSettings: () => api.getStorageSettings(),
+  updateStorageSettings: (data: Partial<import('./types').StorageSettings>) => api.updateStorageSettings(data),
+  getStorageDrives: () => api.getStorageDrives(),
+  createStorageDrive: (data: any) => api.createStorageDrive(data),
+  updateStorageDrive: (id: string, data: any) => api.updateStorageDrive(id, data),
+  deleteStorageDrive: (id: string) => api.deleteStorageDrive(id),
+  testStorageDrive: (id: string) => api.testStorageDrive(id),
+  triggerOffloadNow: (limit?: number) => api.triggerOffloadNow(limit),
 };

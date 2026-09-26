@@ -10,6 +10,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { AdminUsersTab } from './AdminUsersTab';
 import { AdminTagsTab } from './AdminTagsTab';
 import { AdminAccountsTab } from './AdminAccountsTab';
+import { AdminStorageTab } from './AdminStorageTab';
 import DifyBotsTab from './DifyBotsTab';
 import type { AccountSummary } from '@/types';
 
@@ -18,7 +19,7 @@ interface AdminUser {
   memberships: Array<{ account_id: string; role: string }>;
 }
 
-type TabKey = 'myaccounts' | 'tags' | 'users' | 'allaccounts' | 'difybots';
+type TabKey = 'myaccounts' | 'tags' | 'users' | 'allaccounts' | 'difybots' | 'storage';
 
 export default function AdminPage() {
   const { user, logout } = useAuthStore();
@@ -50,6 +51,7 @@ export default function AdminPage() {
       { key: 'users', label: 'Người dùng', icon: '👤' },
       { key: 'allaccounts', label: 'Tất cả Accounts', icon: '🔐' },
       { key: 'difybots', label: 'Dify Bots', icon: '🤖' },
+      { key: 'storage', label: 'Lưu trữ & Drive', icon: '💾' },
     );
   }
 
@@ -133,6 +135,9 @@ export default function AdminPage() {
           )}
           {activeTab === 'difybots' && isSuperAdmin && (
             <DifyBotsTab setError={setError} setStatus={setStatus} />
+          )}
+          {activeTab === 'storage' && isSuperAdmin && (
+            <AdminStorageTab accounts={accounts} />
           )}
         </div>
       </div>
