@@ -16,6 +16,7 @@ export function createAdminRouter(
   _requireAccountAccess: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
   requireAccountMaster: (req: Request, res: Response, next: NextFunction) => void,
   accountManager?: AccountRuntimeManager,
+  broadcast?: (payload: Record<string, unknown>) => void,
 ) {
   const router = Router();
   const requireAdminOrSuper = requireSystemRole('admin');
@@ -376,7 +377,20 @@ export function createAdminRouter(
 
       logger.info('playwright_reconnect_start_requested', { accountId, userId });
 
-      // Clean existing reconnect handler if any
+      // 1. Teardown active session immediately so frontend & runtime know we are in QR mode
+      try { accountManager?.stopRuntime(accountId); } catch {}
+      await knex('account_sessions')
+        .where({ account_id: accountId })
+        .update({ is_active: 0, updated_at: knex.fn.now() })
+        .catch(() => undefined);
+
+      broadcast?.({
+        type: 'session_state',
+        accountId,
+        status: { loggedIn: false, sessionActive: false, qrCodeAvailable: true },
+      });
+
+      // 2. Clean existing reconnect handler if any
       const existing = activeReconnectSessions.get(accountId);
       if (existing) {
         void existing.handler.cancel().catch(() => {});
@@ -392,7 +406,25 @@ export function createAdminRouter(
           const sess = activeReconnectSessions.get(accountId);
           if (sess) sess.qrCode = qrBase64;
 
-          const loginRes = await qrHandler.waitForLoginAndImport(180_000);
+          broadcast?.({
+            type: 'ws_sync_progress',
+            accountId,
+            step: 'qr_ready',
+            percent: 15,
+            message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
+          });
+
+          const loginRes = await qrHandler.waitForLoginAndImport(180_000, (prog) => {
+            if (prog.step === 'waiting_phone_confirm' || prog.step === 'receiving_chunks') {
+              const currentSess = activeReconnectSessions.get(accountId);
+              if (currentSess) currentSess.qrCode = null;
+            }
+            broadcast?.({
+              type: 'ws_sync_progress',
+              accountId,
+              ...prog,
+            });
+          });
 
           if (loginRes.cookies.length > 0) {
             const cookiesJson = JSON.stringify(loginRes.cookies);
@@ -407,11 +439,20 @@ export function createAdminRouter(
             await accountManager?.restartRuntime(accountId).catch(() => undefined);
             const runtime = accountManager?.getRuntime(accountId);
             if (runtime) {
+              const summaries = await runtime.getConversationSummaries().catch(() => []);
+              broadcast?.({ type: 'conversation_summaries', accountId, conversations: summaries });
               void accountManager?.syncAccountAfterLogin(accountId);
             }
           }
         } catch (err) {
           logger.error('playwright_reconnect_failed', { accountId, error: String(err) });
+          broadcast?.({
+            type: 'ws_sync_progress',
+            accountId,
+            step: 'error',
+            percent: 0,
+            message: 'Đăng nhập lại thất bại hoặc hết thời gian quét QR',
+          });
         } finally {
           await qrHandler.cleanup().catch(() => {});
           activeReconnectSessions.delete(accountId);
@@ -419,7 +460,7 @@ export function createAdminRouter(
       });
 
       // Brief wait to allow Playwright to produce the first QR code
-      await new Promise((r) => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, 2000));
 
       res.json({ started: true });
     } catch (err) {
