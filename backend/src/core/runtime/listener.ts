@@ -264,14 +264,33 @@ export class GoldListener {
   }
 
   private async handleOldMessages(messages: ListenerMessage[], threadType: number) {
-    if (this.state.historySyncStates.size === 0) {
-      this.state.logger.info('history_sync_old_messages_ignored', { reason: 'no_pending_sync', count: messages.length, threadType });
-      return;
-    }
-
     const forcedType = threadType === ThreadType.Group ? 'group' : 'direct';
     const normalizedCandidates = await Promise.all(messages.map((message) => this.normalizeListenerMessage(message, forcedType)));
     const allNormalized = normalizedCandidates.filter((message): message is GoldConversationMessage => message !== undefined);
+
+    // ALWAYS persist all received old messages into database, even if pending sync already timed out
+    let insertedCount = 0;
+    let dedupedCount = 0;
+    for (const message of allNormalized) {
+      const persisted = await this._persistMessageAttachmentsLocally?.(message) ?? message;
+      if (await this._appendConversationMessage?.(persisted)) {
+        insertedCount += 1;
+      } else {
+        dedupedCount += 1;
+      }
+    }
+
+    this.state.logger.info('history_sync_old_messages_persisted', {
+      count: messages.length,
+      normalized: allNormalized.length,
+      insertedCount,
+      dedupedCount,
+      threadType,
+    });
+
+    if (this.state.historySyncStates.size === 0) {
+      return;
+    }
 
     // Identify target threadId from candidate messages or fallback to single pending sync
     const firstThreadId = allNormalized[0]?.threadId ?? String(messages[0]?.threadId ?? '').trim();
@@ -281,37 +300,24 @@ export class GoldListener {
     }
 
     if (!sync) {
-      this.state.logger.info('history_sync_old_messages_ignored', { reason: 'sync_target_not_matched', count: messages.length, threadType, firstThreadId });
       return;
     }
 
-    const normalized = allNormalized
+    const oldestMessage = allNormalized
       .filter((message) => message.threadId === sync!.threadId && message.conversationType === sync!.type)
-      .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp))[0];
 
-    let insertedCount = 0;
-    let dedupedCount = 0;
-    for (const message of normalized) {
-      const persisted = await this._persistMessageAttachmentsLocally?.(message) ?? message;
-      if (await this._appendConversationMessage?.(persisted)) {
-        insertedCount += 1;
-      } else {
-        dedupedCount += 1;
-      }
-    }
-
-    const oldestMessage = normalized[0];
     const result: HistorySyncResult = {
       conversationId: sync.conversationId,
       threadId: sync.threadId,
       type: sync.type,
       requestedBeforeMessageId: sync.beforeMessageId,
-      remoteCount: normalized.length,
+      remoteCount: allNormalized.length,
       insertedCount,
       dedupedCount,
       oldestTimestamp: oldestMessage?.timestamp,
       oldestProviderMessageId: oldestMessage?.providerMessageId,
-      hasMore: normalized.length > 0,
+      hasMore: allNormalized.length > 0,
     };
 
     clearTimeout(sync.timer);

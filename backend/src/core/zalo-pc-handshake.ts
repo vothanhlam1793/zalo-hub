@@ -2,7 +2,9 @@ import { generatePcSignalKeys, buildSignalReq0Payload, type PcSignalKeys } from 
 import type { SharedState, HistorySyncResult } from './runtime/types.js';
 import type { GoldConversationMessage } from './types.js';
 import { createDecipheriv, randomUUID } from 'node:crypto';
-import { inflateSync } from 'node:zlib';
+import { inflateSync, inflateRawSync } from 'node:zlib';
+// @ts-ignore
+import pako from 'pako';
 import { normalizeMessageText, normalizeMessageKind, normalizeAttachments, normalizeImageUrl, getConversationId } from './runtime/normalizer.js';
 
 const CHANNEL_FRAMES = [
@@ -196,18 +198,34 @@ export class ZaloPcHandshake {
           return;
         }
 
-        const decompressed = inflateSync(decryptedBuf);
+        let decompressed: Uint8Array | Buffer;
+        try {
+          decompressed = pako.inflate(decryptedBuf);
+        } catch {
+          try {
+            decompressed = inflateRawSync(decryptedBuf);
+          } catch {
+            decompressed = inflateSync(decryptedBuf);
+          }
+        }
         const decoded = new TextDecoder('utf-8').decode(decompressed);
         const parsedResult = JSON.parse(decoded);
         const resultData = parsedResult.data ?? parsedResult;
+
+        this.state.logger.info('pc_handshake_raw_frame', {
+          cmd: `0x${cmd.toString(16)}`,
+          keys: Object.keys(resultData),
+          preview: JSON.stringify(resultData).slice(0, 400),
+        });
 
         const msgs = resultData.msgs ?? resultData.groupMsgs ?? [];
         const actions = resultData.actions ?? [];
         const allMessages = [...msgs, ...actions];
 
+        const cleanTargetId = threadId.replace(/^[gu]/, '');
         for (const msg of allMessages) {
-          const tId = String(msg.tId ?? msg.threadId ?? msg.idTo ?? '');
-          if (tId !== threadId) continue;
+          const tId = String(msg.tId ?? msg.threadId ?? msg.idTo ?? '').replace(/^[gu]/, '');
+          if (tId !== cleanTargetId) continue;
 
           const msgId = String(msg.msgId ?? '');
           const cliMsgId = String(msg.cliMsgId ?? msgId);
@@ -238,14 +256,33 @@ export class ZaloPcHandshake {
 
     ws.on('message', onMessage);
 
+    const targetTId = threadType === 'group' && !threadId.startsWith('g') ? `g${threadId}` : threadId;
     const req18Frame = this.buildBinaryFrame(1, 0x023F, 0, {
-      data: [{ tId: threadId }],
+      data: [{ tId: targetTId }, { tId: threadId.replace(/^[gu]/, '') }],
       reqId: 'req_18',
     });
     ws.send(req18Frame);
-    this.state.logger.info('pc_handshake_req18_sent', { threadId });
+    this.state.logger.info('pc_handshake_req18_sent', { threadId, targetTId });
 
-    await sleep(timeoutMs);
+    // Responsive wait: if messages arrived and stabilized for 600ms, complete early
+    const checkInterval = 200;
+    let waited = 0;
+    let lastCollectedCount = 0;
+    let stableRounds = 0;
+
+    while (waited < timeoutMs) {
+      await sleep(checkInterval);
+      waited += checkInterval;
+      if (collectedMessages.length > 0) {
+        if (collectedMessages.length === lastCollectedCount) {
+          stableRounds++;
+          if (stableRounds >= 3) break;
+        } else {
+          lastCollectedCount = collectedMessages.length;
+          stableRounds = 0;
+        }
+      }
+    }
 
     ws.off('message', onMessage);
 

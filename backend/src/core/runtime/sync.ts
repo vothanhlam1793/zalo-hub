@@ -131,7 +131,7 @@ export class GoldSync {
     };
   }
 
-  async syncConversationHistory(conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number; maxTotalTimeMs?: number } = {}) {
+  async syncConversationHistory(conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number; maxTotalTimeMs?: number; maxBatches?: number } = {}) {
     if (!this.state.session) {
       await this._loginWithStoredCredential?.();
     }
@@ -149,6 +149,7 @@ export class GoldSync {
     const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
     const perBatchTimeout = Math.max(5_000, Math.min(options.timeoutMs ?? 45_000, 45_000));
     const maxTotalTimeMs = options.maxTotalTimeMs ?? 240_000;
+    const maxBatches = options.maxBatches ?? 50;
     const startTime = Date.now();
 
     // Target specific beforeMessageId if given. If none given:
@@ -167,7 +168,7 @@ export class GoldSync {
     const promise = (async () => {
       while (true) {
         const elapsed = Date.now() - startTime;
-        if (elapsed >= maxTotalTimeMs) break;
+        if (elapsed >= maxTotalTimeMs || batchCount >= maxBatches) break;
 
         const batchTimeout = Math.min(perBatchTimeout, maxTotalTimeMs - elapsed);
         const result = await this._requestHistoryBatch(conversationId, target, listener, beforeMessageId, batchTimeout);
@@ -477,13 +478,14 @@ export class GoldSync {
     });
 
     let totalInserted = 0;
-    const perBatchTimeoutMs = options.perBatchTimeoutMs ?? 5_000;
+    const perBatchTimeoutMs = options.perBatchTimeoutMs ?? 15_000;
 
     for (const summary of recentSummaries) {
       try {
         const result = await this.syncConversationHistory(summary.id, {
           timeoutMs: perBatchTimeoutMs,
-          maxTotalTimeMs: 10_000,
+          maxTotalTimeMs: 8_000,
+          maxBatches: 2,
         });
         totalInserted += result.insertedCount;
         // Giãn cách 200ms giữa các request để bảo vệ WebSocket và tránh sập listener
@@ -704,7 +706,6 @@ export class GoldSync {
 
     this.state.logger.info('groups_normalized', { count: normalizedGroups.length });
     await this.state.store.replaceGroupsByAccount(this.state.boundAccountId, normalizedGroups);
-    await this.state.store.canonicalizeConversationDataForAccount(this.state.boundAccountId);
     await this._hydrate?.();
     return await this.state.store.listGroupsByAccount(this.state.boundAccountId);
   }
