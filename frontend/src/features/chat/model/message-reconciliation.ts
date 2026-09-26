@@ -132,19 +132,23 @@ export function recoverMessage(message: Message): Message {
     return {
       ...message,
       delivery: 'failed',
-      retryable: false,
+      retryable: true,
       errorCode: 'UNSENT_RELOAD',
-      errorText: 'Chưa được gửi trước khi tải lại trang.',
+      errorText: 'Chưa được gửi trước khi tải lại trang. Bấm để gửi lại.',
       attachmentNeedsReselect: Boolean(message.localFile),
     };
   }
   return {
     ...message,
-    delivery: message.delivery === 'sending' ? 'unknown' : message.delivery,
+    delivery: message.delivery === 'sending' ? 'failed' : message.delivery,
+    retryable: true,
+    errorCode: message.errorCode || 'UNRESOLVED_SEND',
+    errorText: message.errorText || 'Chưa nhận được phản hồi từ máy chủ. Bấm để gửi lại.',
     attachmentNeedsReselect: Boolean(message.localFile),
   };
 }
 
 export function canRetry(message: Message): boolean {
-  return message.delivery === 'failed' && message.retryable === true && Boolean(message.clientRequestId);
+  if (message.delivery === 'sent') return false;
+  return Boolean(message.clientRequestId || message.id.startsWith('pending-') || message.localId);
 }

@@ -77,8 +77,23 @@ function poll(key: string, requestId: string) {
     if (!chatSession.valid(session)) { polling.delete(id); return; }
     const retry = await querySendStatus(key, requestId);
     const unresolved = rows(key).some((m) => m.clientRequestId === requestId && (m.delivery === 'unknown' || m.delivery === 'sending'));
-    if (retry && unresolved && Date.now() < deadline && chatSession.valid(session)) timers.set(id, setTimeout(tick, 2_000));
-    else { polling.delete(id); timers.delete(id); }
+    if (retry && unresolved && Date.now() < deadline && chatSession.valid(session)) {
+      timers.set(id, setTimeout(tick, 2_000));
+    } else {
+      polling.delete(id);
+      timers.delete(id);
+      if (chatSession.valid(session)) {
+        const target = rows(key).find((m) => m.clientRequestId === requestId);
+        if (target && target.delivery !== 'sent') {
+          useChatStore.getState().patchMessage(key, target.localId || target.id, {
+            delivery: 'failed',
+            retryable: true,
+            errorText: 'Quá thời gian chờ phản hồi từ máy chủ. Bấm để gửi lại.',
+          });
+          void queue.resume(key);
+        }
+      }
+    }
   };
   timers.set(id, setTimeout(tick, 2_000));
 }
@@ -103,14 +118,17 @@ async function dispatch(intent: Intent, retry = false) {
       : await api.accountSendText(account, conversation, intent.text, params, controller.signal, intent.session);
     if (!chatSession.valid(intent.session)) return;
     if (result.receipt) accept(intent.key, intent.requestId, result.receipt);
-    else patch(intent, { delivery: 'unknown', errorText: 'Chưa nhận được xác nhận từ máy chủ.' });
+    else patch(intent, { delivery: 'unknown', retryable: true, errorText: 'Chưa nhận được xác nhận từ máy chủ.' });
   } catch (error) {
     if (!chatSession.valid(intent.session)) return;
     if (error instanceof ApiError && error.receipt) accept(intent.key, intent.requestId, error.receipt);
     else if (error instanceof ApiError && [400, 401, 403, 404, 413, 415, 422].includes(error.status)) {
-      patch(intent, { delivery: 'failed', retryable: error.status === 404, errorCode: error.code || String(error.status), errorText: error.message });
+      patch(intent, { delivery: 'failed', retryable: true, errorCode: error.code || String(error.status), errorText: error.message });
       void queue.resume(intent.key);
-    } else patch(intent, { delivery: 'unknown', retryable: false, errorText: 'Chưa xác nhận kết quả gửi. Hãy kiểm tra trạng thái.' });
+    } else {
+      patch(intent, { delivery: 'failed', retryable: true, errorText: 'Lỗi kết nối máy chủ. Bấm để gửi lại.' });
+      void queue.resume(intent.key);
+    }
   } finally {
     clearTimeout(timeout);
     controllers.delete(controller);
@@ -175,22 +193,31 @@ export function cancelQueued(key: string, message: Message) {
 
 export function retryMessage(key: string, message: Message, reselected?: File) {
   if (!canRetry(message)) return;
-  const current = rows(key).find((m) => m.localId === message.localId);
+  const current = rows(key).find((m) => (m.localId || m.id) === (message.localId || message.id));
   if (!current || !canRetry(current)) return;
-  const requestId = message.clientRequestId!;
+  const requestId = message.clientRequestId || message.id.replace(/^pending-/, '') || crypto.randomUUID();
   let intent = intents.get(requestId);
   if (!intent) {
     if (message.localFile) {
       const meta = message.localFile;
       if (!reselected || reselected.name !== meta.name || reselected.size !== meta.size || reselected.type !== meta.type) {
-        useChatStore.getState().patchMessage(key, message.localId || message.id, { errorText: 'Chọn lại đúng tệp gốc để thử lại cùng yêu cầu.', attachmentNeedsReselect: true });
+        useChatStore.getState().patchMessage(key, message.localId || message.id, { errorText: 'Chọn lại đúng tệp gốc để thử lại cùng yêu cầu.', attachmentNeedsReselect: true, delivery: 'failed', retryable: true });
         return;
       }
     }
-    intent = { key, requestId, localId: message.localId || message.id, text: message.text, file: reselected, session: chatSession.capture() };
+    intent = {
+      key,
+      requestId,
+      localId: message.localId || message.id,
+      text: message.text,
+      file: reselected,
+      mentions: message.mentions,
+      quote: message.quote,
+      session: chatSession.capture(),
+    };
     intents.set(requestId, intent);
   }
-  patch(intent, { delivery: 'queued', attachmentNeedsReselect: false });
+  patch(intent, { delivery: 'queued', errorText: undefined, errorCode: undefined, attachmentNeedsReselect: false });
   const captured = intent;
   const isRetry = message.errorCode !== 'NOT_FOUND_ON_SERVER';
   queue.enqueue(key, requestId, () => dispatch(captured, isRetry));
