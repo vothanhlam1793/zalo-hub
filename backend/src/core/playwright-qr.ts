@@ -1,5 +1,16 @@
 import { chromium, type Browser, type Page, type Cookie } from 'playwright';
 import type { GoldLogger } from './logger.js';
+import type { IndexedDbImporter, IndexedDbDumpResult } from './indexeddb-importer.js';
+
+export interface QrSyncProgressUpdate {
+  step: 'qr_ready' | 'scanned' | 'importing_db' | 'completed' | 'error';
+  percent: number;
+  qrCode?: string;
+  current?: number;
+  total?: number;
+  message?: string;
+  error?: string;
+}
 
 export class PlaywrightQrLogin {
   private browser: Browser | null = null;
@@ -7,14 +18,19 @@ export class PlaywrightQrLogin {
   private canceled = false;
   private qrImage = '';
 
-  constructor(private readonly logger: GoldLogger) {}
+  constructor(
+    private readonly logger: GoldLogger,
+    private readonly importer?: IndexedDbImporter,
+  ) {}
 
   async start(): Promise<string> {
     this.canceled = false;
+    this.qrImage = '';
     this.logger.info('playwright_qr_launching_browser');
 
     this.browser = await chromium.launch({
       headless: true,
+      executablePath: '/home/leco/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -81,14 +97,18 @@ export class PlaywrightQrLogin {
     return this.qrImage;
   }
 
-  async waitForLogin(timeoutMs = 120_000): Promise<Cookie[]> {
+  async waitForLoginAndImport(
+    timeoutMs = 120_000,
+    onProgress?: (update: QrSyncProgressUpdate) => void,
+  ): Promise<{ cookies: Cookie[]; accountId: string; dumpResult?: IndexedDbDumpResult }> {
     if (!this.page) throw new Error('Browser not started');
 
     const startTime = Date.now();
-    const pollMs = 2000;
+    const pollMs = 1500;
 
     this.logger.info('playwright_qr_polling_login', { timeoutMs });
 
+    let detectedCookies: Cookie[] | null = null;
     while (Date.now() - startTime < timeoutMs) {
       if (this.canceled) {
         this.logger.info('playwright_qr_login_canceled');
@@ -100,19 +120,17 @@ export class PlaywrightQrLogin {
         const zpsid = cookies.find((c) => c.name === 'zpsid' && c.domain.includes('zalo.me'));
 
         if (zpsid) {
-          this.logger.info('playwright_qr_login_detected', {
-            cookieCount: cookies.length,
-            zpsidDomain: zpsid.domain,
-          });
-          return cookies;
+          detectedCookies = cookies;
+          break;
         }
 
         const url = this.page.url();
         if (!url.includes('login') && !url.includes('id.zalo.me')) {
-          this.logger.info('playwright_qr_page_redirected', { url: url.slice(0, 80) });
-          const cookies = await this.page.context().cookies();
           const zpsid2 = cookies.find((c) => c.name === 'zpsid');
-          if (zpsid2) return cookies;
+          if (zpsid2) {
+            detectedCookies = cookies;
+            break;
+          }
         }
       } catch (err) {
         this.logger.info('playwright_qr_poll_error', { error: String(err) });
@@ -121,8 +139,67 @@ export class PlaywrightQrLogin {
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
 
-    this.logger.info('playwright_qr_login_timeout');
-    throw new Error('QR login timeout — khong scan trong 120s');
+    if (!detectedCookies) {
+      this.logger.info('playwright_qr_login_timeout');
+      throw new Error('QR login timeout — không quét trong thời gian cho phép');
+    }
+
+    onProgress?.({
+      step: 'scanned',
+      percent: 30,
+      message: '✅ Đã quét thành công! Đang chờ Zalo Cloud tải dữ liệu 14 ngày...',
+    });
+
+    // Detect Account ID from cookies or IndexedDB
+    let accountId = '';
+    const zpwSek = detectedCookies.find((c) => c.name === 'zpw_sek')?.value;
+    if (zpwSek) {
+      const parts = zpwSek.split('.');
+      if (parts.length > 1 && /^\d+$/.test(parts[1])) {
+        accountId = parts[1];
+      }
+    }
+
+    // Wait 4-6s for Zalo Web to populate IndexedDB
+    await this.page.waitForTimeout(4000);
+
+    let dumpResult: IndexedDbDumpResult | undefined;
+    if (this.importer && accountId) {
+      try {
+        onProgress?.({
+          step: 'importing_db',
+          percent: 50,
+          message: 'Đang trích xuất và đối soát 14 ngày tin nhắn vào database...',
+        });
+
+        const dump = await this.importer.dumpFromPage(this.page, accountId);
+        dumpResult = await this.importer.importDumpToPostgres(accountId, dump, (prog) => {
+          onProgress?.({
+            step: 'importing_db',
+            percent: Math.min(95, 50 + Math.round((prog.percent / 100) * 45)),
+            current: prog.inserted,
+            total: prog.total,
+            message: `Đang đối soát: ${prog.inserted} / ${prog.total} tin nhắn (${prog.percent}%)...`,
+          });
+        });
+      } catch (dumpErr) {
+        this.logger.error('playwright_qr_import_failed', { accountId, error: String(dumpErr) });
+      }
+    }
+
+    onProgress?.({
+      step: 'completed',
+      percent: 100,
+      current: dumpResult?.insertedMessages,
+      total: dumpResult?.totalMessages,
+      message: `Đồng bộ hoàn tất 100%! Đã bù đắp ${dumpResult?.insertedMessages ?? 0} tin nhắn 14 ngày vào hệ thống.`,
+    });
+
+    return {
+      cookies: detectedCookies,
+      accountId,
+      dumpResult,
+    };
   }
 
   getPage(): Page | null {

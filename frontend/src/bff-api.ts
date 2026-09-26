@@ -132,6 +132,8 @@ export const bff = {
   mobileSyncThread: (accountId: string, threadId: string, threadType: 'direct' | 'group', timeoutMs?: number) =>
     api.accountMobileSyncThread(accountId, threadId, threadType, timeoutMs),
   syncAll: (accountId: string) => api.accountSyncAll(accountId),
+  startReSyncQr: (accountId: string) => api.accountStartReSyncQr(accountId),
+  cancelReSyncQr: (accountId: string) => api.accountCancelReSyncQr(accountId),
   restartAccount: (accountId: string) => api.restartAccount(accountId),
   accountMobileSync: api.accountMobileSync,
   accountSyncAll: api.accountSyncAll,

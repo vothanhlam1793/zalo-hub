@@ -18,6 +18,8 @@ interface MobileSyncModalProps {
 
 export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountId, onSyncSuccess }: MobileSyncModalProps) {
   const [targetAccountId, setTargetAccountId] = useState<string>(selectedAccountId || accounts[0]?.accountId || '');
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [loadingQr, setLoadingQr] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState<SyncProgressPayload | null>(null);
 
@@ -33,12 +35,16 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
     onSyncProgress: (payload) => {
       if (payload.accountId === targetAccountId) {
         setProgress(payload);
-        if (payload.step === 'completed') {
+        if (payload.step === 'scanned') {
+          setQrCode(null);
+        } else if (payload.step === 'completed') {
           setSyncing(false);
+          setQrCode(null);
           toast.success(payload.message || 'Đồng bộ tin nhắn 14 ngày thành công!');
           if (onSyncSuccess) onSyncSuccess();
         } else if (payload.step === 'error') {
           setSyncing(false);
+          setQrCode(null);
           toast.error(payload.error || payload.message || 'Đồng bộ thất bại');
         }
       }
@@ -47,47 +53,72 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
 
   const activeAccount = accounts.find((a) => a.accountId === (targetAccountId || selectedAccountId)) || accounts[0];
 
-  const handleStartSync = async () => {
+  const handleStartQrSync = async () => {
     if (!activeAccount) {
       toast.error('Vui lòng chọn tài khoản Zalo cần đồng bộ');
       return;
     }
 
+    setLoadingQr(true);
     setSyncing(true);
+    setQrCode(null);
     setProgress({
       type: 'ws_sync_progress',
       accountId: activeAccount.accountId,
       step: 'connecting',
-      percent: 10,
-      message: 'Đang kết nối phiên Zalo Web ngầm...',
+      percent: 15,
+      message: 'Đang tạo mã QR đồng bộ từ Zalo Web...',
     });
 
     try {
-      await bff.syncAll(activeAccount.accountId);
+      const res = await bff.startReSyncQr(activeAccount.accountId);
+      if (res.ok && res.qrCode) {
+        setQrCode(res.qrCode);
+        setProgress({
+          type: 'ws_sync_progress',
+          accountId: activeAccount.accountId,
+          step: 'waiting_phone_confirm',
+          percent: 25,
+          message: 'Vui lòng dùng Zalo trên điện thoại quét mã QR bên dưới và chọn Đồng bộ ngay.',
+        });
+      }
     } catch (err: any) {
       setSyncing(false);
+      setQrCode(null);
       setProgress(null);
-      toast.error(err?.message || 'Không thể gửi yêu cầu đồng bộ. Vui lòng kiểm tra lại kết nối tài khoản.');
+      toast.error(err?.message || 'Không thể tạo mã QR đồng bộ. Vui lòng thử lại.');
+    } finally {
+      setLoadingQr(false);
     }
   };
 
-  const isWaitingConfirm = progress?.step === 'waiting_phone_confirm';
-  const isImporting = progress?.step === 'importing';
+  const handleCancel = async () => {
+    if (activeAccount && syncing) {
+      await bff.cancelReSyncQr(activeAccount.accountId).catch(() => {});
+    }
+    setSyncing(false);
+    setQrCode(null);
+    setProgress(null);
+    onOpenChange(false);
+  };
+
+  const isWaitingScan = Boolean(qrCode);
+  const isImporting = progress?.step === 'importing' || progress?.step === 'importing_db';
   const isCompleted = progress?.step === 'completed';
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!syncing) { onOpenChange(v); setProgress(null); } }}>
+    <Dialog open={open} onOpenChange={(v) => { if (!syncing) { onOpenChange(v); setQrCode(null); setProgress(null); } }}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <span>📲</span> Đồng bộ Tin nhắn từ Điện thoại (14 Ngày)
           </DialogTitle>
           <DialogDescription>
-            Kéo trọn vẹn toàn bộ lịch sử tin nhắn, nhóm chat, danh bạ 14 ngày gần nhất từ Zalo Cloud vào ZaloHub.
+            Quét mã QR để điện thoại đẩy trọn vẹn 100% lịch sử tin nhắn 14 ngày gần nhất từ Zalo Cloud vào ZaloHub.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-3">
+        <div className="space-y-4 py-2">
           {/* Account Selection */}
           <div className="space-y-1.5">
             <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -101,7 +132,7 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
                     key={acc.accountId}
                     type="button"
                     disabled={syncing}
-                    onClick={() => setTargetAccountId(acc.accountId)}
+                    onClick={() => { setTargetAccountId(acc.accountId); setQrCode(null); setProgress(null); }}
                     className={`flex items-center justify-between p-3 rounded-xl border text-left transition-all ${
                       isSelected
                         ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/30'
@@ -132,33 +163,29 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
             </div>
           </div>
 
-          {/* Guide Steps / Waiting for Mobile Confirmation Notification */}
-          {isWaitingConfirm ? (
-            <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-2 animate-pulse">
-              <div className="text-sm font-bold text-amber-500 flex items-center gap-2">
-                <span className="text-base">📱</span> VUI LÒNG MỞ ZALO TRÊN ĐIỆN THOẠI
+          {/* QR Code Container */}
+          {qrCode && (
+            <div className="flex flex-col items-center justify-center p-5 rounded-2xl border-2 border-dashed border-blue-500/40 bg-blue-500/5 space-y-3 animate-in fade-in zoom-in duration-300">
+              <div className="p-2.5 bg-white rounded-xl shadow-md">
+                <img src={qrCode} alt="QR Code Đồng bộ" className="w-48 h-48 rounded-lg object-contain" />
               </div>
-              <p className="text-xs text-foreground leading-relaxed">
-                Hệ thống đang gửi tín hiệu đồng bộ. Nếu Zalo trên điện thoại hiện thông báo hoặc popup <strong>"Đồng bộ tin nhắn lên máy tính"</strong>, hãy bấm <strong>"ĐỒNG BỘ NGAY"</strong>.
-              </p>
-            </div>
-          ) : (
-            <div className="p-3.5 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 space-y-1.5">
-              <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                <span>💡</span> Cơ chế Đồng bộ & Bù Đắp:
+              <div className="text-center space-y-1">
+                <div className="text-xs font-bold text-blue-600 dark:text-blue-400 flex items-center justify-center gap-1.5">
+                  <span>📱</span> MỞ ZALO TRÊN ĐIỆN THOẠI QUÉT MÃ QR NÀY
+                </div>
+                <p className="text-[11px] text-muted-foreground max-w-[340px] leading-relaxed">
+                  Nhớ chọn <strong className="text-foreground">"Đồng bộ tin nhắn lên máy tính"</strong> khi điện thoại hỏi xác nhận.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Tự động đối soát và nạp toàn bộ tin nhắn 14 ngày từ Zalo Cloud. Mọi khoảng trống tin nhắn do mất mạng hoặc thoát nick sẽ được bù đắp đầy đủ.
-              </p>
             </div>
           )}
 
-          {/* Realtime Progress Bar & Status */}
-          {progress && (
-            <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-3">
+          {/* Progress Bar & Status */}
+          {progress && !qrCode && (
+            <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-3 animate-in fade-in">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-blue-500 flex items-center gap-1.5">
-                  {isCompleted ? '✅ Đã hoàn tất' : syncing ? '⏳ Đang tiến hành...' : 'Thông báo'}
+                  {isCompleted ? '✅ Đã hoàn tất' : syncing ? '⏳ Đang đồng bộ...' : 'Thông báo'}
                 </span>
                 <span className="font-mono font-bold text-foreground">{progress.percent}%</span>
               </div>
@@ -178,36 +205,50 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
               ) : null}
             </div>
           )}
+
+          {/* Intro Tip when idle */}
+          {!syncing && !progress && !qrCode && (
+            <div className="p-3.5 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 space-y-1.5">
+              <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <span>💡</span> Bù đắp toàn bộ tin nhắn bị hụt:
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Khi quét mã QR, Zalo Cloud sẽ chuyển toàn bộ tin nhắn 14 ngày về. Hệ thống sẽ tự động đối soát và nạp thêm các tin bị thiếu (như đoạn 15:52) vào database.
+              </p>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
           <Button
             variant="outline"
-            onClick={() => { onOpenChange(false); setProgress(null); }}
-            disabled={syncing}
+            onClick={handleCancel}
+            disabled={loadingQr}
           >
             {isCompleted ? 'Đóng' : 'Hủy'}
           </Button>
-          <Button
-            onClick={handleStartSync}
-            disabled={syncing || !activeAccount}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-2"
-          >
-            {syncing ? (
-              <>
-                <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Đang xử lý...
-              </>
-            ) : isCompleted ? (
-              <>
-                <span>🔄</span> Đồng bộ lại
-              </>
-            ) : (
-              <>
-                <span>🔄</span> Bắt đầu Đồng bộ 14 ngày
-              </>
-            )}
-          </Button>
+          {!qrCode && !isImporting && (
+            <Button
+              onClick={handleStartQrSync}
+              disabled={syncing || !activeAccount}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-2"
+            >
+              {loadingQr ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Đang tạo QR...
+                </>
+              ) : isCompleted ? (
+                <>
+                  <span>🔄</span> Đồng bộ lại
+                </>
+              ) : (
+                <>
+                  <span>📲</span> Tạo mã QR Đồng bộ 14 ngày
+                </>
+              )}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

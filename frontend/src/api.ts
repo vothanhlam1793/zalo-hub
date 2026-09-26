@@ -250,7 +250,19 @@ export const api = {
     }),
 
   accountSyncAll: (accountId: string) =>
-    req<{ synced: number; failed: number; results: Array<{ conversationId: string; remoteCount: number; insertedCount: number; dedupedCount: number; batchCount?: number }> }>(`/api/accounts/${encodeURIComponent(accountId)}/sync-all`, {
+    req<{ started: boolean; message: string }>(`/api/accounts/${encodeURIComponent(accountId)}/sync-all`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  accountStartReSyncQr: (accountId: string) =>
+    req<{ ok: boolean; qrCode: string; message: string }>(`/api/accounts/${encodeURIComponent(accountId)}/re-sync-qr`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  accountCancelReSyncQr: (accountId: string) =>
+    req<{ ok: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/re-sync-cancel`, {
       method: 'POST',
       body: '{}',
     }),

@@ -11,6 +11,7 @@ import { SendFailure, type SendLifecycle } from '../../core/runtime/send-contrac
 import { canUserAccessConversation, filterConversationsForUser } from '../helpers/conversation-access.js';
 import { IndexedDbImporter } from '../../core/indexeddb-importer.js';
 import { PlaywrightSyncWorker } from '../../core/playwright-sync-worker.js';
+import { PlaywrightQrLogin } from '../../core/playwright-qr.js';
 
 export function createAccountsRouter(
   logger: GoldLogger,
@@ -22,9 +23,9 @@ export function createAccountsRouter(
   requireAccountAccess?: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
   sendRequestService?: SendRequestService,
 ) {
-
   const indexedDbImporter = new IndexedDbImporter(knex, logger);
   const playwrightSyncWorker = new PlaywrightSyncWorker(indexedDbImporter, logger);
+  const activeQrSessions = new Map<string, PlaywrightQrLogin>();
 
   const router = Router();
   const needsViewer = requireAccountAccess?.('viewer');
@@ -455,6 +456,92 @@ export function createAccountsRouter(
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Mobile sync all that bai' });
       }
+    })();
+  });
+
+  router.post('/:accountId/re-sync-qr', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        logger.info('resync_qr_start_requested', { accountId });
+        const existing = activeQrSessions.get(accountId);
+        if (existing) {
+          await existing.cancel().catch(() => {});
+          activeQrSessions.delete(accountId);
+        }
+
+        const qrHandler = new PlaywrightQrLogin(logger, indexedDbImporter);
+        activeQrSessions.set(accountId, qrHandler);
+
+        const qrBase64 = await qrHandler.start();
+
+        // Background monitor for scan & import
+        setImmediate(async () => {
+          try {
+            const loginRes = await qrHandler.waitForLoginAndImport(120_000, (prog) => {
+              broadcast({
+                type: 'ws_sync_progress',
+                accountId,
+                ...prog,
+              });
+            });
+
+            // Update session in database
+            if (loginRes.cookies.length > 0) {
+              const cookiesJson = JSON.stringify(loginRes.cookies);
+              await knex('account_sessions')
+                .where({ account_id: accountId })
+                .update({
+                  cookie_json: cookiesJson,
+                  is_active: 1,
+                  updated_at: knex.fn.now(),
+                })
+                .catch(() => undefined);
+
+              // Restart account runtime with new credentials
+              await accountManager.restartRuntime(accountId).catch(() => undefined);
+              const targetRuntime = accountManager.getRuntime(accountId);
+              if (targetRuntime) {
+                const summaries = await targetRuntime.getConversationSummaries();
+                broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+              }
+            }
+          } catch (bgErr) {
+            logger.warn('resync_qr_background_err', { accountId, error: String(bgErr) });
+            broadcast({
+              type: 'ws_sync_progress',
+              accountId,
+              step: 'error',
+              percent: 0,
+              message: 'Hết thời gian quét QR hoặc lỗi phiên đồng bộ',
+            });
+          } finally {
+            await qrHandler.cleanup().catch(() => {});
+            activeQrSessions.delete(accountId);
+          }
+        });
+
+        res.json({
+          ok: true,
+          qrCode: `data:image/png;base64,${qrBase64}`,
+          message: 'Quét mã QR bằng Zalo trên điện thoại và chọn Đồng bộ ngay',
+        });
+      } catch (err: any) {
+        logger.error('resync_qr_start_failed', { accountId, error: err?.message || String(err) });
+        res.status(500).json({ error: err?.message || 'Không thể tạo mã QR đồng bộ' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/re-sync-cancel', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const existing = activeQrSessions.get(accountId);
+      if (existing) {
+        await existing.cancel().catch(() => {});
+        activeQrSessions.delete(accountId);
+      }
+      res.json({ ok: true });
     })();
   });
 
