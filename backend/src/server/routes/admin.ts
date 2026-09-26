@@ -4,6 +4,8 @@ import type { Knex } from 'knex';
 import type { GoldStore } from '../../core/store.js';
 import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
+import { PlaywrightQrLogin } from '../../core/playwright-qr.js';
+import { IndexedDbImporter } from '../../core/indexeddb-importer.js';
 
 export function createAdminRouter(
   logger: GoldLogger,
@@ -17,6 +19,8 @@ export function createAdminRouter(
 ) {
   const router = Router();
   const requireAdminOrSuper = requireSystemRole('admin');
+  const indexedDbImporter = new IndexedDbImporter(knex, logger);
+  const activeReconnectSessions = new Map<string, { handler: PlaywrightQrLogin; qrCode: string | null }>();
 
   function passwordHash(password: string): string {
     const salt = crypto.randomBytes(16).toString('hex');
@@ -370,23 +374,52 @@ export function createAdminRouter(
         return;
       }
 
-      try { accountManager?.stopRuntime(accountId); } catch {}
+      logger.info('playwright_reconnect_start_requested', { accountId, userId });
 
-      // Create a fresh runtime directly — do NOT call ensureRuntime which
-      // would attempt loginWithStoredCredential (stale cookie) before QR.
-      const { GoldRuntime } = await import('../../core/runtime/index.js');
-      const { GoldStore } = await import('../../core/store/index.js');
-      const freshRuntime = new GoldRuntime(new GoldStore(knex), logger, { boundAccountId: accountId });
-      // Register in manager so the /reconnect/qr poll can find it
-      (accountManager as any)?.runtimes?.set(accountId, freshRuntime);
+      // Clean existing reconnect handler if any
+      const existing = activeReconnectSessions.get(accountId);
+      if (existing) {
+        void existing.handler.cancel().catch(() => {});
+        activeReconnectSessions.delete(accountId);
+      }
 
-      // Kick off QR login in background — do NOT await
-      freshRuntime.loginByQr({ onQr: () => {} }).catch((err) => {
-        logger.error('reconnect_qr_failed', { accountId, error: err instanceof Error ? err.message : String(err) });
+      const qrHandler = new PlaywrightQrLogin(logger, indexedDbImporter);
+      activeReconnectSessions.set(accountId, { handler: qrHandler, qrCode: null });
+
+      setImmediate(async () => {
+        try {
+          const qrBase64 = await qrHandler.start();
+          const sess = activeReconnectSessions.get(accountId);
+          if (sess) sess.qrCode = qrBase64;
+
+          const loginRes = await qrHandler.waitForLoginAndImport(180_000);
+
+          if (loginRes.cookies.length > 0) {
+            const cookiesJson = JSON.stringify(loginRes.cookies);
+            await knex('account_sessions')
+              .where({ account_id: accountId })
+              .update({
+                cookie_json: cookiesJson,
+                is_active: 1,
+                updated_at: knex.fn.now(),
+              });
+
+            await accountManager?.restartRuntime(accountId).catch(() => undefined);
+            const runtime = accountManager?.getRuntime(accountId);
+            if (runtime) {
+              void accountManager?.syncAccountAfterLogin(accountId);
+            }
+          }
+        } catch (err) {
+          logger.error('playwright_reconnect_failed', { accountId, error: String(err) });
+        } finally {
+          await qrHandler.cleanup().catch(() => {});
+          activeReconnectSessions.delete(accountId);
+        }
       });
 
-      // Give loginQR a moment to generate the QR before responding
-      await new Promise((r) => setTimeout(r, 2000));
+      // Brief wait to allow Playwright to produce the first QR code
+      await new Promise((r) => setTimeout(r, 2500));
 
       res.json({ started: true });
     } catch (err) {
@@ -396,17 +429,12 @@ export function createAdminRouter(
 
   router.get('/admin/accounts/:id/reconnect/qr', requireAuth, async (req: Request, res: Response) => {
     const accountId = String(req.params.id).trim();
-    const runtime = accountManager?.getRuntime(accountId);
-    if (!runtime) {
+    const sess = activeReconnectSessions.get(accountId);
+    if (!sess || !sess.qrCode) {
       res.json({ qrCode: null, ready: false });
       return;
     }
-    const qrCode = runtime.getCurrentQrCode();
-    if (!qrCode) {
-      res.json({ qrCode: null, ready: false });
-      return;
-    }
-    res.json({ qrCode, ready: true });
+    res.json({ qrCode: `data:image/png;base64,${sess.qrCode}`, ready: true });
   });
 
   // ---- ACCOUNT MANAGEMENT (master only) ----

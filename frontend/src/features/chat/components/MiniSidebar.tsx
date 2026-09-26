@@ -116,23 +116,8 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
         </div>
       </div>
 
-      {/* Bottom: Mobile Sync, Theme toggle, Notifications & Settings */}
+      {/* Bottom: Theme toggle, Notifications & Settings */}
       <div className="flex flex-col items-center gap-2.5 w-full pt-2 border-t border-[var(--border)]">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setSyncModalOpen(true)}
-              className="w-9 h-9 rounded-xl border border-blue-500/30 text-blue-500 hover:text-blue-600 hover:bg-blue-500/10 transition-all hover:scale-105"
-            >
-              📲
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">Đồng bộ từ điện thoại</TooltipContent>
-        </Tooltip>
-
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -167,17 +152,6 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
       </div>
 
       <UserSettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
-      <MobileSyncModal
-        open={syncModalOpen}
-        onOpenChange={setSyncModalOpen}
-        accounts={accounts}
-        selectedAccountId={selectedAccountId || currentAccountId}
-        onSyncSuccess={() => {
-          if (selectedAccountId || currentAccountId) {
-            onSelectAccount(selectedAccountId || currentAccountId);
-          }
-        }}
-      />
     </div>
   );
 }
