@@ -14,7 +14,7 @@ interface Props {
 
 export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Props) {
   const [qrCode, setQrCode] = useState<string | null>(null);
-  const [status, setStatus] = useState('Đang tạo mã QR chuẩn Zalo Web...');
+  const [status, setStatus] = useState('Đang tạo mã QR...');
   const [progress, setProgress] = useState<SyncProgressPayload | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isReconnect = Boolean(accountId);
@@ -23,9 +23,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
     onSyncProgress: (payload) => {
       if (!accountId || payload.accountId === accountId || payload.accountId === 'new_login') {
         setProgress(payload);
-        if (payload.step === 'waiting_phone_confirm' || payload.step === 'receiving_chunks' || (payload.step as string) === 'scanned') {
-          setQrCode(null);
-        } else if (payload.step === 'completed') {
+        if (payload.step === 'completed') {
           setStatus('✅ Đăng nhập & đồng bộ 14 ngày hoàn tất 100%!');
           setTimeout(() => {
             onSuccess();
@@ -49,7 +47,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
 
     setQrCode(null);
     setProgress(null);
-    setStatus('Đang tạo mã QR chuẩn Zalo Web...');
+    setStatus('Đang tạo mã QR Zalo...');
 
     const startFn = isReconnect
       ? () => bff.reconnectStart(accountId!)
@@ -71,7 +69,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
         } catch {
           // keep polling
         }
-      }, 1500);
+      }, 1000);
     }).catch(() => setStatus('Lỗi tạo QR'));
 
     return () => {
@@ -79,6 +77,16 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
       timerRef.current = null;
     };
   }, [open, isReconnect, accountId]);
+
+  // Phân định 2 view hoàn toàn tách bạch:
+  // 1. isStreamingOrImporting: Khi đã quét và bắt đầu truyền stream chunk hoặc nạp DB
+  // 2. isViewingQr: Khi chưa quét hoặc đang chờ quét (LUÔN HIỂN THỊ MÃ QR)
+  const isStreamingOrImporting = progress && (
+    (progress.step as string) === 'receiving_chunks' ||
+    (progress.step as string) === 'unpacking_db' ||
+    (progress.step as string) === 'importing_postgres' ||
+    progress.step === 'completed'
+  );
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!progress || progress.step === 'completed' || progress.step === 'error') onOpenChange(v); }}>
@@ -93,33 +101,44 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-4 py-2">
-          {qrCode && !progress?.step ? (
-            <div className="flex flex-col items-center gap-2.5 animate-in fade-in zoom-in duration-200">
-              <img
-                src={qrCode.startsWith('data:') ? qrCode : `data:image/png;base64,${qrCode}`}
-                alt="QR Code"
-                className="w-48 h-48 rounded-xl border border-[var(--border)] bg-white p-2 shadow-lg"
-              />
-              <p className="text-[11px] text-muted-foreground text-center max-w-[260px]">
-                Nhớ chọn <strong className="text-foreground">"Đồng bộ tin nhắn lên máy tính"</strong> trên điện thoại.
-              </p>
-            </div>
-          ) : progress ? (
-            <div className="w-full p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-3">
+          {/* VIEW 1: HIỂN THỊ MÃ QR (KHI CHƯA TRUYỀN DỮ LIỆU) */}
+          {!isStreamingOrImporting && (
+            <>
+              {qrCode ? (
+                <div className="flex flex-col items-center gap-2.5 animate-in fade-in zoom-in duration-200">
+                  <img
+                    src={qrCode.startsWith('data:') ? qrCode : `data:image/png;base64,${qrCode}`}
+                    alt="QR Code"
+                    className="w-52 h-52 rounded-xl border border-[var(--border)] bg-white p-2 shadow-lg object-contain"
+                  />
+                  <p className="text-[11px] text-muted-foreground text-center max-w-[260px]">
+                    Nhớ chọn <strong className="text-foreground">"Đồng bộ tin nhắn lên máy tính"</strong> trên điện thoại.
+                  </p>
+                </div>
+              ) : (
+                <div className="w-52 h-52 rounded-xl border border-[var(--border)] bg-[#0d1015] flex flex-col items-center justify-center text-muted-foreground text-xs gap-2">
+                  <span className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  <span>Đang tải mã QR...</span>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* VIEW 2: HIỂN THỊ THANH TIẾN TRÌNH STREAM DỮ LIỆU THẬT */}
+          {isStreamingOrImporting && progress && (
+            <div className="w-full p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-3 animate-in fade-in">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-blue-500">
                   {progress.step === 'completed'
                     ? '✅ Hoàn tất'
                     : (progress.step as string) === 'receiving_chunks'
                     ? '⚡ Đang truyền tin nhắn...'
-                    : (progress.step as string) === 'waiting_phone_confirm'
-                    ? '📱 Chờ xác nhận...'
                     : '📦 Đang nạp database...'}
                 </span>
                 <span className="font-mono font-bold text-foreground">{progress.percent}%</span>
               </div>
               <Progress value={progress.percent} className="h-2 bg-[var(--muted)]" />
-              <p className="text-xs text-foreground leading-relaxed">
+              <p className="text-xs text-foreground leading-relaxed font-medium">
                 {progress.message || 'Đang đối soát dữ liệu...'}
               </p>
               {progress.current ? (
@@ -127,11 +146,6 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
                   Đã nhận: <strong className="text-foreground">{progress.current.toLocaleString()}</strong> tin nhắn
                 </div>
               ) : null}
-            </div>
-          ) : (
-            <div className="w-48 h-48 rounded-xl border border-[var(--border)] bg-[#0d1015] flex flex-col items-center justify-center text-muted-foreground text-xs gap-2">
-              <span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-              <span>Đang tạo mã QR chuẩn Zalo Web...</span>
             </div>
           )}
 

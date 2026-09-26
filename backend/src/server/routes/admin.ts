@@ -377,8 +377,15 @@ export function createAdminRouter(
 
       logger.info('playwright_reconnect_start_requested', { accountId, userId });
 
-      // 1. Teardown active session immediately so frontend & runtime know we are in QR mode
-      try { accountManager?.stopRuntime(accountId); } catch {}
+      // 1. Teardown active session and close WebSocket listener immediately so Zalo servers don't complain
+      try {
+        const oldRuntime = accountManager?.getRuntime(accountId);
+        if (oldRuntime) {
+          await oldRuntime.closeMessageListener().catch(() => {});
+        }
+        accountManager?.stopRuntime(accountId);
+      } catch {}
+
       await knex('account_sessions')
         .where({ account_id: accountId })
         .update({ is_active: 0, updated_at: knex.fn.now() })

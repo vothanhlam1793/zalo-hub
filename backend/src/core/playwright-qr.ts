@@ -41,7 +41,7 @@ export class PlaywrightQrLogin {
     });
 
     const context = await this.browser.newContext({
-      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
       viewport: { width: 1280, height: 800 },
       locale: 'vi-VN',
       timezoneId: 'Asia/Ho_Chi_Minh',
@@ -53,45 +53,43 @@ export class PlaywrightQrLogin {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
     });
 
-    this.logger.info('playwright_qr_navigating_to_chat_zalo');
-    await this.page.goto('https://chat.zalo.me/', {
+    this.logger.info('playwright_qr_navigating_to_login_page');
+    // Direct navigation to id.zalo.me login URL for instant QR rendering
+    await this.page.goto('https://id.zalo.me/account?continue=https%3A%2F%2Fchat.zalo.me%2F', {
       waitUntil: 'domcontentloaded',
-      timeout: 30_000,
+      timeout: 20_000,
     });
 
-    this.logger.info('playwright_qr_waiting_for_qr_element');
+    this.logger.info('playwright_qr_waiting_for_qr_container');
 
+    // 1. Direct and fast search for the real QR container on id.zalo.me
     try {
-      await this.page.waitForSelector('img[src*="qr"]', { timeout: 15_000 });
-      const img = this.page.locator('img[src*="qr"]').first();
-      const src = await img.getAttribute('src');
-      if (src && src.startsWith('data:image')) {
-        this.qrImage = src.replace(/^data:image\/\w+;base64,/, '');
-        this.logger.info('playwright_qr_extracted_from_img', { len: this.qrImage.length });
-      }
-    } catch {
-      this.logger.info('playwright_qr_img_not_found_fallback');
+      await this.page.waitForSelector('.qr-container, div.qrcode, [class*="qr-container"]', { timeout: 8000 });
+      const qrContainer = this.page.locator('.qr-container, div.qrcode, [class*="qr-container"]').first();
+      
+      // Take instant crystal-clear snapshot of just the QR element box
+      const screenshotBuffer = await qrContainer.screenshot({ type: 'png' });
+      this.qrImage = screenshotBuffer.toString('base64');
+      this.logger.info('playwright_qr_extracted_from_container', { len: this.qrImage.length });
+    } catch (err) {
+      this.logger.warn('playwright_qr_container_not_found_fallback', { error: String(err) });
     }
 
+    // 2. Fallback: Check if there's any image or canvas
     if (!this.qrImage) {
       try {
-        await this.page.waitForSelector('canvas', { timeout: 10_000 });
-        const canvas = this.page.locator('canvas').first();
-        const dataUrl = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL('image/png'));
-        if (dataUrl && dataUrl.startsWith('data:image')) {
-          this.qrImage = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-          this.logger.info('playwright_qr_extracted_from_canvas', { len: this.qrImage.length });
+        const img = this.page.locator('img[src*="qr"], canvas').first();
+        if (await img.isVisible({ timeout: 2000 }).catch(() => false)) {
+          const screenshotBuffer = await img.screenshot({ type: 'png' });
+          this.qrImage = screenshotBuffer.toString('base64');
         }
-      } catch {
-        this.logger.info('playwright_qr_canvas_not_found');
-      }
+      } catch {}
     }
 
+    // 3. Last fallback: Screenshot center of page
     if (!this.qrImage) {
-      this.logger.info('playwright_qr_fallback_screenshot');
       const screenshot = await this.page.screenshot({ type: 'png' });
       this.qrImage = screenshot.toString('base64');
-      this.logger.info('playwright_qr_screenshot_taken', { len: this.qrImage.length });
     }
 
     return this.qrImage;
@@ -164,13 +162,12 @@ export class PlaywrightQrLogin {
     this.logger.info('playwright_qr_scanned_waiting_sync_stream', { accountId });
 
     // Step 3: Lắng nghe chu trình truyền Chunk và nạp IndexedDB theo trạng thái thật
-    // Không dùng timer cứng! Theo dõi biến động tin nhắn và trạng thái dialog đồng bộ của Zalo Web
     const targetDb = `zdb_${accountId}`;
     let previousCount = 0;
     let stableCountRounds = 0;
     let syncStreamStarted = false;
     const syncStreamStart = Date.now();
-    const maxSyncWaitMs = 120_000; // Chờ tối đa 2 phút cho phiên truyền chunk
+    const maxSyncWaitMs = 120_000;
 
     while (Date.now() - syncStreamStart < maxSyncWaitMs) {
       if (this.canceled) throw new Error('Đồng bộ bị hủy');
@@ -219,7 +216,7 @@ export class PlaywrightQrLogin {
         } else {
           // Số tin nhắn không tăng thêm
           stableCountRounds++;
-          // Nếu đã nhận > 100 tin và giữ nguyên trong 4 lần lặp (8 giây) -> Điện thoại đã truyền xong toàn bộ!
+          // Nếu đã nhận > 50 tin và giữ nguyên trong 4 lần lặp (8 giây) -> Điện thoại đã truyền xong toàn bộ!
           if (stableCountRounds >= 4 && currentCount > 50) {
             this.logger.info('playwright_sync_stream_finished', { accountId, totalReceived: currentCount });
             break;
