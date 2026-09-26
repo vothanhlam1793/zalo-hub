@@ -2,15 +2,26 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import * as ZaloApi from 'zalo-api-final';
-import type { GoldConversationMessage, GoldConversationType, GoldMessageKind } from '../types.js';
+import type { GoldConversationMessage, GoldConversationType, GoldMessageKind, GoldMessageMention, GoldMessageQuote } from '../types.js';
 import type { SharedState } from './types.js';
 import { parseSendMessageReceipt, SendFailure, type SendExecution, type SendLifecycle } from './send-contract.js';
 import { buildStoredMessageId } from '../store/helpers.js';
+
+export interface SendTextOptions {
+  mentions?: GoldMessageMention[];
+  quoteMessageId?: string;
+  quote?: GoldMessageQuote;
+}
 
 const ThreadType = { User: 0, Group: 1 };
 const { Reactions } = ZaloApi as {
   Reactions: Record<string, string>;
 };
+
+function isSendLifecycle(val: unknown): val is SendLifecycle {
+  if (!val || typeof val !== 'object') return false;
+  return 'onDispatch' in val || 'onAccepted' in val || 'clientRequestId' in val;
+}
 
 export class GoldSender {
   private readonly state: SharedState;
@@ -91,9 +102,24 @@ export class GoldSender {
     return apiKeys.join(', ');
   }
 
-  async sendText(conversationId: string, text: string, lifecycle?: SendLifecycle): Promise<SendExecution> {
+  async sendText(
+    conversationId: string,
+    text: string,
+    optionsOrLifecycle?: SendTextOptions | SendLifecycle,
+    maybeLifecycle?: SendLifecycle,
+  ): Promise<SendExecution> {
     if (!conversationId || !text) {
       throw new Error('conversationId va text la bat buoc');
+    }
+
+    let options: SendTextOptions | undefined;
+    let lifecycle: SendLifecycle | undefined;
+
+    if (isSendLifecycle(optionsOrLifecycle)) {
+      lifecycle = optionsOrLifecycle;
+    } else {
+      options = optionsOrLifecycle as SendTextOptions | undefined;
+      lifecycle = maybeLifecycle;
     }
 
     await this.ensureSessionReady(`sendText:${conversationId}`);
@@ -105,9 +131,58 @@ export class GoldSender {
     const started = Date.now();
     lifecycle?.onDispatch?.();
     let result: unknown;
+
+    // Build quote payload if replying
+    let quotePayload: any = undefined;
+    if (options?.quoteMessageId) {
+      const accountId = this.state.boundAccountId ?? this._getActiveAccountId?.();
+      if (accountId) {
+        try {
+          const rawMsg = await this.state.store.getMessageById(accountId, options.quoteMessageId);
+          if (rawMsg) {
+            let rawJson: any = {};
+            if (rawMsg.rawMessageJson) {
+              try {
+                rawJson = typeof rawMsg.rawMessageJson === 'string' ? JSON.parse(rawMsg.rawMessageJson) : rawMsg.rawMessageJson;
+              } catch {}
+            }
+
+            quotePayload = {
+              msg: rawMsg.text || (rawMsg.attachments?.[0]?.fileName ?? `[${rawMsg.kind}]`),
+              content: rawJson.content ?? rawMsg.text,
+              msgType: rawJson.msgType ?? (rawMsg.kind === 'image' ? 'chat.photo' : rawMsg.kind === 'video' ? 'chat.video' : 'webchat'),
+              propertyExt: rawJson.propertyExt ?? {},
+              uidFrom: rawJson.uidFrom ?? rawMsg.senderId ?? '0',
+              msgId: rawJson.msgId ?? rawMsg.providerMessageId ?? rawMsg.id.split('::').pop() ?? '0',
+              cliMsgId: rawJson.cliMsgId ?? rawJson.msgId ?? rawMsg.providerMessageId ?? String(Date.now()),
+              ts: rawJson.ts ?? (rawMsg.timestamp ? new Date(rawMsg.timestamp).getTime() : Date.now()),
+              ttl: rawJson.ttl ?? 0,
+            };
+          }
+        } catch (quoteErr) {
+          this.state.logger.warn('send_quote_lookup_failed', { quoteMessageId: options.quoteMessageId, error: String(quoteErr) });
+        }
+      }
+    }
+
+    const sendPayload: any = {
+      msg: text,
+    };
+    if (options?.mentions && options.mentions.length > 0) {
+      sendPayload.mentions = options.mentions.map((m) => ({
+        pos: m.pos,
+        len: m.len,
+        uid: String(m.uid),
+        type: m.type,
+      }));
+    }
+    if (quotePayload) {
+      sendPayload.quote = quotePayload;
+    }
+
     try {
       result = method === 'sendMessage'
-        ? await api.sendMessage({ msg: text }, target.threadId, target.type === 'group' ? ThreadType.Group : ThreadType.User)
+        ? await api.sendMessage(sendPayload, target.threadId, target.type === 'group' ? ThreadType.Group : ThreadType.User)
         : await api.sendMsg({ msg: text }, target.threadId);
     } catch (error) {
       // Coded SDK errors are explicit provider rejections only for this one-message call.

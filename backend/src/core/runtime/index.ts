@@ -527,8 +527,13 @@ export class GoldRuntime {
     return this.sync.listGroups();
   }
 
-  async sendText(conversationId: string, text: string, lifecycle?: import('./send-contract.js').SendLifecycle) {
-    return this.sender.sendText(conversationId, text, lifecycle);
+  async sendText(
+    conversationId: string,
+    text: string,
+    optionsOrLifecycle?: import('./sender.js').SendTextOptions | import('./send-contract.js').SendLifecycle,
+    lifecycle?: import('./send-contract.js').SendLifecycle,
+  ) {
+    return this.sender.sendText(conversationId, text, optionsOrLifecycle, lifecycle);
   }
 
   async sendAttachment(conversationId: string, options: {

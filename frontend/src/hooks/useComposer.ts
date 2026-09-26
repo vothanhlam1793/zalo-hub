@@ -14,7 +14,19 @@ export function useComposer() {
     const key = useChatStore.getState().activeKey;
     const draft = useComposerStore.getState().drafts[key];
     if (!key || !draft || (draft.missingFileName && !draft.attachFile)) return;
-    submitMessage(key, draft.text.trim(), draft.attachFile || undefined);
+    const quote = draft.replyingTo ? {
+      messageId: draft.replyingTo.id,
+      senderId: draft.replyingTo.senderId,
+      senderName: draft.replyingTo.senderName,
+      text: draft.replyingTo.text,
+      kind: draft.replyingTo.kind,
+    } : undefined;
+
+    submitMessage(key, draft.text.trim(), draft.attachFile || undefined, {
+      mentions: draft.mentions,
+      quoteMessageId: draft.replyingTo?.id,
+      quote,
+    });
   }, []);
   const handleCompositionStart = useCallback(() => { isComposingRef.current = true; setIsComposing(true); }, []);
   const handleCompositionEnd = useCallback(() => { isComposingRef.current = false; setIsComposing(false); }, []);

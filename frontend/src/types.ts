@@ -1,6 +1,13 @@
 export type MessageKind = 'text' | 'image' | 'file' | 'video' | 'sticker' | 'reaction' | 'poll' | 'voice' | 'gif';
 export type ConversationType = 'direct' | 'group';
 
+export interface MessageMention {
+  pos: number;
+  len: number;
+  uid: string;
+  type?: number;
+}
+
 export interface MessageQuote {
   messageId?: string;
   senderId?: string;
@@ -57,6 +64,7 @@ export interface Message {
   providerMessageId?: string;
   imageUrl?: string; // legacy
   quote?: MessageQuote;
+  mentions?: MessageMention[];
   reactions?: MessageReactionItem[];
   rawMessageJson?: string;
   cliMsgId?: string;

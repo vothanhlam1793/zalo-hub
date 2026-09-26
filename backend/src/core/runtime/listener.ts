@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { normalizeMessageText, normalizeMessageKind, normalizeAttachments, normalizeImageUrl, normalizeMessageTimestamp, summarizeListenerData, getConversationTypeFromThreadId, getConversationId, normalizeMessageQuote, normalizeMessageReactions, mapReactionIconToEmoji, normalizeReactionEvent } from './normalizer.js';
+import { normalizeMessageText, normalizeMessageKind, normalizeAttachments, normalizeImageUrl, normalizeMessageTimestamp, summarizeListenerData, getConversationTypeFromThreadId, getConversationId, normalizeMessageQuote, normalizeMessageMentions, normalizeMessageReactions, mapReactionIconToEmoji, normalizeReactionEvent } from './normalizer.js';
 import type { GoldConversationMessage, GoldConversationType, GoldAttachment, GoldMessageKind, GoldMessageReactionItem } from '../types.js';
 import type { SharedState, ListenerMessage, ListenerLike, HistorySyncResult } from './types.js';
 
@@ -254,6 +254,7 @@ export class GoldListener {
           ?? (typeof data.dName === 'string' && data.dName.trim() ? data.dName.trim() : undefined)
         : undefined,
       quote: normalizeMessageQuote(data),
+      mentions: normalizeMessageMentions(data),
       reactions: normalizeMessageReactions(data),
       timestamp: normalizeMessageTimestamp(data),
       rawMessageJson: JSON.stringify(data),

@@ -1,6 +1,6 @@
 import type { Knex } from 'knex';
 import type { GoldAttachment, GoldConversationMessage, GoldMessageReactionItem } from '../types.js';
-import { normalizeMessageQuote, normalizeMessageReactions } from '../runtime/normalizer.js';
+import { normalizeMessageQuote, normalizeMessageMentions, normalizeMessageReactions } from '../runtime/normalizer.js';
 import {
   buildStoredAttachmentId,
   buildStoredMessageId,
@@ -219,6 +219,7 @@ export class GoldMessageRepo {
         providerMessageId: row.provider_message_id ?? undefined,
         imageUrl: canonical.imageUrl,
         quote: raw ? normalizeMessageQuote(raw) : undefined,
+        mentions: raw ? normalizeMessageMentions(raw) : undefined,
         reactions: mergeReactions(
           raw ? normalizeMessageReactions(raw) : undefined,
           row.reactions_json ? tryParseReactions(row.reactions_json) : undefined,
@@ -694,5 +695,76 @@ export class GoldMessageRepo {
       : null;
 
     return { items, nextCursor };
+  }
+
+  async getMessageById(activeAccountId: string | undefined, messageId: string): Promise<GoldConversationMessage | undefined> {
+    const resolvedAccountId = this.requireAccountId(activeAccountId);
+    const prefix = `${resolvedAccountId}::`;
+    const storedId = messageId.startsWith(prefix) ? messageId : buildStoredMessageId(resolvedAccountId, messageId);
+
+    const row = await this.knex('messages')
+      .where({ id: storedId, account_id: resolvedAccountId })
+      .orWhere({ provider_message_id: messageId, account_id: resolvedAccountId })
+      .orWhere({ id: messageId, account_id: resolvedAccountId })
+      .first();
+
+    if (!row) return undefined;
+    const attRows = (await this.knex.raw(`
+      SELECT id, message_id, type, url, source_url, local_path, thumbnail_url, thumbnail_source_url, thumbnail_local_path, file_name, mime_type, size, width, height, duration
+      FROM attachments
+      WHERE message_id = ?
+    `, [row.id])).rows as RawAttachmentRow[];
+
+    const attachments: GoldAttachment[] = attRows.map((a) => ({
+      id: a.id,
+      type: toMessageKind(a.type),
+      url: a.url ?? undefined,
+      sourceUrl: a.source_url ?? undefined,
+      localPath: a.local_path ?? undefined,
+      thumbnailUrl: a.thumbnail_url ?? undefined,
+      thumbnailSourceUrl: a.thumbnail_source_url ?? undefined,
+      thumbnailLocalPath: a.thumbnail_local_path ?? undefined,
+      fileName: a.file_name ?? undefined,
+      mimeType: a.mime_type ?? undefined,
+      size: a.size ?? undefined,
+      width: a.width ?? undefined,
+      height: a.height ?? undefined,
+      duration: a.duration ?? undefined,
+    }));
+
+    const canonical = canonicalizeStoredMessage(row, attachments);
+    let raw: Record<string, unknown> | undefined;
+    if (row.raw_message_json) {
+      try {
+        raw = typeof row.raw_message_json === 'string'
+          ? (row.raw_message_json.trim() ? JSON.parse(row.raw_message_json) as Record<string, unknown> : undefined)
+          : row.raw_message_json as Record<string, unknown>;
+      } catch {}
+    }
+
+    return {
+      id: row.id,
+      conversationId: row.conversation_id ?? `direct:${row.friend_id}`,
+      threadId: row.thread_id ?? row.friend_id,
+      conversationType: row.conversation_type ?? 'direct',
+      text: canonical.text,
+      kind: canonical.kind,
+      attachments: canonical.attachments,
+      direction: row.direction,
+      isSelf: Boolean(row.is_self),
+      timestamp: row.timestamp,
+      senderId: row.sender_id ?? undefined,
+      senderName: row.sender_name ?? undefined,
+      providerMessageId: row.provider_message_id ?? undefined,
+      imageUrl: canonical.imageUrl,
+      quote: raw ? normalizeMessageQuote(raw) : undefined,
+      mentions: raw ? normalizeMessageMentions(raw) : undefined,
+      reactions: mergeReactions(
+        raw ? normalizeMessageReactions(raw) : undefined,
+        row.reactions_json ? tryParseReactions(row.reactions_json) : undefined,
+      ),
+      rawMessageJson: row.raw_message_json ?? undefined,
+      cliMsgId: raw?.cliMsgId ? String(raw.cliMsgId) : undefined,
+    } satisfies GoldConversationMessage;
   }
 }

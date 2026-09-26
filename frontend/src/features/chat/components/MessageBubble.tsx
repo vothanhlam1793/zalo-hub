@@ -27,7 +27,50 @@ interface MessageBubbleProps extends DeliveryActions {
   isLastInGroup?: boolean;
   senderAvatar?: string;
   onReact?: (message: Message, reaction: MessageReactionOption) => void;
+  onReply?: (message: Message) => void;
   onOpenLightbox?: (messageId: string) => void;
+}
+
+function renderMessageText(text: string, mentions?: import('@/types').MessageMention[]) {
+  if (!text) return null;
+  if (mentions && mentions.length > 0) {
+    const sorted = [...mentions].sort((a, b) => a.pos - b.pos);
+    const elements: React.ReactNode[] = [];
+    let lastIndex = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const m = sorted[i];
+      if (m.pos > lastIndex) {
+        elements.push(text.slice(lastIndex, m.pos));
+      }
+      const mentionText = text.slice(m.pos, m.pos + m.len);
+      elements.push(
+        <span key={i} className="font-semibold text-blue-500 dark:text-blue-400 bg-blue-500/10 px-1 py-0.5 rounded">
+          {mentionText}
+        </span>
+      );
+      lastIndex = m.pos + m.len;
+    }
+    if (lastIndex < text.length) {
+      elements.push(text.slice(lastIndex));
+    }
+    return elements;
+  }
+
+  // Fallback regex detection for @Name or @All
+  const mentionRegex = /(@[A-Za-z0-9_\u00C0-\u1EF9]+(?:\s+[A-Za-z0-9_\u00C0-\u1EF9]+)*|@All)/g;
+  const parts = text.split(mentionRegex);
+  if (parts.length === 1) return text;
+
+  return parts.map((part, i) => {
+    if (part.startsWith('@')) {
+      return (
+        <span key={i} className="font-semibold text-blue-500 dark:text-blue-400 bg-blue-500/10 px-1 py-0.5 rounded">
+          {part}
+        </span>
+      );
+    }
+    return part;
+  });
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -37,6 +80,7 @@ export const MessageBubble = memo(function MessageBubble({
   isLastInGroup = true,
   senderAvatar,
   onReact,
+  onReply,
   onOpenLightbox,
   onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
 }: MessageBubbleProps) {
@@ -57,33 +101,46 @@ export const MessageBubble = memo(function MessageBubble({
   const delivery = <MessageDeliveryStatus message={msg} onRetryMessage={onRetryMessage} onQueryMessage={onQueryMessage} onCancelMessage={onCancelMessage} onRestoreDraft={onRestoreDraft} />;
   const defaultReaction = REACTION_OPTIONS[1];
 
-  const reactionDock = canReact ? (
-    <div className={`pointer-events-none absolute top-full z-10 mt-0.5 flex items-center opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${isOutgoing ? 'right-0 justify-end' : 'left-0 justify-start'}`}>
-      <div className="group/reaction relative flex items-center">
+  const actionDock = (canReact || onReply) ? (
+    <div className={`pointer-events-none absolute top-full z-10 mt-0.5 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${isOutgoing ? 'right-0 justify-end' : 'left-0 justify-start'}`}>
+      {onReply && (
         <button
           type="button"
-          className="h-6 w-6 rounded-full text-[13px] text-[rgba(255,255,255,0.20)] transition hover:text-[rgba(255,255,255,0.55)] hover:bg-white/5 focus-visible:text-[rgba(255,255,255,0.55)] focus-visible:outline-none"
-          onClick={() => onReact?.(msg, defaultReaction)}
-          title="Thả thích"
+          className="h-6 px-1.5 rounded-full text-[11px] bg-[rgba(8,12,18,0.7)] text-[rgba(255,255,255,0.7)] hover:text-white hover:bg-black/90 flex items-center gap-1 transition shadow-xs border border-white/10"
+          onClick={() => onReply(msg)}
+          title="Trả lời tin nhắn này"
         >
-          👍
+          <span>↩️</span>
+          <span className="text-[10px] hidden sm:inline">Trả lời</span>
         </button>
-        <div className={`pointer-events-none absolute top-1/2 -translate-y-1/2 opacity-0 transition-all duration-150 group-hover/reaction:pointer-events-auto group-hover/reaction:opacity-100 group-focus-within/reaction:pointer-events-auto group-focus-within/reaction:opacity-100 ${isOutgoing ? 'right-full mr-0.5' : 'left-full ml-0.5'}`}>
-          <div className="flex items-center gap-1 rounded-full border border-white/10 bg-[rgba(8,12,18,0.95)] px-1.5 py-1 shadow-lg backdrop-blur-sm">
-            {REACTION_OPTIONS.map((reaction) => (
-              <button
-                key={reaction.emoji}
-                type="button"
-                className="h-7 w-7 rounded-full text-sm hover:bg-white/10 active:scale-95 transition-transform"
-                onClick={() => onReact?.(msg, reaction)}
-                title={`Thả cảm xúc ${reaction.emoji}`}
-              >
-                {reaction.emoji}
-              </button>
-            ))}
+      )}
+      {canReact && (
+        <div className="group/reaction relative flex items-center">
+          <button
+            type="button"
+            className="h-6 w-6 rounded-full text-[13px] text-[rgba(255,255,255,0.20)] transition hover:text-[rgba(255,255,255,0.55)] hover:bg-white/5 focus-visible:text-[rgba(255,255,255,0.55)] focus-visible:outline-none"
+            onClick={() => onReact?.(msg, defaultReaction)}
+            title="Thả thích"
+          >
+            👍
+          </button>
+          <div className={`pointer-events-none absolute top-1/2 -translate-y-1/2 opacity-0 transition-all duration-150 group-hover/reaction:pointer-events-auto group-hover/reaction:opacity-100 group-focus-within/reaction:pointer-events-auto group-focus-within/reaction:opacity-100 ${isOutgoing ? 'right-full mr-0.5' : 'left-full ml-0.5'}`}>
+            <div className="flex items-center gap-1 rounded-full border border-white/10 bg-[rgba(8,12,18,0.95)] px-1.5 py-1 shadow-lg backdrop-blur-sm">
+              {REACTION_OPTIONS.map((reaction) => (
+                <button
+                  key={reaction.emoji}
+                  type="button"
+                  className="h-7 w-7 rounded-full text-sm hover:bg-white/10 active:scale-95 transition-transform"
+                  onClick={() => onReact?.(msg, reaction)}
+                  title={`Thả cảm xúc ${reaction.emoji}`}
+                >
+                  {reaction.emoji}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   ) : null;
 
@@ -133,7 +190,7 @@ export const MessageBubble = memo(function MessageBubble({
               <span className="text-[10px] text-[rgba(255,255,255,0.30)]">{formatTime(msg.timestamp)}</span>
               {isOutgoing && delivery}
             </div>
-            {reactionDock}
+            {actionDock}
           </div>
         </div>
       </div>
@@ -161,7 +218,7 @@ export const MessageBubble = memo(function MessageBubble({
               <span className="text-[10px] text-[rgba(255,255,255,0.35)]">{formatTime(msg.timestamp)}</span>
               {isOutgoing && delivery}
             </div>
-            {reactionDock}
+            {actionDock}
           </div>
         </div>
       </div>
@@ -248,7 +305,7 @@ export const MessageBubble = memo(function MessageBubble({
 
           {showText && (
             <div className={`whitespace-pre-wrap select-text ${shouldRenderImage || shouldRenderVideo || shouldRenderFile ? 'mt-2' : ''}`}>
-              {msg.text}
+              {renderMessageText(msg.text, msg.mentions)}
             </div>
           )}
 
@@ -259,7 +316,7 @@ export const MessageBubble = memo(function MessageBubble({
             {isOutgoing && delivery}
           </div>
 
-          {reactionDock}
+          {actionDock}
         </div>
       </div>
     </div>

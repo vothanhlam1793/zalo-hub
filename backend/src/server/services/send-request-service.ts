@@ -12,10 +12,15 @@ export interface SendInput {
   clientRequestId?: unknown;
   retry?: unknown;
   attachment?: { fileBuffer: Buffer; fileName: string; mimeType: string };
+  mentions?: import('../../core/types.js').GoldMessageMention[];
+  quoteMessageId?: string;
 }
 export interface NormalizedSend {
   accountId: string; systemUserId: string; conversationId: string; text: string;
-  clientRequestId?: string; retry: boolean; attachment?: SendInput['attachment']; payloadHash: string;
+  clientRequestId?: string; retry: boolean; attachment?: SendInput['attachment'];
+  mentions?: import('../../core/types.js').GoldMessageMention[];
+  quoteMessageId?: string;
+  payloadHash: string;
 }
 export interface SendResponse { status: number; body: { method?: string; result?: unknown; kind?: string; receipt?: SendReceipt; error?: string } }
 
@@ -54,9 +59,11 @@ export function normalizeSend(input: SendInput): NormalizedSend {
   const payloadHash = createHash('sha256').update(JSON.stringify({ conversationId, text,
     attachment: normalizedAttachment ? { fileName: normalizedAttachment.fileName, mimeType: normalizedAttachment.mimeType,
       size: normalizedAttachment.fileBuffer.length, digest: createHash('sha256').update(normalizedAttachment.fileBuffer).digest('hex') } : null,
+    mentions: input.mentions ?? null,
+    quoteMessageId: input.quoteMessageId ?? null,
   })).digest('hex');
   return { accountId: input.accountId, systemUserId: input.systemUserId, conversationId, text, clientRequestId, retry,
-    attachment: normalizedAttachment, payloadHash };
+    attachment: normalizedAttachment, mentions: input.mentions, quoteMessageId: input.quoteMessageId, payloadHash };
 }
 
 const errorMessages: Record<string, string> = {

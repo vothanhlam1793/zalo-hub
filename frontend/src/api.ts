@@ -146,7 +146,7 @@ export const api = {
       body: JSON.stringify({ conversationId, text }),
     }),
 
-  accountSendText: (accountId: string, conversationId: string, text: string, intent: { clientRequestId?: string; retry?: boolean } = {}, signal?: AbortSignal, identity = chatSession.capture()) =>
+  accountSendText: (accountId: string, conversationId: string, text: string, intent: { clientRequestId?: string; retry?: boolean; mentions?: import('./types').MessageMention[]; quoteMessageId?: string } = {}, signal?: AbortSignal, identity = chatSession.capture()) =>
     req<SendResponse>(`/api/accounts/${encodeURIComponent(accountId)}/send`, {
       method: 'POST',
       body: JSON.stringify({ conversationId, text, ...intent }),

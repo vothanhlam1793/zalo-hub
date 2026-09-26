@@ -249,6 +249,10 @@ export class GoldStore {
     return this.messageRepo.updateMessageReactions(accountId, providerMessageId, reactions);
   }
 
+  async getMessageById(accountId: string | undefined, messageId: string): Promise<GoldConversationMessage | undefined> {
+    return this.messageRepo.getMessageById(accountId, messageId);
+  }
+
   // --- Conversation methods ---
 
   async listConversationSummaries(): Promise<GoldConversationSummary[]> {

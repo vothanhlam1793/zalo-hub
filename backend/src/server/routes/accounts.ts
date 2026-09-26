@@ -44,7 +44,10 @@ export function createAccountsRouter(
     if (!targetRuntime.isSessionActive()) throw new SendFailure('SESSION_UNAVAILABLE', 'Phiên Zalo chưa sẵn sàng.', true, 409);
     const result = input.attachment
       ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text }, lifecycle)
-      : await targetRuntime.sendText(input.conversationId, input.text, lifecycle);
+      : await targetRuntime.sendText(input.conversationId, input.text, {
+          mentions: input.mentions,
+          quoteMessageId: input.quoteMessageId,
+        }, lifecycle);
     
     // Background async broadcast — does not block or add latency to HTTP Send response
     setImmediate(() => {
@@ -513,6 +516,8 @@ export function createAccountsRouter(
         }
         const result = await sends.send({ accountId, systemUserId: (req as any).systemUserId,
           conversationId: body.conversationId, text: body.text, attachment,
+          mentions: Array.isArray(body.mentions) ? body.mentions : undefined,
+          quoteMessageId: body.quoteMessageId ? String(body.quoteMessageId).trim() : undefined,
           clientRequestId: body.clientRequestId, retry: body.retry }, dispatch);
         if (result.status === 202) res.setHeader('Retry-After', '2');
         res.status(result.status).json(result.body);

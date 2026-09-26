@@ -6,7 +6,18 @@ import { chatSession, parseConversationKey } from './chat-session';
 import { canRetry, canReleasePreview } from './message-reconciliation';
 import { ManualSendQueue } from './manual-send-queue';
 
-type Intent = { key: string; localId: string; requestId: string; text: string; file?: File; preview?: string; session: ReturnType<typeof chatSession.capture> };
+type Intent = {
+  key: string;
+  localId: string;
+  requestId: string;
+  text: string;
+  file?: File;
+  preview?: string;
+  mentions?: import('../../../types').MessageMention[];
+  quoteMessageId?: string;
+  quote?: import('../../../types').MessageQuote;
+  session: ReturnType<typeof chatSession.capture>;
+};
 const intents = new Map<string, Intent>();
 const attempts = new Map<string, number>();
 const controllers = new Set<AbortController>();
@@ -81,7 +92,12 @@ async function dispatch(intent: Intent, retry = false) {
   controllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), intent.file ? SEND_TIMEOUT_MS.attachment : SEND_TIMEOUT_MS.text);
   try {
-    const params = { clientRequestId: intent.requestId, retry };
+    const params = {
+      clientRequestId: intent.requestId,
+      retry,
+      mentions: intent.mentions,
+      quoteMessageId: intent.quoteMessageId,
+    };
     const result = intent.file
       ? await api.accountSendAttachment(account, conversation, intent.file, intent.text, params, controller.signal, intent.session)
       : await api.accountSendText(account, conversation, intent.text, params, controller.signal, intent.session);
@@ -102,7 +118,16 @@ async function dispatch(intent: Intent, retry = false) {
   if (chatSession.valid(intent.session) && rows(intent.key).some((m) => m.clientRequestId === intent.requestId && (m.delivery === 'sending' || m.delivery === 'unknown'))) poll(intent.key, intent.requestId);
 }
 
-export function submitMessage(key: string, text: string, file?: File): Message | undefined {
+export function submitMessage(
+  key: string,
+  text: string,
+  file?: File,
+  options?: {
+    mentions?: import('../../../types').MessageMention[];
+    quoteMessageId?: string;
+    quote?: import('../../../types').MessageQuote;
+  },
+): Message | undefined {
   const session = chatSession.capture();
   if (!chatSession.valid(session) || parseConversationKey(key)[0] !== session.userId || (!text.trim() && !file)) return;
   const [, account, conversation] = parseConversationKey(key);
@@ -117,8 +142,16 @@ export function submitMessage(key: string, text: string, file?: File): Message |
     text, kind, direction: 'outgoing', isSelf: true, timestamp: new Date().toISOString(),
     localFile: file ? { name: file.name, size: file.size, type: file.type, lastModified: file.lastModified } : undefined,
     attachments: file ? [{ id: localId, type: kind, url: preview, fileName: file.name, mimeType: file.type, size: file.size }] : [],
+    mentions: options?.mentions,
+    quote: options?.quote,
   };
-  const intent: Intent = { key, localId, requestId, text, file, preview, session };
+  const intent: Intent = {
+    key, localId, requestId, text, file, preview,
+    mentions: options?.mentions,
+    quoteMessageId: options?.quoteMessageId,
+    quote: options?.quote,
+    session,
+  };
   intents.set(requestId, intent);
   // The authoritative pending commit happens synchronously, before any dispatch.
   useChatStore.getState().mergeForKey(key, [message]);

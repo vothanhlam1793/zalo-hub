@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { GroupAvatar } from '@/components/GroupAvatar';
+import { cn } from '@/lib/utils';
 import { formatSize, getInitial, isImageAttachment } from '@/utils';
 import { MessageBubble, type MessageGroupItem } from './MessageBubble';
 import Lightbox, { type LightboxImage } from './Lightbox';
@@ -105,6 +106,113 @@ export function ChatPanel({
   const text = useComposerStore((s) => s.text);
   const attachFile = useComposerStore((s) => s.attachFile);
   const missingFileName = useComposerStore((s) => s.missingFileName);
+  const replyingTo = useComposerStore((s) => s.replyingTo);
+
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionPos, setMentionPos] = useState<number>(-1);
+  const [mentionIndex, setMentionIndex] = useState<number>(0);
+
+  const mentionCandidates = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    const list: Array<{ uid: string; displayName: string; avatar?: string; isAll?: boolean }> = [];
+
+    if (isGroupConversation) {
+      if ('all'.includes(q) || 'tất cả'.includes(q) || q === '') {
+        list.push({ uid: '-1', displayName: 'All (Cả nhóm)', isAll: true });
+      }
+      if (groupMembers) {
+        for (const m of groupMembers) {
+          const name = m.displayName || m.userId;
+          if (!q || name.toLowerCase().includes(q)) {
+            list.push({ uid: m.userId, displayName: name, avatar: m.avatar });
+          }
+        }
+      }
+    } else if (activeConversation) {
+      const name = activeConversation.displayName || activeConversation.peerId || 'Bạn chat';
+      if (!q || name.toLowerCase().includes(q)) {
+        list.push({ uid: activeConversation.peerId, displayName: name, avatar: activeConversation.avatar });
+      }
+    }
+    return list.slice(0, 10);
+  }, [mentionQuery, isGroupConversation, groupMembers, activeConversation]);
+
+  const insertMention = useCallback((c: { uid: string; displayName: string; isAll?: boolean }) => {
+    if (mentionPos < 0) return;
+    const mentionTag = `@${c.displayName} `;
+    const before = text.slice(0, mentionPos);
+    const after = text.slice(mentionPos + 1 + (mentionQuery?.length || 0));
+    const newText = before + mentionTag + after;
+
+    const currentMentions = useComposerStore.getState().mentions || [];
+    const newMention: import('@/types').MessageMention = {
+      pos: mentionPos,
+      len: mentionTag.length - 1,
+      uid: c.uid,
+      type: c.isAll ? 1 : 0,
+    };
+    useComposerStore.getState().setMentions([...currentMentions, newMention]);
+    onTextChange(newText);
+    setMentionQuery(null);
+    setMentionIndex(0);
+
+    setTimeout(() => {
+      if (textareaRef?.current) {
+        const nextPos = mentionPos + mentionTag.length;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(nextPos, nextPos);
+      }
+    }, 0);
+  }, [mentionPos, mentionQuery, text, onTextChange, textareaRef]);
+
+  const handleComposerTextChange = (val: string) => {
+    onTextChange(val);
+    const cursorPos = textareaRef?.current?.selectionStart ?? val.length;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const lastAtIdx = textBeforeCursor.lastIndexOf('@');
+    if (lastAtIdx >= 0 && (lastAtIdx === 0 || /\s/.test(textBeforeCursor[lastAtIdx - 1]))) {
+      const q = textBeforeCursor.slice(lastAtIdx + 1);
+      if (!q.includes('\n') && q.length <= 20) {
+        setMentionQuery(q);
+        setMentionPos(lastAtIdx);
+        setMentionIndex(0);
+        return;
+      }
+    }
+    setMentionQuery(null);
+  };
+
+  const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionQuery !== null && mentionCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        insertMention(mentionCandidates[mentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+    onKeyDown(e);
+  };
+
+  const handleReplyMessage = (msg: Message) => {
+    useComposerStore.getState().setReplyingTo(msg);
+    textareaRef?.current?.focus();
+  };
   const [draftPreview, setDraftPreview] = useState<string>();
   useEffect(() => {
     if (!attachFile?.type.startsWith('image/')) { setDraftPreview(undefined); return; }
@@ -464,6 +572,7 @@ export function ChatPanel({
                       isLastInGroup={item.isLastInGroup}
                       senderAvatar={resolvedSenderAvatar}
                       onReact={onReactMessage}
+                      onReply={handleReplyMessage}
                       onOpenLightbox={openLightbox}
                       onRetryMessage={onRetryMessage}
                       onQueryMessage={onQueryMessage}
@@ -489,11 +598,65 @@ export function ChatPanel({
           </div>
 
           {/* Composer */}
-          <form className="shrink-0 p-3 sm:p-4 border-t border-[var(--border)] flex flex-col gap-2 bg-[var(--card)] transition-colors shadow-lg" onSubmit={onSend}>
+          <form className="relative shrink-0 p-3 sm:p-4 border-t border-[var(--border)] flex flex-col gap-2 bg-[var(--card)] transition-colors shadow-lg" onSubmit={onSend}>
+            {/* Mention Autocomplete Dropdown */}
+            {mentionQuery !== null && mentionCandidates.length > 0 && (
+              <div className="absolute bottom-full mb-2 left-4 max-h-52 w-72 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl z-50 p-1 flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-2.5 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                  Thành viên ({mentionCandidates.length})
+                </div>
+                {mentionCandidates.map((c, i) => (
+                  <button
+                    key={c.uid}
+                    type="button"
+                    onClick={() => insertMention(c)}
+                    className={cn(
+                      'flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors cursor-pointer',
+                      i === mentionIndex
+                        ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 font-semibold'
+                        : 'hover:bg-[var(--accent)] text-[var(--foreground)]'
+                    )}
+                  >
+                    <Avatar className="w-5 h-5 text-[9px]">
+                      {c.avatar ? <img src={c.avatar} alt={c.displayName} className="w-full h-full object-cover rounded-full" /> : null}
+                      <AvatarFallback className="bg-blue-600 text-white font-bold text-[9px]">{getInitial(c.displayName)}</AvatarFallback>
+                    </Avatar>
+                    <span className="truncate">{c.displayName}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {!canSend && <div className="text-xs text-amber-500 font-medium">Tài khoản cần kết nối và quyền gửi tin nhắn.</div>}
             {missingFileName && !attachFile && <div role="status" className="text-xs text-amber-500">Chọn lại tệp đính kèm: {missingFileName}
               <button type="button" className="underline p-2" onClick={onClearFile}>Bỏ tệp</button>
             </div>}
+
+            {/* Replying Banner */}
+            {replyingTo && (
+              <div className="flex items-center justify-between px-3 py-2 bg-blue-500/10 border border-blue-500/25 rounded-xl text-xs text-[var(--foreground)] animate-in fade-in">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-blue-500 font-bold text-sm shrink-0">↩️</span>
+                  <div className="min-w-0">
+                    <div className="font-semibold text-blue-600 dark:text-blue-400 truncate">
+                      Đang trả lời {replyingTo.senderName || (replyingTo.isSelf ? 'chính bạn' : 'tin nhắn')}
+                    </div>
+                    <div className="text-muted-foreground truncate text-[11px] mt-0.5">
+                      {replyingTo.text || (replyingTo.attachments?.[0]?.fileName ?? `[${replyingTo.kind}]`)}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => useComposerStore.getState().setReplyingTo(null)}
+                  className="text-muted-foreground hover:text-foreground p-1 text-xs shrink-0 cursor-pointer"
+                  title="Hủy trả lời"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             {attachFile && (
               <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/25 rounded-xl text-xs text-blue-600 dark:text-blue-400 animate-in fade-in">
                 {draftPreview && <img src={draftPreview} alt="Xem trước ảnh đính kèm" className="w-12 h-12 object-contain rounded" />}
@@ -516,7 +679,7 @@ export function ChatPanel({
                 variant="ghost"
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
-                className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0"
+                className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 cursor-pointer"
                 title="Đính kèm file hoặc ảnh"
                 aria-label="Đính kèm file hoặc ảnh"
               >
@@ -525,11 +688,11 @@ export function ChatPanel({
 
               <Textarea
                 ref={textareaRef as any}
-                placeholder={isGroupConversation ? 'Nhập tin nhắn vào nhóm...' : 'Nhập tin nhắn...'}
+                placeholder={isGroupConversation ? 'Nhập tin nhắn vào nhóm (gõ @ để tag tên)...' : 'Nhập tin nhắn...'}
                 aria-label="Nội dung tin nhắn"
                 value={text}
-                onChange={(e) => onTextChange(e.target.value)}
-                onKeyDown={onKeyDown}
+                onChange={(e) => handleComposerTextChange(e.target.value)}
+                onKeyDown={handleComposerKeyDown}
                 onCompositionStart={onCompositionStart}
                 onCompositionEnd={onCompositionEnd}
                 rows={1}
@@ -539,7 +702,7 @@ export function ChatPanel({
               <Button
                 type="submit"
                 disabled={!canSend || isComposing || (!text.trim() && !attachFile) || Boolean(missingFileName && !attachFile)}
-                className="h-10 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold shrink-0 disabled:opacity-40 transition-opacity shadow-md shadow-blue-600/20"
+                className="h-10 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold shrink-0 disabled:opacity-40 transition-opacity shadow-md shadow-blue-600/20 cursor-pointer"
               >
                 Gửi
               </Button>

@@ -16,6 +16,13 @@ export interface GoldAccountRecord {
 export type GoldConversationType = 'direct' | 'group';
 export type GoldMessageKind = 'text' | 'image' | 'file' | 'video' | 'sticker' | 'reaction' | 'poll' | 'voice' | 'gif';
 
+export interface GoldMessageMention {
+  pos: number;
+  len: number;
+  uid: string;
+  type?: number;
+}
+
 export interface GoldMessageQuote {
   messageId?: string;
   senderId?: string;
@@ -94,6 +101,7 @@ export interface GoldConversationMessage {
   providerMessageId?: string;
   imageUrl?: string;
   quote?: GoldMessageQuote;
+  mentions?: GoldMessageMention[];
   reactions?: GoldMessageReactionItem[];
   rawMessageJson?: string;
   cliMsgId?: string;

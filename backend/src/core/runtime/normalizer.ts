@@ -117,6 +117,27 @@ export function normalizeMessageQuote(data: Record<string, unknown>): GoldMessag
   } satisfies GoldMessageQuote;
 }
 
+export function normalizeMessageMentions(data: Record<string, unknown>): import('../types.js').GoldMessageMention[] | undefined {
+  const mentions = data.mentions || pickRecord(data.content)?.mentions || pickRecord(data.paramsExt)?.mentions;
+  if (!Array.isArray(mentions) || mentions.length === 0) return undefined;
+  const list: import('../types.js').GoldMessageMention[] = [];
+  for (const item of mentions) {
+    const record = pickRecord(item);
+    if (!record) continue;
+    const pos = Number(record.pos);
+    const len = Number(record.len);
+    const uid = String(record.uid ?? '');
+    if (isNaN(pos) || isNaN(len) || !uid) continue;
+    list.push({
+      pos,
+      len,
+      uid,
+      type: typeof record.type === 'number' ? record.type : undefined,
+    });
+  }
+  return list.length > 0 ? list : undefined;
+}
+
 export function normalizeMessageReactions(data: Record<string, unknown>): GoldMessageReactionItem[] | undefined {
   const candidates = [
     data.reactions,
