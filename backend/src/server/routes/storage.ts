@@ -1,12 +1,14 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import type { GoldStorageRepo } from '../../core/storage/storage-repo.js';
 import type { MediaOffloaderService } from '../../core/storage/offloader.js';
+import type { ZaloBackupImporterService } from '../../core/storage/backup-importer.js';
 import type { GoldLogger } from '../../core/logger.js';
 
 export function createStorageRouter(
   logger: GoldLogger,
   storageRepo: GoldStorageRepo,
   offloaderService: MediaOffloaderService,
+  backupImporterService: ZaloBackupImporterService,
   requireAuth: (req: Request, res: Response, next: NextFunction) => void,
   requireSystemRole: (role: string) => (req: Request, res: Response, next: NextFunction) => void,
 ) {
@@ -229,6 +231,39 @@ export function createStorageRouter(
     } catch (err: any) {
       logger.error('backfill_media_failed', { error: err?.message || String(err) });
       res.status(400).json({ error: err?.message || 'Lỗi lưu trữ media Zalo về MinIO' });
+    }
+  });
+
+  // GET /api/admin/storage/drives/:id/scan-backup
+  router.get('/admin/storage/drives/:id/scan-backup', requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const driveId = String(req.params.id || '');
+      const result = await backupImporterService.scanDriveForBackups(driveId);
+      res.json(result);
+    } catch (err: any) {
+      logger.error('scan_backup_failed', { error: err?.message || String(err) });
+      res.status(400).json({ error: err?.message || 'Không thể quét file sao lưu trên Google Drive' });
+    }
+  });
+
+  // POST /api/admin/storage/drives/:id/import-backup
+  router.post('/admin/storage/drives/:id/import-backup', requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const driveId = String(req.params.id || '');
+      const { fileId, accountId, backupPassword } = req.body || {};
+      if (!fileId) {
+        res.status(400).json({ error: 'fileId là bắt buộc' });
+        return;
+      }
+      if (!accountId) {
+        res.status(400).json({ error: 'accountId là bắt buộc' });
+        return;
+      }
+      const result = await backupImporterService.importBackupFile(driveId, fileId, accountId, backupPassword);
+      res.json(result);
+    } catch (err: any) {
+      logger.error('import_backup_failed', { error: err?.message || String(err) });
+      res.status(400).json({ error: err?.message || 'Lỗi khi nhập bản sao lưu' });
     }
   });
 

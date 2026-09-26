@@ -54,6 +54,16 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
   const [formIsDefault, setFormIsDefault] = useState(false);
   const [modalSubmitting, setModalSubmitting] = useState(false);
 
+  // Backup Import Modal State
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [selectedBackupDrive, setSelectedBackupDrive] = useState<StorageDrive | null>(null);
+  const [backupFiles, setBackupFiles] = useState<Array<{ id: string; name: string; size?: number; mimeType?: string; modifiedTime?: string; space: 'appDataFolder' | 'drive' }>>([]);
+  const [scanningBackup, setScanningBackup] = useState(false);
+  const [selectedBackupFileId, setSelectedBackupFileId] = useState('');
+  const [backupTargetAccountId, setBackupTargetAccountId] = useState('');
+  const [backupPassword, setBackupPassword] = useState('');
+  const [importingBackup, setImportingBackup] = useState(false);
+
   const loadAll = async () => {
     setLoading(true);
     try {
@@ -144,6 +154,60 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
     }
   };
 
+  const handleOpenBackupModal = async (drive: StorageDrive) => {
+    setSelectedBackupDrive(drive);
+    setSelectedBackupFileId('');
+    setBackupPassword('');
+    setBackupFiles([]);
+    setIsBackupModalOpen(true);
+    setScanningBackup(true);
+    setErrorMsg('');
+    try {
+      const res = await bff.scanDriveBackups(drive.id);
+      setBackupFiles(res.files || []);
+      if (res.files && res.files.length > 0) {
+        setSelectedBackupFileId(res.files[0].id);
+      }
+      if (accounts && accounts.length > 0) {
+        setBackupTargetAccountId(accounts[0].accountId);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Không thể quét file sao lưu trên Google Drive');
+    } finally {
+      setScanningBackup(false);
+    }
+  };
+
+  const handleExecuteBackupImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBackupDrive || !selectedBackupFileId || !backupTargetAccountId) {
+      alert('Vui lòng chọn đầy đủ File sao lưu và Tài khoản Zalo nhận dữ liệu');
+      return;
+    }
+
+    setImportingBackup(true);
+    try {
+      const res = await bff.importDriveBackup(selectedBackupDrive.id, {
+        fileId: selectedBackupFileId,
+        accountId: backupTargetAccountId,
+        backupPassword: backupPassword.trim() || undefined,
+      });
+      if (res.success) {
+        setStatusMsg(`Đã kết nối và xử lý bản sao lưu thành công!`);
+        setIsBackupModalOpen(false);
+        await loadAll();
+      } else {
+        alert(res.error || 'Lỗi khi nhập bản sao lưu');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Lỗi khi nhập bản sao lưu');
+    } finally {
+      setImportingBackup(false);
+    }
+  };
+    if (!confirm(`Bạn có chắc muốn xóa cấu hình Drive "${name}"? Các file đã lưu trên Drive vẫn tồn tại nhưng sẽ không thể stream.`)) {
+      return;
+    }
   const handleDeleteDrive = async (driveId: string, name: string) => {
     if (!confirm(`Bạn có chắc muốn xóa cấu hình Drive "${name}"? Các file đã lưu trên Drive vẫn tồn tại nhưng sẽ không thể stream.`)) {
       return;
@@ -505,6 +569,15 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
                     <div className="flex items-center gap-1">
                       <Button
                         size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1 border-purple-500/20 bg-purple-500/10 text-purple-600 dark:text-purple-400 hover:bg-purple-500/20"
+                        onClick={() => handleOpenBackupModal(drive)}
+                        title="Quét và nạp dữ liệu từ bản sao lưu Zalo Mobile trên Google Drive"
+                      >
+                        📥 Nạp Sao Lưu
+                      </Button>
+                      <Button
+                        size="sm"
                         variant="ghost"
                         className="h-7 text-xs text-blue-600 dark:text-blue-400"
                         onClick={() => handleOpenEditModal(drive)}
@@ -693,6 +766,118 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
                   disabled={modalSubmitting}
                 >
                   {modalSubmitting ? 'Đang lưu...' : editingDrive ? 'Cập nhật' : 'Thêm Google Drive'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog for Zalo Google Drive Backup Import */}
+      {isBackupModalOpen && selectedBackupDrive && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <span>📥 Nạp Lịch Sử Sao Lưu từ Google Drive</span>
+              </h3>
+              <button
+                className="text-muted-foreground hover:text-foreground text-sm"
+                onClick={() => setIsBackupModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleExecuteBackupImport} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg text-xs text-purple-600 dark:text-purple-400 space-y-1">
+                <p className="font-semibold">
+                  Ổ Drive được chọn: {selectedBackupDrive.name} ({selectedBackupDrive.accountEmail || 'Không có email'})
+                </p>
+                <p className="text-[11px] opacity-90">
+                  Hệ thống tự động quét vùng AppData của Zalo trên Drive này để tìm bản sao lưu tin nhắn.
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold block mb-1">
+                  Chọn file sao lưu tìm thấy trên Drive: <span className="text-destructive">*</span>
+                </label>
+                {scanningBackup ? (
+                  <div className="p-3 bg-muted rounded text-xs text-muted-foreground animate-pulse">
+                    ⏳ Đang quét bản sao lưu trên Google Drive...
+                  </div>
+                ) : backupFiles.length === 0 ? (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded text-xs text-amber-600 dark:text-amber-400">
+                    ⚠️ Không tìm thấy file sao lưu Zalo nào trong AppData hoặc thư mục gốc của Drive này. Hãy đảm bảo bạn đã chạy sao lưu trên Zalo Mobile lên đúng tài khoản Google này.
+                  </div>
+                ) : (
+                  <select
+                    className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={selectedBackupFileId}
+                    onChange={(e) => setSelectedBackupFileId(e.target.value)}
+                    required
+                  >
+                    {backupFiles.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name} ({f.size ? formatBytes(f.size) : 'N/A'}) - [{f.space}]
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold block mb-1">
+                  Nạp dữ liệu vào Tài khoản Zalo: <span className="text-destructive">*</span>
+                </label>
+                <select
+                  className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  value={backupTargetAccountId}
+                  onChange={(e) => setBackupTargetAccountId(e.target.value)}
+                  required
+                >
+                  {accounts.map((acc) => (
+                    <option key={acc.accountId} value={acc.accountId}>
+                      {acc.displayName || acc.phoneNumber || acc.accountId} ({acc.phoneNumber || 'Không có SĐT'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold block mb-1">
+                  Mật khẩu sao lưu (nếu có đặt trên Zalo):
+                </label>
+                <Input
+                  type="password"
+                  className="h-8 text-xs font-mono"
+                  placeholder="Nhập mật khẩu mã hóa sao lưu của bạn..."
+                  value={backupPassword}
+                  onChange={(e) => setBackupPassword(e.target.value)}
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Mật khẩu bạn đã đặt khi bật tính năng "Sao lưu & Khôi phục" trên ứng dụng Zalo điện thoại.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--border)]">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setIsBackupModalOpen(false)}
+                >
+                  Đóng
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="text-xs bg-purple-600 hover:bg-purple-700 text-white"
+                  disabled={importingBackup || scanningBackup || backupFiles.length === 0}
+                >
+                  {importingBackup ? '⏳ Đang nạp dữ liệu...' : '🚀 Bắt đầu Nạp Tin Nhắn'}
                 </Button>
               </div>
             </form>

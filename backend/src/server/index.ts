@@ -38,6 +38,7 @@ import { createStorageRouter } from './routes/storage.js';
 import { createMonitorRouter } from './routes/monitor.js';
 import { GoldStorageRepo } from '../core/storage/storage-repo.js';
 import { MediaOffloaderService } from '../core/storage/offloader.js';
+import { ZaloBackupImporterService } from '../core/storage/backup-importer.js';
 import { getEmptyStatus } from './helpers/status.js';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yaml';
@@ -142,6 +143,13 @@ async function main() {
   });
   mediaOffloaderService.startCronWorker();
 
+  const backupImporterService = new ZaloBackupImporterService(
+    knex,
+    storageRepo,
+    mediaOffloaderService,
+    logger,
+  );
+
   app.get('/media/*', async (req, res) => {
     try {
       const objPath = req.path.slice('/media/'.length);
@@ -237,7 +245,7 @@ async function main() {
   app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
   app.use('/api/tags', createTagsRouter(loginStore, accountManager, broadcast, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager));
-  app.use('/api', createStorageRouter(logger, storageRepo, mediaOffloaderService, systemAuth.requireAuth, systemAuth.requireSystemRole));
+  app.use('/api', createStorageRouter(logger, storageRepo, mediaOffloaderService, backupImporterService, systemAuth.requireAuth, systemAuth.requireSystemRole));
   app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
   app.use('/api/bot', createBotApiRouter(accountManager, difyBotService, loginStore));
 

@@ -187,4 +187,6 @@ export const bff = {
   testStorageDrive: (id: string) => api.testStorageDrive(id),
   triggerOffloadNow: (limit?: number) => api.triggerOffloadNow(limit),
   backfillRemoteMedia: (limit?: number) => api.backfillRemoteMedia(limit),
+  scanDriveBackups: (driveId: string) => api.scanDriveBackups(driveId),
+  importDriveBackup: (driveId: string, data: { fileId: string; accountId: string; backupPassword?: string }) => api.importDriveBackup(driveId, data),
 };

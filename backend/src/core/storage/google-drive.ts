@@ -240,6 +240,43 @@ export class GoogleDriveClient {
     };
   }
 
+  async listFiles(query: string, spaces?: 'drive' | 'appDataFolder'): Promise<Array<{ id: string; name: string; size?: number; mimeType?: string; createdTime?: string; modifiedTime?: string }>> {
+    const token = await this.getValidAccessToken();
+    let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,size,mimeType,createdTime,modifiedTime)`;
+    if (spaces) {
+      url += `&spaces=${spaces}`;
+    }
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`List files that bai (${res.status}): ${errText}`);
+    }
+    const data = await res.json() as { files?: Array<{ id: string; name: string; size?: string; mimeType?: string; createdTime?: string; modifiedTime?: string }> };
+    return (data.files || []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      size: f.size ? Number(f.size) : undefined,
+      mimeType: f.mimeType,
+      createdTime: f.createdTime,
+      modifiedTime: f.modifiedTime,
+    }));
+  }
+
+  async downloadFileBuffer(fileId: string): Promise<Buffer> {
+    const token = await this.getValidAccessToken();
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Download file that bai (${res.status}): ${errText}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
   async deleteFile(fileId: string): Promise<void> {
     const token = await this.getValidAccessToken();
     const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {

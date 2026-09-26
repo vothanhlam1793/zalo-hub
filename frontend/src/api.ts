@@ -466,4 +466,13 @@ export const api = {
       '/api/admin/storage/backfill-media',
       { method: 'POST', body: JSON.stringify({ limit }) }
     ),
+  scanDriveBackups: (driveId: string) =>
+    req<{ driveId: string; driveName: string; files: Array<{ id: string; name: string; size?: number; mimeType?: string; modifiedTime?: string; space: 'appDataFolder' | 'drive' }> }>(
+      `/api/admin/storage/drives/${encodeURIComponent(driveId)}/scan-backup`
+    ),
+  importDriveBackup: (driveId: string, data: { fileId: string; accountId: string; backupPassword?: string }) =>
+    req<{ success: boolean; totalParsed: number; totalInserted: number; totalSkipped: number; error?: string }>(
+      `/api/admin/storage/drives/${encodeURIComponent(driveId)}/import-backup`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
 };
