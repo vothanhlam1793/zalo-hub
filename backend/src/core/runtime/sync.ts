@@ -151,12 +151,9 @@ export class GoldSync {
     const maxTotalTimeMs = options.maxTotalTimeMs ?? 240_000;
     const startTime = Date.now();
 
-    let beforeMessageId: string | null | undefined = options.beforeMessageId?.trim();
-    if (!beforeMessageId) {
-      const oldestMessages = await this.state.store.listConversationMessagesByAccount(this.state.boundAccountId, conversationId, { limit: 1 });
-      const oldestLocal = oldestMessages[0];
-      beforeMessageId = oldestLocal?.providerMessageId ?? null;
-    }
+    // Target specific beforeMessageId if given. If none given:
+    // If catchup mode (default), start from null to request the latest batch and catch missing messages
+    let beforeMessageId: string | null | undefined = options.beforeMessageId?.trim() || null;
 
     let totalRemote = 0;
     let totalInserted = 0;

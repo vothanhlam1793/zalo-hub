@@ -64,7 +64,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
           const qr = await qrFn();
           if (qr.qrCode) {
             setQrCode(qr.qrCode);
-            setStatus(isReconnect ? 'Quét QR bằng Zalo và chọn "Đồng bộ ngay"' : 'Quét QR bằng Zalo để thêm tài khoản');
+            setStatus(isReconnect ? 'Quét QR bằng Zalo trên điện thoại để kết nối' : 'Quét QR bằng Zalo để thêm tài khoản');
           }
         } catch {
           // keep polling
@@ -78,9 +78,6 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
     };
   }, [open, isReconnect, accountId]);
 
-  // Phân định 2 view hoàn toàn tách bạch:
-  // 1. isStreamingOrImporting: Khi đã quét và bắt đầu truyền stream chunk hoặc nạp DB
-  // 2. isViewingQr: Khi chưa quét hoặc đang chờ quét (LUÔN HIỂN THỊ MÃ QR)
   const isStreamingOrImporting = progress && (
     (progress.step as string) === 'receiving_chunks' ||
     (progress.step as string) === 'unpacking_db' ||
@@ -93,15 +90,15 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
       <DialogContent className="bg-[#111] border-[var(--border)] max-w-sm">
         <DialogHeader>
           <DialogTitle className="text-[#eee] flex items-center gap-2 text-base">
-            <span>📲</span> {isReconnect ? 'Đăng nhập lại & Đồng bộ 14 ngày' : 'Thêm tài khoản Zalo & Đồng bộ'}
+            <span>📲</span> {isReconnect ? 'Đăng nhập lại & Bắt kịp tin nhắn' : 'Thêm tài khoản Zalo'}
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
-            Quét mã QR 1 lần duy nhất để kết nối và tự động nạp toàn bộ lịch sử trò chuyện.
+            Quét mã QR bằng Zalo trên điện thoại. Hệ thống sẽ tự động bắt kịp tin nhắn gần đây sau khi kết nối.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-4 py-2">
-          {/* VIEW 1: HIỂN THỊ MÃ QR (KHI CHƯA TRUYỀN DỮ LIỆU) */}
+          {/* VIEW 1: HIỂN THỊ MÃ QR */}
           {!isStreamingOrImporting && (
             <>
               {qrCode ? (
@@ -112,7 +109,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
                     className="w-52 h-52 rounded-xl border border-[var(--border)] bg-white p-2 shadow-lg object-contain"
                   />
                   <p className="text-[11px] text-muted-foreground text-center max-w-[260px]">
-                    Nhớ chọn <strong className="text-foreground">"Đồng bộ tin nhắn lên máy tính"</strong> trên điện thoại.
+                    Mở app Zalo trên điện thoại để quét mã QR đăng nhập.
                   </p>
                 </div>
               ) : (

@@ -159,8 +159,9 @@ export class ZaloPcHandshake {
     let oldestTimestamp: string | undefined;
     const collectedMessages: CollectedMessage[] = [];
 
-    const onMessage = (event: { data: any }) => {
-      const raw = event.data;
+    const onMessage = (event: unknown) => {
+      // In ws library, event can be a Buffer directly, or in browser/mock environment an object with .data
+      const raw: any = Buffer.isBuffer(event) ? event : (event as any)?.data ?? event;
       if (!Buffer.isBuffer(raw) || raw.length < 5) return;
       const version = raw[0];
       const cmd = raw.readUInt16LE(1);
