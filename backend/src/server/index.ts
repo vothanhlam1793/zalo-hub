@@ -47,6 +47,7 @@ import fs from 'node:fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const adminDir = path.resolve(__dirname, '../../dist/admin');
+const frontendDir = path.resolve(__dirname, '../../../frontend/dist');
 
 async function main() {
   const env = process.env.NODE_ENV || 'development';
@@ -121,10 +122,13 @@ async function main() {
     }
   });
 
-  app.use('/admin', express.static(adminDir));
-  app.get('/admin', (_req, res) => {
-    res.sendFile(path.join(adminDir, 'index.html'));
-  });
+  // Legacy admin build fallback if needed, otherwise frontendDir handles /admin route
+  if (!fs.existsSync(frontendDir)) {
+    app.use('/admin', express.static(adminDir));
+    app.get('/admin', (_req, res) => {
+      res.sendFile(path.join(adminDir, 'index.html'));
+    });
+  }
 
   const mediaBucket = process.env.MINIO_BUCKET || 'zalohub-media';
   const mediaClient = new MinioClient({
@@ -249,7 +253,6 @@ async function main() {
   app.use('/api/admin/bots', createDifyBotsRouter(difyBotService, systemAuth.requireAuth, systemAuth.requireSystemRole('admin')));
   app.use('/api/bot', createBotApiRouter(accountManager, difyBotService, loginStore));
 
-  const frontendDir = path.resolve(__dirname, '../../../frontend/dist');
   if (fs.existsSync(frontendDir)) {
     app.use(express.static(frontendDir));
     app.get('*', (req, res, next) => {
