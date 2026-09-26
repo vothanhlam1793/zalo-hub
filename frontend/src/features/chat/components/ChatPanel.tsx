@@ -121,22 +121,45 @@ export function ChatPanel({
       if ('all'.includes(q) || 'tất cả'.includes(q) || q === '') {
         list.push({ uid: '-1', displayName: 'All (Cả nhóm)', isAll: true });
       }
-      if (groupMembers) {
+
+      const seenUids = new Set<string>();
+      const contactMap = new Map((contacts || []).map((c) => [c.userId, c]));
+
+      // 1. Members from group metadata
+      if (groupMembers && groupMembers.length > 0) {
         for (const m of groupMembers) {
-          const name = m.displayName || m.userId;
+          if (!m.userId || seenUids.has(m.userId)) continue;
+          seenUids.add(m.userId);
+          const contact = contactMap.get(m.userId);
+          const name = m.displayName || contact?.displayName || contact?.zaloName || m.userId;
+          const avatar = m.avatar || contact?.avatar;
           if (!q || name.toLowerCase().includes(q)) {
-            list.push({ uid: m.userId, displayName: name, avatar: m.avatar });
+            list.push({ uid: m.userId, displayName: name, avatar });
+          }
+        }
+      }
+
+      // 2. Participants extracted from loaded messages in the group
+      if (messages && messages.length > 0) {
+        for (const msg of messages) {
+          if (!msg.senderId || seenUids.has(msg.senderId)) continue;
+          seenUids.add(msg.senderId);
+          const contact = contactMap.get(msg.senderId);
+          const name = msg.senderName || contact?.displayName || contact?.zaloName || msg.senderId;
+          const avatar = msg.senderAvatar || contact?.avatar;
+          if (!q || name.toLowerCase().includes(q)) {
+            list.push({ uid: msg.senderId, displayName: name, avatar });
           }
         }
       }
     } else if (activeConversation) {
-      const name = activeConversation.displayName || activeConversation.peerId || 'Bạn chat';
+      const name = activeConversation.title || activeConversation.threadId || 'Bạn chat';
       if (!q || name.toLowerCase().includes(q)) {
-        list.push({ uid: activeConversation.peerId, displayName: name, avatar: activeConversation.avatar });
+        list.push({ uid: activeConversation.threadId, displayName: name, avatar: activeConversation.avatar });
       }
     }
     return list.slice(0, 10);
-  }, [mentionQuery, isGroupConversation, groupMembers, activeConversation]);
+  }, [mentionQuery, isGroupConversation, groupMembers, contacts, messages, activeConversation]);
 
   const insertMention = useCallback((c: { uid: string; displayName: string; isAll?: boolean }) => {
     if (mentionPos < 0) return;

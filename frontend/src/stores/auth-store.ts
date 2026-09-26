@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { bff } from '../bff-api';
+import { ApiError } from '../api';
 import { chatSession, readStoredCredential } from '../features/chat/model/chat-session';
 
 interface SystemUser {
@@ -67,10 +68,15 @@ export const useAuthStore = create<AuthState>((set) => ({
       if (epoch !== authEpoch || token !== readStoredCredential()) return;
       chatSession.setUser(data.user.id, token);
       set({ user: data.user as SystemUser, isChecking: false });
-    } catch {
+    } catch (err) {
       if (epoch !== authEpoch) return;
-      chatSession.setUser('');
-      set({ user: null, isChecking: false });
+      const isAuthFailure = err instanceof ApiError ? (err.status === 401 || err.status === 403) : false;
+      if (isAuthFailure) {
+        chatSession.setUser('');
+        set({ user: null, isChecking: false });
+      } else {
+        set({ isChecking: false });
+      }
     }
   },
 

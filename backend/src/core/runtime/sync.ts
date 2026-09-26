@@ -733,17 +733,30 @@ export class GoldSync {
 
       const baseMembers = this._normalizeGroupMembers?.(group.members ?? group.memVerList ?? group.memberIds) ?? [];
       const memberIds = Array.from(new Set(baseMembers.map((member) => member.userId)));
+      
+      const users: Array<Record<string, unknown> & { userId: string }> = [];
+      if (memberIds.length > 0 && typeof api.getUserInfo === 'function') {
+        for (const batch of chunkArray(memberIds, 50)) {
+          try {
+            const batchInfo = normalizeUserInfoMap(await api.getUserInfo(batch)) as Array<Record<string, unknown> & { userId: string }>;
+            users.push(...batchInfo);
+          } catch {}
+        }
+      }
+
       const groupMemberProfiles = memberIds.length > 0 && typeof api.getGroupMembersInfo === 'function'
-        ? normalizeGroupMemberInfoMap(await api.getGroupMembersInfo(memberIds)) as Array<Record<string, unknown> & { userId: string }>
+        ? normalizeGroupMemberInfoMap(await api.getGroupMembersInfo(memberIds).catch(() => ({}))) as Array<Record<string, unknown> & { userId: string }>
         : [];
-      const users = memberIds.length > 0 && typeof api.getUserInfo === 'function'
-        ? normalizeUserInfoMap(await api.getUserInfo(memberIds)) as Array<Record<string, unknown> & { userId: string }>
-        : [];
+
+      const savedContacts = await this.state.store.listContactsByAccount(this.state.boundAccountId).catch(() => []);
+      const contactsById = new Map(savedContacts.map((c) => [c.userId, c]));
       const groupProfilesById = new Map(groupMemberProfiles.map((user) => [String(user.userId), user]));
       const usersById = new Map(users.map((user) => [String(user.userId), user]));
+      
       const members = baseMembers.map((member) => {
         const groupProfile = groupProfilesById.get(member.userId);
         const user = usersById.get(member.userId);
+        const contact = contactsById.get(member.userId);
         return {
           ...member,
           displayName: typeof groupProfile?.displayName === 'string'
@@ -762,7 +775,7 @@ export class GoldSync {
                 ? user.zaloName
                 : typeof user?.name === 'string'
                   ? user.name
-                : member.displayName,
+                : contact?.displayName || member.displayName,
           avatar: typeof groupProfile?.avatar === 'string'
             ? groupProfile.avatar
             : typeof groupProfile?.avatarUrl === 'string'
@@ -771,7 +784,7 @@ export class GoldSync {
             ? user.avatar
             : typeof user?.avatarUrl === 'string'
               ? user.avatarUrl
-              : member.avatar,
+              : contact?.avatar || member.avatar,
         };
       });
 

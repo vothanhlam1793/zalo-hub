@@ -224,6 +224,7 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
           return;
         }
         if (payload.type === 'authenticate') { await authenticate(socket, state, payload.token); return; }
+        if (payload.type === 'ping') { send(socket, { type: 'pong' }); return; }
         // Optional compatibility: token-bearing first subscribe is atomic.
         if (!state.userId) {
           if (payload.type !== 'subscribe' || !(await authenticate(socket, state, payload.token))) {
@@ -275,10 +276,23 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
     }
   }, POLICY_INTERVAL_MS);
   policyTimer.unref();
+
+  const pingTimer = setInterval(() => {
+    for (const socket of wsServer.clients) {
+      if (socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.ping();
+        } catch {}
+      }
+    }
+  }, 25_000);
+  pingTimer.unref();
+
   wsServer.on('close', () => {
     for (const timer of summaryDebounceTimers.values()) clearTimeout(timer);
     summaryDebounceTimers.clear();
     clearInterval(policyTimer);
+    clearInterval(pingTimer);
     removeMessageListener();
     for (const state of states.values()) { state.closed = true; clearTimeout(state.timer); }
     states.clear();

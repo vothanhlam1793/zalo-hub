@@ -370,13 +370,27 @@ export class GoldRuntime {
     }
 
     return members
-      .filter((member) => member && typeof member === 'object')
-      .map((member: any) => ({
-        userId: String(member.userId ?? member.uid ?? member.id),
-        displayName: member.displayName ? String(member.displayName) : member.name ? String(member.name) : undefined,
-        avatar: member.avatar ? String(member.avatar) : member.avatarUrl ? String(member.avatarUrl) : undefined,
-        role: member.role ? String(member.role) : undefined,
-      }));
+      .map((member: any) => {
+        if (typeof member === 'string' || typeof member === 'number') {
+          const raw = String(member).trim();
+          if (!raw) return null;
+          const userId = raw.replace(/_\d+$/, '');
+          return { userId };
+        }
+        if (member && typeof member === 'object') {
+          const rawId = member.userId ?? member.uid ?? member.id ?? member.memberId;
+          if (!rawId) return null;
+          const userId = String(rawId).replace(/_\d+$/, '');
+          return {
+            userId,
+            displayName: member.displayName ? String(member.displayName) : member.name ? String(member.name) : member.dName ? String(member.dName) : undefined,
+            avatar: member.avatar ? String(member.avatar) : member.avatarUrl ? String(member.avatarUrl) : member.thumb ? String(member.thumb) : undefined,
+            role: member.role ? String(member.role) : undefined,
+          };
+        }
+        return null;
+      })
+      .filter((m): m is GoldGroupMemberRecord => Boolean(m && m.userId));
   }
 
   private async resolveGroupSenderName(groupId: string, senderId?: string) {
