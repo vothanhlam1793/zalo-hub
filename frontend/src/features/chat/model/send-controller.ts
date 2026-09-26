@@ -123,12 +123,9 @@ async function dispatch(intent: Intent, retry = false) {
     if (!chatSession.valid(intent.session)) return;
     if (error instanceof ApiError && error.receipt) accept(intent.key, intent.requestId, error.receipt);
     else if (error instanceof ApiError && [400, 401, 403, 404, 413, 415, 422].includes(error.status)) {
-      patch(intent, { delivery: 'failed', retryable: true, errorCode: error.code || String(error.status), errorText: error.message });
+      patch(intent, { delivery: 'failed', retryable: error.status === 404, errorCode: error.code || String(error.status), errorText: error.message });
       void queue.resume(intent.key);
-    } else {
-      patch(intent, { delivery: 'failed', retryable: true, errorText: 'Lỗi kết nối máy chủ. Bấm để gửi lại.' });
-      void queue.resume(intent.key);
-    }
+    } else patch(intent, { delivery: 'unknown', retryable: false, errorText: 'Chưa xác nhận kết quả gửi. Hãy kiểm tra trạng thái.' });
   } finally {
     clearTimeout(timeout);
     controllers.delete(controller);
