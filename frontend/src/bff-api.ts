@@ -186,4 +186,5 @@ export const bff = {
   deleteStorageDrive: (id: string) => api.deleteStorageDrive(id),
   testStorageDrive: (id: string) => api.testStorageDrive(id),
   triggerOffloadNow: (limit?: number) => api.triggerOffloadNow(limit),
+  backfillRemoteMedia: (limit?: number) => api.backfillRemoteMedia(limit),
 };

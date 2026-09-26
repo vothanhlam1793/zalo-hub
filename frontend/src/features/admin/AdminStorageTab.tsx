@@ -36,6 +36,7 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
   const [loading, setLoading] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
   const [offloading, setOffloading] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const [testingDriveId, setTestingDriveId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -109,6 +110,22 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
       setErrorMsg(err?.message || 'Lỗi khi chạy dịch chuyển dữ liệu');
     } finally {
       setOffloading(false);
+    }
+  };
+
+  const handleBackfillMedia = async () => {
+    setBackfilling(true);
+    setStatusMsg('');
+    setErrorMsg('');
+    try {
+      const res = await bff.backfillRemoteMedia(200);
+      const r = res.result;
+      setStatusMsg(`Đã tải và lưu trữ thành công ${r.mirrored}/${r.scanned} files media từ Zalo về MinIO VPS (${formatBytes(r.totalBytes)}).`);
+      await loadAll();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Lỗi khi tải media Zalo');
+    } finally {
+      setBackfilling(false);
     }
   };
 
@@ -236,11 +253,20 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
           <Button
             size="sm"
             variant="outline"
+            onClick={handleBackfillMedia}
+            disabled={backfilling}
+            className="text-xs font-semibold gap-1.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20 hover:bg-blue-500/20"
+          >
+            {backfilling ? '⏳ Đang tải media...' : '📥 Lưu Media Zalo về MinIO'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={handleTriggerOffload}
             disabled={offloading || drives.length === 0}
             className="text-xs font-semibold gap-1.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 hover:bg-amber-500/20"
           >
-            {offloading ? '⏳ Đang dịch chuyển...' : '⚡ Dịch chuyển dữ liệu ngay'}
+            {offloading ? '⏳ Đang dịch chuyển...' : '⚡ Dịch chuyển lên Drive'}
           </Button>
           <Button
             size="sm"

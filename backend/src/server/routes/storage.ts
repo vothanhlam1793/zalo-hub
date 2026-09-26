@@ -220,5 +220,17 @@ export function createStorageRouter(
     }
   });
 
+  // POST /api/admin/storage/backfill-media
+  router.post('/admin/storage/backfill-media', requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const limit = req.body?.limit ? Math.min(500, Number(req.body.limit)) : 100;
+      const result = await offloaderService.backfillRemoteMedia(limit);
+      res.json({ ok: true, result });
+    } catch (err: any) {
+      logger.error('backfill_media_failed', { error: err?.message || String(err) });
+      res.status(400).json({ error: err?.message || 'Lỗi lưu trữ media Zalo về MinIO' });
+    }
+  });
+
   return router;
 }

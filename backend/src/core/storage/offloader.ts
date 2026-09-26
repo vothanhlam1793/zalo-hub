@@ -166,6 +166,71 @@ export class MediaOffloaderService {
     return buffer.length;
   }
 
+  async backfillRemoteMedia(limit = 100): Promise<{
+    scanned: number;
+    mirrored: number;
+    failed: number;
+    totalBytes: number;
+  }> {
+    const candidates = await this.storageRepo.getUnmirroredAttachments(limit);
+    let mirrored = 0;
+    let failed = 0;
+    let totalBytes = 0;
+
+    for (const item of candidates) {
+      try {
+        const response = await fetch(item.url);
+        if (!response.ok) {
+          failed += 1;
+          continue;
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        if (buffer.length === 0) {
+          failed += 1;
+          continue;
+        }
+
+        const mimeType = item.mimeType || response.headers.get('content-type') || undefined;
+        const now = new Date();
+        const year = String(now.getUTCFullYear());
+        const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+        const accountPart = (item.accountId || 'general').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const cleanName = (item.fileName || item.id).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const fileName = `${item.id.replace(/[^a-zA-Z0-9._-]/g, '_')}-${cleanName}`;
+        const objPath = `${accountPart}/${year}/${month}/${fileName}`;
+
+        const meta: Record<string, string> = {};
+        if (mimeType) meta['Content-Type'] = mimeType;
+
+        await this.minioClient.putObject(this.minioBucket, objPath, buffer, buffer.length, meta);
+
+        await this.storageRepo.markAttachmentMirrored({
+          attachmentId: item.id,
+          messageId: item.messageId,
+          localPath: `/media/${objPath}`,
+          publicUrl: `/media/${objPath}`,
+          sourceUrl: item.url,
+          size: buffer.length,
+          mimeType,
+        });
+
+        mirrored += 1;
+        totalBytes += buffer.length;
+      } catch {
+        failed += 1;
+      }
+    }
+
+    return {
+      scanned: candidates.length,
+      mirrored,
+      failed,
+      totalBytes,
+    };
+  }
+
   startCronWorker() {
     if (this.cronTimer) return;
     // Run periodically

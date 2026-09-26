@@ -461,4 +461,9 @@ export const api = {
       '/api/admin/storage/offload-now',
       { method: 'POST', body: JSON.stringify({ limit }) }
     ),
+  backfillRemoteMedia: (limit = 100) =>
+    req<{ ok: boolean; result: { scanned: number; mirrored: number; failed: number; totalBytes: number } }>(
+      '/api/admin/storage/backfill-media',
+      { method: 'POST', body: JSON.stringify({ limit }) }
+    ),
 };

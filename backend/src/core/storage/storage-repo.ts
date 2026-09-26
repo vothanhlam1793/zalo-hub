@@ -262,6 +262,64 @@ export class GoldStorageRepo {
     };
   }
 
+  async getUnmirroredAttachments(limit = 100): Promise<Array<{
+    id: string;
+    messageId: string;
+    accountId: string;
+    type: string;
+    url: string;
+    fileName?: string;
+    mimeType?: string;
+  }>> {
+    const rows = await this.knex.raw(`
+      SELECT a.id, a.message_id, a.type, a.url, a.file_name, a.mime_type, m.account_id
+      FROM attachments a
+      JOIN messages m ON a.message_id = m.id
+      WHERE (a.url LIKE 'http%' OR (a.local_path IS NULL AND a.url LIKE 'http%'))
+      ORDER BY a.created_at DESC
+      LIMIT ?
+    `, [limit]);
+
+    return (rows.rows || []).map((r: any) => ({
+      id: r.id,
+      messageId: r.message_id,
+      accountId: r.account_id,
+      type: r.type,
+      url: r.url,
+      fileName: r.file_name ?? undefined,
+      mimeType: r.mime_type ?? undefined,
+    }));
+  }
+
+  async markAttachmentMirrored(options: {
+    attachmentId: string;
+    messageId: string;
+    localPath: string;
+    publicUrl: string;
+    sourceUrl: string;
+    size?: number;
+    mimeType?: string;
+  }): Promise<void> {
+    await this.knex('attachments')
+      .where({ id: options.attachmentId })
+      .update({
+        url: options.publicUrl,
+        local_path: options.localPath,
+        source_url: options.sourceUrl,
+        size: options.size ?? undefined,
+        mime_type: options.mimeType ?? undefined,
+      });
+
+    await this.knex('messages')
+      .where({ id: options.messageId })
+      .andWhere((builder) => {
+        builder.whereNull('image_url').orWhere('image_url', 'like', 'http%');
+      })
+      .update({
+        image_url: options.publicUrl,
+      });
+  }
+
   private mapDriveRow(row: any): StorageDriveRecord {
     const creds = typeof row.credentials === 'string' ? JSON.parse(row.credentials) : row.credentials || {};
     const accounts = typeof row.assigned_accounts === 'string' ? JSON.parse(row.assigned_accounts) : row.assigned_accounts || [];

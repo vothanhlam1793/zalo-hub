@@ -382,7 +382,19 @@ export class GoldMessageRepo {
               duration,
               created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO NOTHING
+            ON CONFLICT(id) DO UPDATE SET
+              url = COALESCE(EXCLUDED.url, attachments.url),
+              source_url = COALESCE(EXCLUDED.source_url, attachments.source_url),
+              local_path = COALESCE(EXCLUDED.local_path, attachments.local_path),
+              thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, attachments.thumbnail_url),
+              thumbnail_source_url = COALESCE(EXCLUDED.thumbnail_source_url, attachments.thumbnail_source_url),
+              thumbnail_local_path = COALESCE(EXCLUDED.thumbnail_local_path, attachments.thumbnail_local_path),
+              file_name = COALESCE(EXCLUDED.file_name, attachments.file_name),
+              mime_type = COALESCE(EXCLUDED.mime_type, attachments.mime_type),
+              size = COALESCE(EXCLUDED.size, attachments.size),
+              width = COALESCE(EXCLUDED.width, attachments.width),
+              height = COALESCE(EXCLUDED.height, attachments.height),
+              duration = COALESCE(EXCLUDED.duration, attachments.duration)
           `, [
             storedAttachmentId,
             storedMessageId,
@@ -471,7 +483,19 @@ export class GoldMessageRepo {
             thumbnail_url, thumbnail_source_url, thumbnail_local_path,
             file_name, mime_type, size, width, height, duration, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO NOTHING
+          ON CONFLICT(id) DO UPDATE SET
+            url = COALESCE(EXCLUDED.url, attachments.url),
+            source_url = COALESCE(EXCLUDED.source_url, attachments.source_url),
+            local_path = COALESCE(EXCLUDED.local_path, attachments.local_path),
+            thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, attachments.thumbnail_url),
+            thumbnail_source_url = COALESCE(EXCLUDED.thumbnail_source_url, attachments.thumbnail_source_url),
+            thumbnail_local_path = COALESCE(EXCLUDED.thumbnail_local_path, attachments.thumbnail_local_path),
+            file_name = COALESCE(EXCLUDED.file_name, attachments.file_name),
+            mime_type = COALESCE(EXCLUDED.mime_type, attachments.mime_type),
+            size = COALESCE(EXCLUDED.size, attachments.size),
+            width = COALESCE(EXCLUDED.width, attachments.width),
+            height = COALESCE(EXCLUDED.height, attachments.height),
+            duration = COALESCE(EXCLUDED.duration, attachments.duration)
         `, [
           storedAttachmentId,
           storedMessageId,
