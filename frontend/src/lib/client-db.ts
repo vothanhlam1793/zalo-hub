@@ -70,9 +70,17 @@ export const clientDb = {
     // Unresolved intents must not disappear behind the history page limit.
     return before ? history : rows.filter((m) => history.includes(m) || (m.delivery && m.delivery !== 'sent'));
   },
-  saveMessages: (account: string, conversation: string, messages: Message[]) => write(messageKey(account, conversation), serializable(messages)),
+  saveMessages: (account: string, conversation: string, messages: Message[]) => {
+    // Only cache the newest 50 messages per conversation in IndexedDB to avoid storage bloat
+    const capped = messages.slice(-50);
+    return write(messageKey(account, conversation), serializable(capped));
+  },
   getConversations: (account: string) => read<ConversationSummary[]>(accountKey('conversations', account), []),
-  saveConversations: (account: string, rows: ConversationSummary[]) => write(accountKey('conversations', account), rows),
+  saveConversations: (account: string, rows: ConversationSummary[]) => {
+    // Cap cached conversation summaries to top 150 to keep IndexedDB footprint lean
+    const capped = rows.slice(0, 150);
+    return write(accountKey('conversations', account), capped);
+  },
   getContacts: (account: string) => read<Contact[]>(accountKey('contacts', account), []),
   saveContacts: (account: string, rows: Contact[]) => write(accountKey('contacts', account), rows),
   getGroups: (account: string) => read<Group[]>(accountKey('groups', account), []),

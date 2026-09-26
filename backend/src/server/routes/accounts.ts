@@ -278,16 +278,24 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const userId = (req as any).systemUserId as string;
+      const limit = req.query.limit ? Number(req.query.limit) : 100;
+      const offset = req.query.offset ? Number(req.query.offset) : 0;
+      const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+
       try {
         let conversations: any[] = [];
         const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
-        if (targetRuntime && targetRuntime.isSessionActive()) {
+        if (targetRuntime && targetRuntime.isSessionActive() && !q && offset === 0) {
+          // If session active and default load, get from sync memory / store
           conversations = await targetRuntime.getConversationSummaries().catch(() => []);
         }
 
         if (conversations.length === 0) {
-          // Offline / Inactive session fallback to DB store
-          conversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
+          // Query DB directly with pagination and search
+          conversations = await accountManager
+            .getRegistryStore()
+            .listConversationSummariesByAccount(accountId, { limit, offset, q })
+            .catch(() => []);
         }
 
         if (userId) {
@@ -297,7 +305,10 @@ export function createAccountsRouter(
         res.json({ conversations, count: conversations.length });
       } catch (error) {
         logger.warn('account_conversations_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
-        let offlineConversations = await accountManager.getRegistryStore().listConversationSummariesByAccount(accountId).catch(() => []);
+        let offlineConversations = await accountManager
+          .getRegistryStore()
+          .listConversationSummariesByAccount(accountId, { limit, offset, q })
+          .catch(() => []);
         if (userId) {
           offlineConversations = await filterConversationsForUser(knex, userId, accountId, offlineConversations);
         }

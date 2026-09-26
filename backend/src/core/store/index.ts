@@ -259,8 +259,11 @@ export class GoldStore {
     return this.conversationRepo.listConversationSummaries(this.accountRepo.activeAccountId);
   }
 
-  async listConversationSummariesByAccount(accountId?: string): Promise<GoldConversationSummary[]> {
-    return this.conversationRepo.listConversationSummariesByAccount(accountId);
+  async listConversationSummariesByAccount(
+    accountId?: string,
+    options?: { limit?: number; offset?: number; q?: string },
+  ): Promise<GoldConversationSummary[]> {
+    return this.conversationRepo.listConversationSummariesByAccount(accountId, options);
   }
 
   async canonicalizeConversationData() {

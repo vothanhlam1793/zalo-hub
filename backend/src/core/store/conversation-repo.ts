@@ -128,24 +128,57 @@ export class GoldConversationRepo {
     return this.listConversationSummariesByAccount(activeAccountId);
   }
 
-  async listConversationSummariesByAccount(accountId?: string): Promise<GoldConversationSummary[]> {
+  async listConversationSummariesByAccount(
+    accountId?: string,
+    options?: { limit?: number; offset?: number; q?: string },
+  ): Promise<GoldConversationSummary[]> {
     const resolvedAccountId = this.resolveAccountId(accountId);
     if (!resolvedAccountId) {
       return [];
     }
 
-    const rows = (await this.knex.raw(`
-      SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count
-           , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
-           , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
-           , c.is_muted, c.mute_until, c.is_pinned
-           , c.is_restricted, c.restricted_by, c.restricted_at
-           , c.notes, c.notes_updated_by, c.notes_updated_at
-      FROM conversations c
-      LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
-      WHERE c.account_id = ?
-      ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
-    `, [resolvedAccountId])).rows as (RawConversationRow & {
+    const limit = Math.min(Math.max(Number(options?.limit) || 100, 1), 200);
+    const offset = Math.max(Number(options?.offset) || 0, 0);
+    const q = options?.q?.trim() ? `%${options.q.trim().toLowerCase()}%` : null;
+
+    const query = q
+      ? `
+        SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count
+             , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
+             , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
+             , c.is_muted, c.mute_until, c.is_pinned
+             , c.is_restricted, c.restricted_by, c.restricted_at
+             , c.notes, c.notes_updated_by, c.notes_updated_at
+        FROM conversations c
+        LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+        WHERE c.account_id = ?
+          AND (
+            LOWER(c.title) LIKE ?
+            OR LOWER(COALESCE(c.display_name_snapshot, '')) LIKE ?
+            OR LOWER(COALESCE(c.last_message_text, '')) LIKE ?
+          )
+        ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
+        LIMIT ? OFFSET ?
+      `
+      : `
+        SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count
+             , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
+             , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
+             , c.is_muted, c.mute_until, c.is_pinned
+             , c.is_restricted, c.restricted_by, c.restricted_at
+             , c.notes, c.notes_updated_by, c.notes_updated_at
+        FROM conversations c
+        LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+        WHERE c.account_id = ?
+        ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
+        LIMIT ? OFFSET ?
+      `;
+
+    const bindings = q
+      ? [resolvedAccountId, q, q, q, limit, offset]
+      : [resolvedAccountId, limit, offset];
+
+    const rows = (await this.knex.raw(query, bindings)).rows as (RawConversationRow & {
       labels_json?: any;
       is_muted?: boolean;
       mute_until?: number | string | null;
