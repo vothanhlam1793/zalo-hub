@@ -252,3 +252,15 @@ export interface StorageStats {
   drivesCount: number;
 }
 
+export interface SyncProgressPayload {
+  type: 'ws_sync_progress';
+  accountId: string;
+  step: 'connecting' | 'waiting_phone_confirm' | 'importing' | 'completed' | 'error';
+  percent: number;
+  current?: number;
+  total?: number;
+  message?: string;
+  error?: string;
+}
+
+

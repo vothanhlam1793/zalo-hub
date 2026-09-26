@@ -11,6 +11,7 @@ interface WsHandlers {
   onConversations?: (payload: WsConversationSummariesPayload) => void;
   onMessage?: (payload: WsConversationMessagePayload) => void;
   onSyncStatus?: (payload: { accountId: string; status: string; requ18Received?: number; historySynced?: number; historyMsgs?: number; error?: string }) => void;
+  onSyncProgress?: (payload: import('@/types').SyncProgressPayload) => void;
   /** Additive escape hatch: preserve unknown scoped events and all extra fields. */
   onEvent?: (payload: Record<string, unknown>) => void;
 }
@@ -198,6 +199,7 @@ export function useWebSocket(handlers: WsHandlers) {
           if (payload.type === 'conversation_summaries') current.onConversations?.(payload as unknown as WsConversationSummariesPayload);
           if (payload.type === 'conversation_message') current.onMessage?.(payload as unknown as WsConversationMessagePayload);
           if (payload.type === 'ws_sync_status') current.onSyncStatus?.(payload as unknown as Parameters<NonNullable<WsHandlers['onSyncStatus']>>[0]);
+          if (payload.type === 'ws_sync_progress') current.onSyncProgress?.(payload as unknown as import('@/types').SyncProgressPayload);
         }
         current.onEvent?.(payload);
       },

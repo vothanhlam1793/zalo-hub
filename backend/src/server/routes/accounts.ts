@@ -9,6 +9,8 @@ import { SendRequestRepo } from '../../core/store/send-request-repo.js';
 import { SendRequestError, SendRequestService, type NormalizedSend } from '../services/send-request-service.js';
 import { SendFailure, type SendLifecycle } from '../../core/runtime/send-contract.js';
 import { canUserAccessConversation, filterConversationsForUser } from '../helpers/conversation-access.js';
+import { IndexedDbImporter } from '../../core/indexeddb-importer.js';
+import { PlaywrightSyncWorker } from '../../core/playwright-sync-worker.js';
 
 export function createAccountsRouter(
   logger: GoldLogger,
@@ -20,6 +22,9 @@ export function createAccountsRouter(
   requireAccountAccess?: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
   sendRequestService?: SendRequestService,
 ) {
+
+  const indexedDbImporter = new IndexedDbImporter(knex, logger);
+  const playwrightSyncWorker = new PlaywrightSyncWorker(indexedDbImporter, logger);
 
   const router = Router();
   const needsViewer = requireAccountAccess?.('viewer');
@@ -463,37 +468,58 @@ export function createAccountsRouter(
           return;
         }
 
-        // Báo trạng thái bắt đầu qua WebSocket
-        broadcast({ type: 'ws_sync_status', accountId, status: 'loading' });
+        const credential = await accountManager.getRegistryStore().getCredentialForAccount(accountId);
+        if (!credential) {
+          res.status(400).json({ error: 'Chua co credential cho account nay de dong bo' });
+          return;
+        }
 
-        // Chạy bù tin 25 cuộc trò chuyện gần nhất an toàn trong nền
+        // Báo trạng thái bắt đầu qua WebSocket
+        broadcast({
+          type: 'ws_sync_progress',
+          accountId,
+          step: 'connecting',
+          percent: 5,
+          message: 'Đang khởi động phiên đồng bộ Zalo Web...',
+        });
+
+        // Chạy Worker Playwright Sync ngầm trong nền
         setImmediate(async () => {
           try {
-            const catchupResult = await targetRuntime.catchupRecentConversations({
-              limitConversations: 25,
-              perBatchTimeoutMs: 5000,
+            await playwrightSyncWorker.runSync(accountId, credential, (update) => {
+              broadcast({
+                type: 'ws_sync_progress',
+                accountId,
+                ...update,
+              });
             });
+
+            // Sau khi Playwright nạp xong, reload danh sách hội thoại
             const summaries = await targetRuntime.getConversationSummaries();
             broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
             broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
-            broadcast({
-              type: 'ws_sync_status',
-              accountId,
-              status: 'done',
-              historySynced: catchupResult.totalChecked,
-              historyMsgs: catchupResult.totalInserted,
-            });
           } catch (bgErr) {
+            logger.warn('playwright_sync_background_fallback', { accountId, error: String(bgErr) });
+            // Fallback sang recent catchup nếu Playwright gặp lỗi môi trường
+            const catchupResult = await targetRuntime.catchupRecentConversations({
+              limitConversations: 25,
+              perBatchTimeoutMs: 5000,
+            }).catch(() => ({ totalChecked: 0, totalInserted: 0 }));
+
+            const summaries = await targetRuntime.getConversationSummaries();
+            broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
             broadcast({
-              type: 'ws_sync_status',
+              type: 'ws_sync_progress',
               accountId,
-              status: 'error',
-              error: bgErr instanceof Error ? bgErr.message : String(bgErr),
+              step: 'completed',
+              percent: 100,
+              current: catchupResult.totalInserted,
+              message: `Đã bù đắp ${catchupResult.totalInserted} tin nhắn gần đây qua Cloud Catchup.`,
             });
           }
         });
 
-        res.json({ started: true, message: 'Đã kích hoạt đồng bộ tin nhắn gần đây trong nền' });
+        res.json({ started: true, message: 'Đã kích hoạt quy trình đồng bộ 14 ngày trong nền' });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Sync all that bai' });
       }

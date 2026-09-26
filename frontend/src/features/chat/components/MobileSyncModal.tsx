@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { bff } from '@/bff-api';
+import { useWebSocket } from '@/features/realtime/useWebSocket';
 import { toast } from 'sonner';
-import type { AccountSummary } from '@/types';
+import type { AccountSummary, SyncProgressPayload } from '@/types';
 
 interface MobileSyncModalProps {
   open: boolean;
@@ -17,9 +19,32 @@ interface MobileSyncModalProps {
 export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountId, onSyncSuccess }: MobileSyncModalProps) {
   const [targetAccountId, setTargetAccountId] = useState<string>(selectedAccountId || accounts[0]?.accountId || '');
   const [syncing, setSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<string | null>(null);
+  const [progress, setProgress] = useState<SyncProgressPayload | null>(null);
 
-  // Update targetAccountId when selectedAccountId or open changes
+  // Sync selectedAccountId if changed externally
+  useEffect(() => {
+    if (selectedAccountId) {
+      setTargetAccountId(selectedAccountId);
+    }
+  }, [selectedAccountId]);
+
+  // Hook into WebSocket progress updates
+  useWebSocket({
+    onSyncProgress: (payload) => {
+      if (payload.accountId === targetAccountId) {
+        setProgress(payload);
+        if (payload.step === 'completed') {
+          setSyncing(false);
+          toast.success(payload.message || 'Đồng bộ tin nhắn 14 ngày thành công!');
+          if (onSyncSuccess) onSyncSuccess();
+        } else if (payload.step === 'error') {
+          setSyncing(false);
+          toast.error(payload.error || payload.message || 'Đồng bộ thất bại');
+        }
+      }
+    },
+  });
+
   const activeAccount = accounts.find((a) => a.accountId === (targetAccountId || selectedAccountId)) || accounts[0];
 
   const handleStartSync = async () => {
@@ -29,40 +54,36 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
     }
 
     setSyncing(true);
-    setSyncProgress('Đang gửi tín hiệu đồng bộ tới máy chủ Zalo...');
+    setProgress({
+      type: 'ws_sync_progress',
+      accountId: activeAccount.accountId,
+      step: 'connecting',
+      percent: 10,
+      message: 'Đang kết nối phiên Zalo Web ngầm...',
+    });
 
     try {
-      // Step 1: Trigger full account sync (including mobile request & cloud sync)
       await bff.syncAll(activeAccount.accountId);
-      
-      setSyncProgress('Đang quét và bù đắp tin nhắn gần đây từ Zalo Cloud...');
-      toast.success(`Đã kích hoạt đồng bộ tin nhắn cho tài khoản ${activeAccount.displayName || activeAccount.phoneNumber || activeAccount.accountId}`);
-      
-      if (onSyncSuccess) {
-        onSyncSuccess();
-      }
-      
-      setTimeout(() => {
-        setSyncing(false);
-        setSyncProgress(null);
-        onOpenChange(false);
-      }, 1500);
     } catch (err: any) {
-      setSyncProgress(null);
       setSyncing(false);
+      setProgress(null);
       toast.error(err?.message || 'Không thể gửi yêu cầu đồng bộ. Vui lòng kiểm tra lại kết nối tài khoản.');
     }
   };
 
+  const isWaitingConfirm = progress?.step === 'waiting_phone_confirm';
+  const isImporting = progress?.step === 'importing';
+  const isCompleted = progress?.step === 'completed';
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+    <Dialog open={open} onOpenChange={(v) => { if (!syncing) { onOpenChange(v); setProgress(null); } }}>
+      <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
-            <span>📲</span> Đồng bộ Tin nhắn từ Điện thoại
+            <span>📲</span> Đồng bộ Tin nhắn từ Điện thoại (14 Ngày)
           </DialogTitle>
           <DialogDescription>
-            Tải về và làm mới toàn bộ lịch sử tin nhắn, danh bạ, nhóm chat từ Zalo vào ZaloHub.
+            Kéo trọn vẹn toàn bộ lịch sử tin nhắn, nhóm chat, danh bạ 14 ngày gần nhất từ Zalo Cloud vào ZaloHub.
           </DialogDescription>
         </DialogHeader>
 
@@ -79,12 +100,13 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
                   <button
                     key={acc.accountId}
                     type="button"
+                    disabled={syncing}
                     onClick={() => setTargetAccountId(acc.accountId)}
                     className={`flex items-center justify-between p-3 rounded-xl border text-left transition-all ${
                       isSelected
                         ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/30'
                         : 'border-[var(--border)] bg-[var(--muted)]/30 hover:bg-[var(--muted)]/60'
-                    }`}
+                    } ${syncing ? 'opacity-60 cursor-not-allowed' : ''}`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-9 h-9 rounded-xl bg-blue-600/10 border border-blue-500/20 text-blue-500 flex items-center justify-center font-bold text-sm shrink-0">
@@ -110,30 +132,61 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
             </div>
           </div>
 
-          {/* Guide Steps */}
-          <div className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 space-y-2.5">
-            <div className="text-xs font-bold text-amber-500 flex items-center gap-1.5">
-              <span>💡</span> Hướng dẫn Đồng bộ:
+          {/* Guide Steps / Waiting for Mobile Confirmation Notification */}
+          {isWaitingConfirm ? (
+            <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-2 animate-pulse">
+              <div className="text-sm font-bold text-amber-500 flex items-center gap-2">
+                <span className="text-base">📱</span> VUI LÒNG MỞ ZALO TRÊN ĐIỆN THOẠI
+              </div>
+              <p className="text-xs text-foreground leading-relaxed">
+                Hệ thống đang gửi tín hiệu đồng bộ. Nếu Zalo trên điện thoại hiện thông báo hoặc popup <strong>"Đồng bộ tin nhắn lên máy tính"</strong>, hãy bấm <strong>"ĐỒNG BỘ NGAY"</strong>.
+              </p>
             </div>
-            <ol className="text-xs text-muted-foreground space-y-1.5 list-decimal list-inside leading-relaxed">
-              <li>Đảm bảo điện thoại của bạn đang mở ứng dụng <strong>Zalo</strong>.</li>
-              <li>Bấm nút <strong>"Bắt đầu Đồng bộ"</strong> bên dưới.</li>
-              <li>Nếu trên điện thoại hiện thông báo hoặc popup yêu cầu xác nhận, hãy chọn <strong>"Đồng bộ ngay"</strong>.</li>
-            </ol>
-          </div>
+          ) : (
+            <div className="p-3.5 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 space-y-1.5">
+              <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <span>💡</span> Cơ chế Đồng bộ & Bù Đắp:
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Tự động đối soát và nạp toàn bộ tin nhắn 14 ngày từ Zalo Cloud. Mọi khoảng trống tin nhắn do mất mạng hoặc thoát nick sẽ được bù đắp đầy đủ.
+              </p>
+            </div>
+          )}
 
-          {/* Progress Status */}
-          {syncProgress && (
-            <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs font-medium text-blue-500 flex items-center gap-2 animate-pulse">
-              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-ping" />
-              {syncProgress}
+          {/* Realtime Progress Bar & Status */}
+          {progress && (
+            <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-blue-500 flex items-center gap-1.5">
+                  {isCompleted ? '✅ Đã hoàn tất' : syncing ? '⏳ Đang tiến hành...' : 'Thông báo'}
+                </span>
+                <span className="font-mono font-bold text-foreground">{progress.percent}%</span>
+              </div>
+
+              <Progress value={progress.percent} className="h-2.5 bg-[var(--muted)]" />
+
+              <div className="text-xs text-muted-foreground leading-relaxed">
+                {progress.message || 'Đang xử lý dữ liệu...'}
+              </div>
+
+              {progress.total ? (
+                <div className="text-[11px] text-muted-foreground font-mono">
+                  {progress.current !== undefined
+                    ? `Đối soát: ${progress.current.toLocaleString()} / ${progress.total.toLocaleString()} tin nhắn`
+                    : `Tổng cộng: ${progress.total.toLocaleString()} tin nhắn`}
+                </div>
+              ) : null}
             </div>
           )}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={syncing}>
-            Đóng
+          <Button
+            variant="outline"
+            onClick={() => { onOpenChange(false); setProgress(null); }}
+            disabled={syncing}
+          >
+            {isCompleted ? 'Đóng' : 'Hủy'}
           </Button>
           <Button
             onClick={handleStartSync}
@@ -143,11 +196,15 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
             {syncing ? (
               <>
                 <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Đang đồng bộ...
+                Đang xử lý...
+              </>
+            ) : isCompleted ? (
+              <>
+                <span>🔄</span> Đồng bộ lại
               </>
             ) : (
               <>
-                <span>🔄</span> Bắt đầu Đồng bộ ngay
+                <span>🔄</span> Bắt đầu Đồng bộ 14 ngày
               </>
             )}
           </Button>
