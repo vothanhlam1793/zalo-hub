@@ -349,7 +349,7 @@ export class AccountRuntimeManager {
         });
       }
 
-      // Non-blocking background metadata enrichment
+      // Non-blocking background metadata enrichment and safe recent message catchup
       setImmediate(async () => {
         try {
           await runtime.listFriends().catch(() => undefined);
@@ -357,6 +357,10 @@ export class AccountRuntimeManager {
           await runtime.syncLabels().catch(() => undefined);
           await runtime.syncMuteStates().catch(() => undefined);
           await runtime.syncUnreadMarks().catch(() => undefined);
+
+          // Safe catchup for top 15 recent conversations to fill gap after downtime/relogin
+          const catchupResult = await runtime.catchupRecentConversations({ limitConversations: 15, perBatchTimeoutMs: 5000 }).catch(() => ({ totalChecked: 0, totalInserted: 0 }));
+
           const summaries = await runtime.getConversationSummaries().catch(() => []);
           this.broadcast?.({
             type: 'conversation_summaries',
@@ -369,10 +373,14 @@ export class AccountRuntimeManager {
             status: 'done',
             requ18Received: 0,
             requ18Inserted: 0,
-            historySynced: summaries.length,
-            historyMsgs: 0,
+            historySynced: catchupResult.totalChecked,
+            historyMsgs: catchupResult.totalInserted,
           });
-          this.logger.info('account_auto_sync_ready', { accountId, conversationCount: summaries.length });
+          this.logger.info('account_auto_sync_ready', {
+            accountId,
+            conversationCount: summaries.length,
+            catchupInserted: catchupResult.totalInserted,
+          });
         } catch { /* ignore */ }
       });
     } catch (error) {

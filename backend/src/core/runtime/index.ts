@@ -525,6 +525,10 @@ export class GoldRuntime {
     return this.sync.mobileSyncAllAccountConversations(options);
   }
 
+  async catchupRecentConversations(options?: { limitConversations?: number; sinceTimestamp?: string; perBatchTimeoutMs?: number }) {
+    return this.sync.catchupRecentConversations(options);
+  }
+
   async syncAllAccountConversations(options?: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number }) {
     return this.sync.syncAllAccountConversations(options);
   }

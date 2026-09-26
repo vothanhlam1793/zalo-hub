@@ -462,10 +462,38 @@ export function createAccountsRouter(
           res.status(401).json({ error: 'Account chua active session' });
           return;
         }
-        const result = await targetRuntime.syncAllAccountConversations();
-        broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-        broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
-        res.json(result);
+
+        // Báo trạng thái bắt đầu qua WebSocket
+        broadcast({ type: 'ws_sync_status', accountId, status: 'loading' });
+
+        // Chạy bù tin 25 cuộc trò chuyện gần nhất an toàn trong nền
+        setImmediate(async () => {
+          try {
+            const catchupResult = await targetRuntime.catchupRecentConversations({
+              limitConversations: 25,
+              perBatchTimeoutMs: 5000,
+            });
+            const summaries = await targetRuntime.getConversationSummaries();
+            broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+            broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
+            broadcast({
+              type: 'ws_sync_status',
+              accountId,
+              status: 'done',
+              historySynced: catchupResult.totalChecked,
+              historyMsgs: catchupResult.totalInserted,
+            });
+          } catch (bgErr) {
+            broadcast({
+              type: 'ws_sync_status',
+              accountId,
+              status: 'error',
+              error: bgErr instanceof Error ? bgErr.message : String(bgErr),
+            });
+          }
+        });
+
+        res.json({ started: true, message: 'Đã kích hoạt đồng bộ tin nhắn gần đây trong nền' });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Sync all that bai' });
       }

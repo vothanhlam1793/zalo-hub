@@ -125,6 +125,10 @@ export class PlaywrightQrLogin {
     throw new Error('QR login timeout — khong scan trong 120s');
   }
 
+  getPage(): Page | null {
+    return this.page;
+  }
+
   async cancel(): Promise<void> {
     this.canceled = true;
     try {

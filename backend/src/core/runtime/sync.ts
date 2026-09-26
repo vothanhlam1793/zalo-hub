@@ -459,6 +459,55 @@ export class GoldSync {
     };
   }
 
+  async catchupRecentConversations(options: {
+    limitConversations?: number;
+    sinceTimestamp?: string;
+    perBatchTimeoutMs?: number;
+  } = {}): Promise<{ totalChecked: number; totalInserted: number }> {
+    const limit = Math.max(1, Math.min(options.limitConversations ?? 20, 50));
+    const summaries = await this.state.store.listConversationSummariesByAccount(this.state.boundAccountId);
+    
+    // Sắp xếp các hội thoại có tin nhắn mới nhất
+    const recentSummaries = summaries
+      .filter((s) => Boolean(s.lastMessageTimestamp))
+      .sort((a, b) => String(b.lastMessageTimestamp || '').localeCompare(String(a.lastMessageTimestamp || '')))
+      .slice(0, limit);
+
+    this.state.logger.info('catchup_recent_start', {
+      accountId: this.state.boundAccountId,
+      checkedCount: recentSummaries.length,
+      sinceTimestamp: options.sinceTimestamp,
+    });
+
+    let totalInserted = 0;
+    const perBatchTimeoutMs = options.perBatchTimeoutMs ?? 5_000;
+
+    for (const summary of recentSummaries) {
+      try {
+        const result = await this.syncConversationHistory(summary.id, {
+          timeoutMs: perBatchTimeoutMs,
+          maxTotalTimeMs: 10_000,
+        });
+        totalInserted += result.insertedCount;
+        // Giãn cách 200ms giữa các request để bảo vệ WebSocket và tránh sập listener
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) {
+        this.state.logger.warn('catchup_recent_conversation_failed', {
+          conversationId: summary.id,
+          error: String(err),
+        });
+      }
+    }
+
+    this.state.logger.info('catchup_recent_completed', {
+      accountId: this.state.boundAccountId,
+      totalChecked: recentSummaries.length,
+      totalInserted,
+    });
+
+    return { totalChecked: recentSummaries.length, totalInserted };
+  }
+
   async syncAllAccountConversations(options: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number } = {}): Promise<{ synced: number; failed: number; results: HistorySyncResult[] }> {
     const summaries = await this.state.store.listConversationSummariesByAccount(this.state.boundAccountId);
     const results: HistorySyncResult[] = [];
