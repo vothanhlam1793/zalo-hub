@@ -41,6 +41,16 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const showStatus = (msg: string) => {
+    setStatusMsg(msg);
+    setTimeout(() => setStatusMsg(''), 5000);
+  };
+
+  const showError = (msg: string) => {
+    setErrorMsg(msg);
+    setTimeout(() => setErrorMsg(''), 6000);
+  };
+
   // Dialog State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingDrive, setEditingDrive] = useState<StorageDrive | null>(null);
@@ -53,6 +63,14 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
   const [formAssignedAccounts, setFormAssignedAccounts] = useState<string[]>([]);
   const [formIsDefault, setFormIsDefault] = useState(false);
   const [modalSubmitting, setModalSubmitting] = useState(false);
+
+  // OAuth 1-Click State (CLIProxy style)
+  const [authMode, setAuthMode] = useState<'oauth' | 'manual'>('oauth');
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [oauthUrl, setOauthUrl] = useState('');
+  const [oauthCodeOrUrl, setOauthCodeOrUrl] = useState('');
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [modalError, setModalError] = useState('');
 
   // Backup Import Modal State
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
@@ -75,7 +93,7 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
       setSettings(settingsRes.settings);
       setStats(settingsRes.stats);
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Không thể tải dữ liệu lưu trữ');
+      console.warn('Không thể tải dữ liệu lưu trữ:', err);
     } finally {
       setLoading(false);
     }
@@ -95,10 +113,9 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
         autoOffloadEnabled: autoEnabled,
       });
       setSettings(res.settings);
-      setStatusMsg('Đã cập nhật cấu hình lưu trữ');
-      setTimeout(() => setStatusMsg(''), 3000);
+      showStatus('Đã cập nhật cấu hình lưu trữ');
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Lỗi lưu cấu hình');
+      showError(err?.message || 'Lỗi lưu cấu hình');
     } finally {
       setSavingSettings(false);
     }
@@ -114,10 +131,10 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
     try {
       const res = await bff.triggerOffloadNow(200);
       const r = res.result;
-      setStatusMsg(`Đã dịch chuyển thành công ${r.totalOffloaded}/${r.totalScanned} files. Tiết kiệm ${formatBytes(r.bytesSaved)} MinIO VPS!`);
+      showStatus(`Đã dịch chuyển thành công ${r.totalOffloaded}/${r.totalScanned} files. Tiết kiệm ${formatBytes(r.bytesSaved)} MinIO VPS!`);
       await loadAll();
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Lỗi khi chạy dịch chuyển dữ liệu');
+      showError(err?.message || 'Lỗi khi chạy dịch chuyển dữ liệu');
     } finally {
       setOffloading(false);
     }
@@ -130,10 +147,10 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
     try {
       const res = await bff.backfillRemoteMedia(200);
       const r = res.result;
-      setStatusMsg(`Đã tải và lưu trữ thành công ${r.mirrored}/${r.scanned} files media từ Zalo về MinIO VPS (${formatBytes(r.totalBytes)}).`);
+      showStatus(`Đã tải và lưu trữ thành công ${r.mirrored}/${r.scanned} files media từ Zalo về MinIO VPS (${formatBytes(r.totalBytes)}).`);
       await loadAll();
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Lỗi khi tải media Zalo');
+      showError(err?.message || 'Lỗi khi tải media Zalo');
     } finally {
       setBackfilling(false);
     }
@@ -145,10 +162,10 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
     setErrorMsg('');
     try {
       const res = await bff.testStorageDrive(driveId);
-      setStatusMsg(`Kết nối Google Drive thành công: ${res.email || res.displayName || 'OK'}`);
+      showStatus(`Kết nối Google Drive thành công: ${res.email || res.displayName || 'OK'}`);
       await loadAll();
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Kiểm tra kết nối thất bại');
+      showError(err?.message || 'Kiểm tra kết nối thất bại');
     } finally {
       setTestingDriveId(null);
     }
@@ -172,7 +189,7 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
         setBackupTargetAccountId(accounts[0].accountId);
       }
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Không thể quét file sao lưu trên Google Drive');
+      showError(err?.message || 'Không thể quét file sao lưu trên Google Drive');
     } finally {
       setScanningBackup(false);
     }
@@ -181,7 +198,7 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
   const handleExecuteBackupImport = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBackupDrive || !selectedBackupFileId || !backupTargetAccountId) {
-      alert('Vui lòng chọn đầy đủ File sao lưu và Tài khoản Zalo nhận dữ liệu');
+      showError('Vui lòng chọn đầy đủ File sao lưu và Tài khoản Zalo nhận dữ liệu');
       return;
     }
 
@@ -193,35 +210,33 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
         backupPassword: backupPassword.trim() || undefined,
       });
       if (res.success) {
-        setStatusMsg(`Đã kết nối và xử lý bản sao lưu thành công!`);
+        showStatus(`Đã kết nối và xử lý bản sao lưu thành công!`);
         setIsBackupModalOpen(false);
         await loadAll();
       } else {
-        alert(res.error || 'Lỗi khi nhập bản sao lưu');
+        showError(res.error || 'Lỗi khi nhập bản sao lưu');
       }
     } catch (err: any) {
-      alert(err?.message || 'Lỗi khi nhập bản sao lưu');
+      showError(err?.message || 'Lỗi khi nhập bản sao lưu');
     } finally {
       setImportingBackup(false);
     }
   };
-    if (!confirm(`Bạn có chắc muốn xóa cấu hình Drive "${name}"? Các file đã lưu trên Drive vẫn tồn tại nhưng sẽ không thể stream.`)) {
-      return;
-    }
+
   const handleDeleteDrive = async (driveId: string, name: string) => {
     if (!confirm(`Bạn có chắc muốn xóa cấu hình Drive "${name}"? Các file đã lưu trên Drive vẫn tồn tại nhưng sẽ không thể stream.`)) {
       return;
     }
     try {
       await bff.deleteStorageDrive(driveId);
-      setStatusMsg(`Đã xóa Google Drive "${name}"`);
+      showStatus(`Đã xóa Google Drive "${name}"`);
       await loadAll();
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Lỗi khi xóa Drive');
+      showError(err?.message || 'Lỗi khi xóa Drive');
     }
   };
 
-  const handleOpenCreateModal = () => {
+  const handleOpenCreateModal = async () => {
     setEditingDrive(null);
     setFormName('');
     setFormEmail('');
@@ -231,7 +246,50 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
     setFormRootFolderId('');
     setFormAssignedAccounts([]);
     setFormIsDefault(drives.length === 0);
+    setAuthMode('oauth');
+    setOauthCodeOrUrl('');
+    setCopiedLink(false);
+    setModalError('');
     setIsModalOpen(true);
+
+    // Pre-fetch Google OAuth URL
+    setOauthLoading(true);
+    try {
+      const res = await bff.getGoogleOAuthUrl();
+      if (res && res.authUrl) {
+        setOauthUrl(res.authUrl);
+      }
+    } catch (err: any) {
+      setModalError('Chưa tải được link Google OAuth: ' + (err?.message || 'Lỗi server'));
+    } finally {
+      setOauthLoading(false);
+    }
+  };
+
+  const handleExchangeOAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!oauthCodeOrUrl.trim()) {
+      setModalError('Vui lòng dán link chuyển hướng hoặc mã code xác thực');
+      return;
+    }
+
+    setModalSubmitting(true);
+    setModalError('');
+    try {
+      const res = await bff.exchangeGoogleOAuth({
+        codeOrUrl: oauthCodeOrUrl.trim(),
+        name: formName.trim() || undefined,
+        isDefault: formIsDefault,
+        assignedAccounts: formAssignedAccounts,
+      });
+      setStatusMsg(`Đã kết nối thành công Google Drive (${res.email || res.displayName || 'Google Drive'})!`);
+      setIsModalOpen(false);
+      await loadAll();
+    } catch (err: any) {
+      setModalError(err?.message || 'Xác thực thất bại');
+    } finally {
+      setModalSubmitting(false);
+    }
   };
 
   const handleOpenEditModal = (drive: StorageDrive) => {
@@ -244,21 +302,24 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
     setFormRootFolderId(drive.rootFolderId || '');
     setFormAssignedAccounts(drive.assignedAccounts || []);
     setFormIsDefault(drive.isDefault);
+    setAuthMode('manual');
+    setModalError('');
     setIsModalOpen(true);
   };
 
   const handleModalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) {
-      alert('Vui lòng nhập tên gợi nhớ');
+      setModalError('Vui lòng nhập tên gợi nhớ');
       return;
     }
     if (!editingDrive && (!formClientId || !formClientSecret || !formRefreshToken)) {
-      alert('Vui lòng nhập đầy đủ Client ID, Client Secret và Refresh Token');
+      setModalError('Vui lòng nhập đầy đủ Client ID, Client Secret và Refresh Token');
       return;
     }
 
     setModalSubmitting(true);
+    setModalError('');
     try {
       if (editingDrive) {
         await bff.updateStorageDrive(editingDrive.id, {
@@ -288,7 +349,7 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
       setIsModalOpen(false);
       await loadAll();
     } catch (err: any) {
-      alert(err?.message || 'Lỗi lưu Google Drive');
+      setModalError(err?.message || 'Lỗi lưu Google Drive');
     } finally {
       setModalSubmitting(false);
     }
@@ -343,14 +404,20 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
       </div>
 
       {statusMsg && (
-        <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-md text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
-          <span>✅</span> {statusMsg}
+        <div className="p-2.5 px-3 bg-emerald-500/10 border border-emerald-500/20 rounded-md text-xs text-emerald-600 dark:text-emerald-400 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span>✅</span> {statusMsg}
+          </div>
+          <button onClick={() => setStatusMsg('')} className="text-muted-foreground hover:text-foreground text-xs ml-2">✕</button>
         </div>
       )}
 
       {errorMsg && (
-        <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-xs text-destructive flex items-center gap-2">
-          <span>⚠️</span> {errorMsg}
+        <div className="p-2.5 px-3 bg-destructive/10 border border-destructive/20 rounded-md text-xs text-destructive flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span>⚠️</span> {errorMsg}
+          </div>
+          <button onClick={() => setErrorMsg('')} className="text-muted-foreground hover:text-foreground text-xs ml-2">✕</button>
         </div>
       )}
 
@@ -605,9 +672,9 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between">
+            <div className="px-5 py-3.5 border-b border-[var(--border)] flex items-center justify-between">
               <h3 className="text-sm font-bold flex items-center gap-2">
-                <span>{editingDrive ? '⚙️ Chỉnh sửa Google Drive' : '➕ Thêm Google Drive Mới'}</span>
+                <span>{editingDrive ? '⚙️ Chỉnh sửa Google Drive' : '☁️ Thêm Google Drive'}</span>
               </h3>
               <button
                 className="text-muted-foreground hover:text-foreground text-sm"
@@ -617,158 +684,320 @@ export function AdminStorageTab({ accounts }: AdminStorageTabProps) {
               </button>
             </div>
 
-            <form onSubmit={handleModalSubmit} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
-              <div>
-                <label className="text-xs font-semibold block mb-1">
-                  Tên gợi nhớ: <span className="text-destructive">*</span>
-                </label>
-                <Input
-                  className="h-8 text-xs"
-                  placeholder="Ví dụ: Google Drive 717 (10TB) hoặc Drive 1793"
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold block mb-1">
-                  Email tài khoản Google (tùy chọn):
-                </label>
-                <Input
-                  className="h-8 text-xs"
-                  placeholder="Ví dụ: vothanhlam1793@gmail.com"
-                  value={formEmail}
-                  onChange={(e) => setFormEmail(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-3 p-3 bg-muted/40 rounded-lg border border-[var(--border)]">
-                <div className="text-xs font-bold flex items-center justify-between">
-                  <span>🔑 Google OAuth 2.0 Credentials:</span>
-                  {editingDrive && (
-                    <span className="text-[10px] text-muted-foreground font-normal">
-                      (Để trống nếu không muốn đổi token)
-                    </span>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-medium text-muted-foreground block mb-1">
-                    Client ID: {!editingDrive && <span className="text-destructive">*</span>}
-                  </label>
-                  <Input
-                    className="h-8 text-xs font-mono"
-                    placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
-                    value={formClientId}
-                    onChange={(e) => setFormClientId(e.target.value)}
-                    required={!editingDrive}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-medium text-muted-foreground block mb-1">
-                    Client Secret: {!editingDrive && <span className="text-destructive">*</span>}
-                  </label>
-                  <Input
-                    type="password"
-                    className="h-8 text-xs font-mono"
-                    placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx"
-                    value={formClientSecret}
-                    onChange={(e) => setFormClientSecret(e.target.value)}
-                    required={!editingDrive}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-medium text-muted-foreground block mb-1">
-                    Refresh Token: {!editingDrive && <span className="text-destructive">*</span>}
-                  </label>
-                  <Input
-                    type="password"
-                    className="h-8 text-xs font-mono"
-                    placeholder="1//04xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                    value={formRefreshToken}
-                    onChange={(e) => setFormRefreshToken(e.target.value)}
-                    required={!editingDrive}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold block mb-1">
-                  Root Folder ID (tùy chọn):
-                </label>
-                <Input
-                  className="h-8 text-xs font-mono"
-                  placeholder="Để trống sẽ tự động tạo thư mục ZaloHub_Archive"
-                  value={formRootFolderId}
-                  onChange={(e) => setFormRootFolderId(e.target.value)}
-                />
-              </div>
-
-              {/* Assign to Zalo Accounts */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold block">
-                  Phân bổ tài khoản Zalo lưu trữ vào Drive này:
-                </label>
-                <p className="text-[11px] text-muted-foreground">
-                  Nếu không chọn tài khoản nào, Drive này sẽ nhận dữ liệu từ mọi tài khoản khi cần.
-                </p>
-                <div className="grid grid-cols-2 gap-2 mt-2 max-h-32 overflow-y-auto p-2 border border-input rounded-md bg-transparent">
-                  {accounts.map((acc) => {
-                    const checked = formAssignedAccounts.includes(acc.accountId);
-                    return (
-                      <label
-                        key={acc.accountId}
-                        className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 p-1 rounded"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleAccountAssignment(acc.accountId)}
-                          className="rounded border-input text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
-                        />
-                        <span className="truncate">{acc.displayName || acc.phoneNumber || acc.accountId}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="formIsDefault"
-                  checked={formIsDefault}
-                  onChange={(e) => setFormIsDefault(e.target.checked)}
-                  className="rounded border-input text-blue-600 focus:ring-blue-500 h-4 w-4"
-                />
-                <label htmlFor="formIsDefault" className="text-xs font-semibold cursor-pointer">
-                  Đặt làm Google Drive Mặc định
-                </label>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--border)]">
-                <Button
+            {!editingDrive && (
+              <div className="flex border-b border-[var(--border)] bg-muted/20">
+                <button
                   type="button"
-                  variant="outline"
-                  size="sm"
-                  className="text-xs"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => { setAuthMode('oauth'); setModalError(''); }}
+                  className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+                    authMode === 'oauth'
+                      ? 'border-blue-600 text-blue-600 bg-background'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
                 >
-                  Hủy
-                </Button>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
-                  disabled={modalSubmitting}
+                  <span>⚡</span> Đăng nhập 1-Click & Dán Link
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('manual'); setModalError(''); }}
+                  className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+                    authMode === 'manual'
+                      ? 'border-blue-600 text-blue-600 bg-background'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
                 >
-                  {modalSubmitting ? 'Đang lưu...' : editingDrive ? 'Cập nhật' : 'Thêm Google Drive'}
-                </Button>
+                  <span>⚙️</span> Nhập Client ID / Secret Thủ công
+                </button>
               </div>
-            </form>
+            )}
+
+            {modalError && (
+              <div className="m-4 mb-0 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-xs text-destructive flex items-center gap-2">
+                <span>⚠️</span> {modalError}
+              </div>
+            )}
+
+            {/* OAuth 1-Click & CLIProxy Mode */}
+            {!editingDrive && authMode === 'oauth' ? (
+              <form onSubmit={handleExchangeOAuth} className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+                <div>
+                  <label className="text-xs font-semibold block mb-1">
+                    Tên gợi nhớ (tùy chọn):
+                  </label>
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder="Để trống sẽ tự động lấy theo Email của Google Drive"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                  />
+                </div>
+
+                {/* Step 1: Open Google OAuth or Copy Link */}
+                <div className="p-3.5 bg-blue-500/10 border border-blue-500/20 rounded-lg space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                      <span>1️⃣</span> Bước 1: Mở hoặc Sao chép link ủy quyền Google
+                    </span>
+                    {oauthLoading && <span className="text-[11px] text-muted-foreground">⏳ Đang tạo link...</span>}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Cấp quyền Google Drive (bao gồm sao lưu Zalo Mobile) trong 1 cú nhấp:
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!oauthUrl || oauthLoading}
+                      onClick={() => window.open(oauthUrl, '_blank')}
+                      className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white gap-1.5 flex-1"
+                    >
+                      <span>🔗</span> Mở đăng nhập Google
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={!oauthUrl || oauthLoading}
+                      onClick={() => {
+                        navigator.clipboard.writeText(oauthUrl);
+                        setCopiedLink(true);
+                        setTimeout(() => setCopiedLink(false), 3000);
+                      }}
+                      className="h-8 text-xs gap-1.5"
+                    >
+                      <span>{copiedLink ? '✅ Đã chép!' : '📋 Copy Link'}</span>
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Step 2: Paste Redirect Link or Code */}
+                <div className="p-3.5 bg-muted/40 border border-[var(--border)] rounded-lg space-y-2.5">
+                  <div className="text-xs font-bold flex items-center gap-1.5">
+                    <span>2️⃣</span> Bước 2: Dán Redirect URL hoặc Code xác thực (Kiểu CLIProxy)
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Sau khi bấm <strong>"Cho phép"</strong> trên Google, nếu màn hình hiện link <code>http://localhost:53682/callback?code=...</code> hoặc không tải được, hãy <strong>sao chép toàn bộ thanh địa chỉ trình duyệt</strong> rồi dán vào đây:
+                  </p>
+                  <Input
+                    className="h-8 text-xs font-mono"
+                    placeholder="Dán link http://... hoặc mã code 4/0A... vào đây"
+                    value={oauthCodeOrUrl}
+                    onChange={(e) => setOauthCodeOrUrl(e.target.value)}
+                    required
+                  />
+                </div>
+
+                {/* Account assignment */}
+                <div>
+                  <label className="text-xs font-semibold block mb-1">
+                    Phân bổ Zalo Accounts nhận lưu trữ (tùy chọn):
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1.5 border border-input rounded-md bg-background">
+                    {accounts.map((acc) => {
+                      const selected = formAssignedAccounts.includes(acc.accountId);
+                      return (
+                        <button
+                          type="button"
+                          key={acc.accountId}
+                          onClick={() => toggleAccountAssignment(acc.accountId)}
+                          className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
+                            selected
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-muted/50 text-muted-foreground border-transparent hover:border-input'
+                          }`}
+                        >
+                          {acc.displayName} ({acc.phoneNumber || acc.accountId}) {selected && '✓'}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="modalIsDefaultOauth"
+                    checked={formIsDefault}
+                    onChange={(e) => setFormIsDefault(e.target.checked)}
+                    className="rounded border-input text-blue-600 focus:ring-blue-500 h-4 w-4"
+                  />
+                  <label htmlFor="modalIsDefaultOauth" className="text-xs cursor-pointer">
+                    Đặt làm Google Drive Mặc định
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--border)]">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setIsModalOpen(false)}
+                  >
+                    Hủy
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={modalSubmitting || !oauthCodeOrUrl.trim()}
+                    className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+                  >
+                    {modalSubmitting ? '⏳ Đang xác thực...' : '🚀 Xác nhận & Kết nối Drive'}
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              /* Manual Mode Form */
+              <form onSubmit={handleModalSubmit} className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+                <div>
+                  <label className="text-xs font-semibold block mb-1">
+                    Tên gợi nhớ: <span className="text-destructive">*</span>
+                  </label>
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder="Ví dụ: Google Drive 717 (10TB) hoặc Drive 1793"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold block mb-1">
+                    Email tài khoản Google (tùy chọn):
+                  </label>
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder="Ví dụ: vothanhlam1793@gmail.com"
+                    value={formEmail}
+                    onChange={(e) => setFormEmail(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-3 p-3 bg-muted/40 rounded-lg border border-[var(--border)]">
+                  <div className="text-xs font-bold flex items-center justify-between">
+                    <span>🔑 Google OAuth 2.0 Credentials:</span>
+                    {editingDrive && (
+                      <span className="text-[10px] text-muted-foreground font-normal">
+                        (Để trống nếu không muốn đổi token)
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">
+                      Client ID: {!editingDrive && <span className="text-destructive">*</span>}
+                    </label>
+                    <Input
+                      className="h-8 text-xs font-mono"
+                      placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+                      value={formClientId}
+                      onChange={(e) => setFormClientId(e.target.value)}
+                      required={!editingDrive}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">
+                      Client Secret: {!editingDrive && <span className="text-destructive">*</span>}
+                    </label>
+                    <Input
+                      type="password"
+                      className="h-8 text-xs font-mono"
+                      placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx"
+                      value={formClientSecret}
+                      onChange={(e) => setFormClientSecret(e.target.value)}
+                      required={!editingDrive}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">
+                      Refresh Token: {!editingDrive && <span className="text-destructive">*</span>}
+                    </label>
+                    <Input
+                      type="password"
+                      className="h-8 text-xs font-mono"
+                      placeholder="1//04xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      value={formRefreshToken}
+                      onChange={(e) => setFormRefreshToken(e.target.value)}
+                      required={!editingDrive}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold block mb-1">
+                    Root Folder ID (tùy chọn):
+                  </label>
+                  <Input
+                    className="h-8 text-xs font-mono"
+                    placeholder="Để trống sẽ tự động tạo thư mục ZaloHub_Archive"
+                    value={formRootFolderId}
+                    onChange={(e) => setFormRootFolderId(e.target.value)}
+                  />
+                </div>
+
+                {/* Assign to Zalo Accounts */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold block">
+                    Phân bổ tài khoản Zalo lưu trữ vào Drive này:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 mt-2 max-h-32 overflow-y-auto p-2 border border-input rounded-md bg-transparent">
+                    {accounts.map((acc) => {
+                      const checked = formAssignedAccounts.includes(acc.accountId);
+                      return (
+                        <label
+                          key={acc.accountId}
+                          className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 p-1 rounded"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAccountAssignment(acc.accountId)}
+                            className="rounded border-input text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
+                          />
+                          <span className="truncate">{acc.displayName} ({acc.phoneNumber || acc.accountId})</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <input
+                    type="checkbox"
+                    id="formIsDefault"
+                    checked={formIsDefault}
+                    onChange={(e) => setFormIsDefault(e.target.checked)}
+                    className="rounded border-input text-blue-600 focus:ring-blue-500 h-4 w-4"
+                  />
+                  <label htmlFor="formIsDefault" className="text-xs font-semibold cursor-pointer">
+                    Đặt làm Google Drive Mặc định
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--border)]">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setIsModalOpen(false)}
+                  >
+                    Hủy
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                    disabled={modalSubmitting}
+                  >
+                    {modalSubmitting ? 'Đang lưu...' : editingDrive ? 'Cập nhật' : 'Thêm Google Drive'}
+                  </Button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

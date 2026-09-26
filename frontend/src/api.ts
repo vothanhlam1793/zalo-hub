@@ -487,4 +487,13 @@ export const api = {
       `/api/admin/storage/drives/${encodeURIComponent(driveId)}/import-backup`,
       { method: 'POST', body: JSON.stringify(data) }
     ),
+  getGoogleOAuthUrl: () =>
+    req<{ ok: boolean; authUrl: string; clientId: string; redirectUri: string }>(
+      '/api/admin/storage/oauth/google-url'
+    ),
+  exchangeGoogleOAuth: (data: { codeOrUrl: string; name?: string; assignedAccounts?: string[]; isDefault?: boolean }) =>
+    req<{ ok: boolean; drive: import('./types').StorageDrive; email?: string; displayName?: string; quotaLimit?: number; quotaUsage?: number }>(
+      '/api/admin/storage/oauth/exchange',
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
 };

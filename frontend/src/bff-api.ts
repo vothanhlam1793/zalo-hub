@@ -191,4 +191,6 @@ export const bff = {
   backfillRemoteMedia: (limit?: number) => api.backfillRemoteMedia(limit),
   scanDriveBackups: (driveId: string) => api.scanDriveBackups(driveId),
   importDriveBackup: (driveId: string, data: { fileId: string; accountId: string; backupPassword?: string }) => api.importDriveBackup(driveId, data),
+  getGoogleOAuthUrl: () => api.getGoogleOAuthUrl(),
+  exchangeGoogleOAuth: (data: { codeOrUrl: string; name?: string; assignedAccounts?: string[]; isDefault?: boolean }) => api.exchangeGoogleOAuth(data),
 };

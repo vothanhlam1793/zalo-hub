@@ -46,6 +46,161 @@ export function createStorageRouter(
     }
   });
 
+  // GET /api/admin/storage/oauth/google-url
+  router.get('/admin/storage/oauth/google-url', requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID || '';
+      const redirectUri = 'http://localhost:53682/callback';
+      const scopes = [
+        'https://www.googleapis.com/auth/drive.appdata',
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile',
+      ].join(' ');
+
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent`;
+
+      res.json({
+        ok: true,
+        authUrl,
+        clientId,
+        redirectUri,
+      });
+    } catch (err: any) {
+      logger.error('get_google_oauth_url_failed', { error: err?.message || String(err) });
+      res.status(500).json({ error: 'Không thể sinh URL xác thực Google' });
+    }
+  });
+
+  // POST /api/admin/storage/oauth/exchange (CLIProxy style code / redirect url exchange)
+  router.post('/admin/storage/oauth/exchange', requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const body = req.body || {};
+      const rawInput = String(body.codeOrUrl || '').trim();
+      if (!rawInput) {
+        res.status(400).json({ error: 'Vui lòng cung cấp link chuyển hướng hoặc mã code xác thực' });
+        return;
+      }
+
+      // Extract authorization code from raw string or URL
+      let code = rawInput;
+      let redirectUri = 'http://localhost:53682/callback';
+
+      if (rawInput.includes('code=')) {
+        try {
+          const parsedUrl = new URL(rawInput.startsWith('http') ? rawInput : `http://dummy.com/${rawInput}`);
+          const c = parsedUrl.searchParams.get('code');
+          if (c) code = c;
+          if (rawInput.startsWith('http')) {
+            redirectUri = `${parsedUrl.origin}${parsedUrl.pathname}`;
+          }
+        } catch {
+          const match = rawInput.match(/code=([^&]+)/);
+          if (match) code = decodeURIComponent(match[1]);
+        }
+      }
+
+      const clientId = body.clientId || process.env.GOOGLE_DRIVE_CLIENT_ID || '';
+      const clientSecret = body.clientSecret || process.env.GOOGLE_DRIVE_CLIENT_SECRET || '';
+
+      // 1. Exchange authorization code for tokens
+      const redirectCandidates = [redirectUri, 'http://localhost:53682/callback', 'http://localhost'];
+      let tokenData: any = null;
+      let lastErrText = '';
+
+      for (const uri of redirectCandidates) {
+        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+            grant_type: 'authorization_code',
+            redirect_uri: uri,
+          }),
+        });
+
+        if (tokenRes.ok) {
+          tokenData = await tokenRes.json();
+          break;
+        } else {
+          lastErrText = await tokenRes.text();
+        }
+      }
+
+      if (!tokenData || !tokenData.refresh_token) {
+        throw new Error(`Xác thực với Google thất bại: ${lastErrText || 'Không nhận được refresh_token'}`);
+      }
+
+      const accessToken = tokenData.access_token;
+      const refreshToken = tokenData.refresh_token;
+
+      // 2. Fetch User Profile and Storage Quota from Google Drive API
+      const aboutRes = await fetch('https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress),storageQuota(limit,usage)', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      let email = body.accountEmail ? String(body.accountEmail).trim() : undefined;
+      let displayName = 'Google Drive';
+      let quotaLimit: number | undefined;
+      let quotaUsage: number | undefined;
+
+      if (aboutRes.ok) {
+        const aboutData = await aboutRes.json() as any;
+        if (aboutData.user?.emailAddress) email = aboutData.user.emailAddress;
+        if (aboutData.user?.displayName) displayName = aboutData.user.displayName;
+        if (aboutData.storageQuota?.limit) quotaLimit = Number(aboutData.storageQuota.limit);
+        if (aboutData.storageQuota?.usage) quotaUsage = Number(aboutData.storageQuota.usage);
+      }
+
+      const driveName = String(body.name || '').trim() || (email ? `Drive (${email})` : `Google Drive ${displayName}`);
+
+      // 3. Save into storage_drives table
+      const existingDrives = await storageRepo.getDrives();
+      const isDefault = body.isDefault !== undefined ? Boolean(body.isDefault) : existingDrives.length === 0;
+
+      const drive = await storageRepo.createDrive({
+        name: driveName,
+        provider: 'gdrive',
+        accountEmail: email,
+        credentials: {
+          clientId,
+          clientSecret,
+          refreshToken,
+          accessToken,
+          tokenExpiry: Date.now() + ((tokenData.expires_in || 3600) * 1000),
+        },
+        rootFolderId: body.rootFolderId ? String(body.rootFolderId).trim() : undefined,
+        assignedAccounts: Array.isArray(body.assignedAccounts) ? body.assignedAccounts : [],
+        isDefault,
+        status: 'active',
+      });
+
+      if (quotaUsage !== undefined || quotaLimit !== undefined) {
+        await storageRepo.updateDrive(drive.id, {
+          usedBytes: quotaUsage !== undefined ? quotaUsage : undefined,
+          quotaBytes: quotaLimit !== undefined ? quotaLimit : undefined,
+        });
+      }
+
+      offloaderService.clearDriveClientCache();
+      logger.info('google_drive_oauth_connected', { driveId: drive.id, email, driveName });
+
+      res.json({
+        ok: true,
+        drive,
+        email,
+        displayName,
+        quotaLimit,
+        quotaUsage,
+      });
+    } catch (err: any) {
+      logger.error('oauth_exchange_failed', { error: err?.message || String(err) });
+      res.status(400).json({ error: err?.message || 'Lỗi trao đổi token với Google' });
+    }
+  });
+
   // GET /api/admin/storage/drives
   router.get('/admin/storage/drives', requireAuth, requireAdmin, async (_req: Request, res: Response) => {
     try {
