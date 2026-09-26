@@ -421,17 +421,21 @@ export function createAdminRouter(
             message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
           });
 
-          const loginRes = await qrHandler.waitForLoginAndImport(180_000, (prog) => {
-            if (prog.step === 'waiting_phone_confirm' || prog.step === 'receiving_chunks') {
-              const currentSess = activeReconnectSessions.get(accountId);
-              if (currentSess) currentSess.qrCode = null;
-            }
-            broadcast?.({
-              type: 'ws_sync_progress',
-              accountId,
-              ...prog,
-            });
-          });
+          const loginRes = await qrHandler.waitForLoginAndImport(
+            180_000,
+            (prog) => {
+              if (prog.step === 'waiting_phone_confirm' || prog.step === 'receiving_chunks') {
+                const currentSess = activeReconnectSessions.get(accountId);
+                if (currentSess) currentSess.qrCode = null;
+              }
+              broadcast?.({
+                type: 'ws_sync_progress',
+                accountId,
+                ...prog,
+              });
+            },
+            accountId,
+          );
 
           if (loginRes.cookies.length > 0) {
             const cookiesJson = JSON.stringify(loginRes.cookies);
@@ -439,6 +443,8 @@ export function createAdminRouter(
               .where({ account_id: accountId })
               .update({
                 cookie_json: cookiesJson,
+                user_agent: loginRes.userAgent,
+                imei: loginRes.imei,
                 is_active: 1,
                 updated_at: knex.fn.now(),
               });

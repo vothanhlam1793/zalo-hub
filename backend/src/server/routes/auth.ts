@@ -74,8 +74,8 @@ export function createAuthRouter(
             .insert({
               account_id: accountId,
               cookie_json: cookiesJson,
-              imei: 'playwright-' + accountId,
-              user_agent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+              imei: loginRes.imei,
+              user_agent: loginRes.userAgent,
               is_active: 1,
               created_at: knex.fn.now(),
               updated_at: knex.fn.now(),
@@ -83,6 +83,8 @@ export function createAuthRouter(
             .onConflict('account_id')
             .merge({
               cookie_json: cookiesJson,
+              imei: loginRes.imei,
+              user_agent: loginRes.userAgent,
               is_active: 1,
               updated_at: knex.fn.now(),
             });
