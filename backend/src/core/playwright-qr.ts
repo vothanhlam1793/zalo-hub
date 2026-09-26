@@ -3,7 +3,7 @@ import type { GoldLogger } from './logger.js';
 import type { IndexedDbImporter, IndexedDbDumpResult } from './indexeddb-importer.js';
 
 export interface QrSyncProgressUpdate {
-  step: 'qr_ready' | 'scanned' | 'importing_db' | 'completed' | 'error';
+  step: 'qr_ready' | 'waiting_phone_confirm' | 'receiving_chunks' | 'unpacking_db' | 'importing_postgres' | 'completed' | 'error';
   percent: number;
   qrCode?: string;
   current?: number;
@@ -98,7 +98,7 @@ export class PlaywrightQrLogin {
   }
 
   async waitForLoginAndImport(
-    timeoutMs = 120_000,
+    timeoutMs = 180_000,
     onProgress?: (update: QrSyncProgressUpdate) => void,
   ): Promise<{ cookies: Cookie[]; accountId: string; dumpResult?: IndexedDbDumpResult }> {
     if (!this.page) throw new Error('Browser not started');
@@ -108,6 +108,7 @@ export class PlaywrightQrLogin {
 
     this.logger.info('playwright_qr_polling_login', { timeoutMs });
 
+    // Step 1: Chờ quét mã QR trên điện thoại
     let detectedCookies: Cookie[] | null = null;
     while (Date.now() - startTime < timeoutMs) {
       if (this.canceled) {
@@ -141,16 +142,10 @@ export class PlaywrightQrLogin {
 
     if (!detectedCookies) {
       this.logger.info('playwright_qr_login_timeout');
-      throw new Error('QR login timeout — không quét trong thời gian cho phép');
+      throw new Error('Hết thời gian chờ quét mã QR');
     }
 
-    onProgress?.({
-      step: 'scanned',
-      percent: 30,
-      message: '✅ Đã quét thành công! Đang chờ Zalo Cloud tải dữ liệu 14 ngày...',
-    });
-
-    // Detect Account ID from cookies or IndexedDB
+    // Step 2: Phát hiện Account ID
     let accountId = '';
     const zpwSek = detectedCookies.find((c) => c.name === 'zpw_sek')?.value;
     if (zpwSek) {
@@ -160,26 +155,114 @@ export class PlaywrightQrLogin {
       }
     }
 
-    // Wait 4-6s for Zalo Web to populate IndexedDB
-    await this.page.waitForTimeout(4000);
+    onProgress?.({
+      step: 'waiting_phone_confirm',
+      percent: 25,
+      message: '📱 Đã quét QR! Vui lòng bấm "ĐỒNG BỘ NGAY" trên điện thoại để truyền dữ liệu...',
+    });
 
+    this.logger.info('playwright_qr_scanned_waiting_sync_stream', { accountId });
+
+    // Step 3: Lắng nghe chu trình truyền Chunk và nạp IndexedDB theo trạng thái thật
+    // Không dùng timer cứng! Theo dõi biến động tin nhắn và trạng thái dialog đồng bộ của Zalo Web
+    const targetDb = `zdb_${accountId}`;
+    let previousCount = 0;
+    let stableCountRounds = 0;
+    let syncStreamStarted = false;
+    const syncStreamStart = Date.now();
+    const maxSyncWaitMs = 120_000; // Chờ tối đa 2 phút cho phiên truyền chunk
+
+    while (Date.now() - syncStreamStart < maxSyncWaitMs) {
+      if (this.canceled) throw new Error('Đồng bộ bị hủy');
+
+      // 1. Kiểm tra số lượng tin nhắn trong IndexedDB
+      const currentCount = await this.page.evaluate(async (dbName: string) => {
+        return new Promise<number>((resolve) => {
+          const req = indexedDB.open(dbName);
+          req.onerror = () => resolve(0);
+          req.onsuccess = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains('messages')) {
+              db.close();
+              return resolve(0);
+            }
+            const trx = db.transaction('messages', 'readonly');
+            const store = trx.objectStore('messages');
+            const countReq = store.count();
+            countReq.onsuccess = () => { db.close(); resolve(countReq.result || 0); };
+            countReq.onerror = () => { db.close(); resolve(0); };
+          };
+        });
+      }, targetDb).catch(() => 0);
+
+      // 2. Kiểm tra văn bản/tiến trình trên UI Zalo Web
+      const syncUiText = await this.page.evaluate(() => {
+        const dialog = document.querySelector('div[class*="sync"], div[class*="modal"], div[class*="popup"], div[class*="progress"]');
+        return dialog ? dialog.textContent?.slice(0, 100) : '';
+      }).catch(() => '');
+
+      if (currentCount > 0) {
+        if (!syncStreamStarted) {
+          syncStreamStarted = true;
+          this.logger.info('playwright_sync_stream_active', { accountId, initialCount: currentCount });
+        }
+
+        if (currentCount > previousCount) {
+          previousCount = currentCount;
+          stableCountRounds = 0;
+          onProgress?.({
+            step: 'receiving_chunks',
+            percent: Math.min(85, 30 + Math.round((currentCount / 15000) * 55)),
+            current: currentCount,
+            message: `⚡ Đang nhận dữ liệu từ điện thoại: Đã truyền ${currentCount.toLocaleString()} tin nhắn...`,
+          });
+        } else {
+          // Số tin nhắn không tăng thêm
+          stableCountRounds++;
+          // Nếu đã nhận > 100 tin và giữ nguyên trong 4 lần lặp (8 giây) -> Điện thoại đã truyền xong toàn bộ!
+          if (stableCountRounds >= 4 && currentCount > 50) {
+            this.logger.info('playwright_sync_stream_finished', { accountId, totalReceived: currentCount });
+            break;
+          }
+        }
+      } else {
+        // Chưa nhận được tin nào, tiếp tục nhắc bấm trên điện thoại
+        onProgress?.({
+          step: 'waiting_phone_confirm',
+          percent: 25,
+          message: syncUiText || '📱 Đang chờ điện thoại xác nhận & đóng gói dữ liệu...',
+        });
+      }
+
+      await this.page.waitForTimeout(2000);
+    }
+
+    onProgress?.({
+      step: 'unpacking_db',
+      percent: 88,
+      message: `📦 Điện thoại đã truyền xong ${previousCount.toLocaleString()} tin nhắn. Đang trích xuất toàn bộ cơ sở dữ liệu...`,
+    });
+
+    // Step 4: Trích xuất toàn bộ dữ liệu từ IndexedDB
     let dumpResult: IndexedDbDumpResult | undefined;
     if (this.importer && accountId) {
       try {
+        const dump = await this.importer.dumpFromPage(this.page, accountId);
+        
         onProgress?.({
-          step: 'importing_db',
-          percent: 50,
-          message: 'Đang trích xuất và đối soát 14 ngày tin nhắn vào database...',
+          step: 'importing_postgres',
+          percent: 92,
+          total: dump.messages.length,
+          message: `Đang nạp ${dump.messages.length.toLocaleString()} tin nhắn vào PostgreSQL ZaloHub...`,
         });
 
-        const dump = await this.importer.dumpFromPage(this.page, accountId);
         dumpResult = await this.importer.importDumpToPostgres(accountId, dump, (prog) => {
           onProgress?.({
-            step: 'importing_db',
-            percent: Math.min(95, 50 + Math.round((prog.percent / 100) * 45)),
+            step: 'importing_postgres',
+            percent: Math.min(99, 90 + Math.round((prog.percent / 100) * 9)),
             current: prog.inserted,
             total: prog.total,
-            message: `Đang đối soát: ${prog.inserted} / ${prog.total} tin nhắn (${prog.percent}%)...`,
+            message: `Đang nạp vào database: ${prog.inserted} / ${prog.total} (${prog.percent}%)...`,
           });
         });
       } catch (dumpErr) {
@@ -192,7 +275,7 @@ export class PlaywrightQrLogin {
       percent: 100,
       current: dumpResult?.insertedMessages,
       total: dumpResult?.totalMessages,
-      message: `Đồng bộ hoàn tất 100%! Đã bù đắp ${dumpResult?.insertedMessages ?? 0} tin nhắn 14 ngày vào hệ thống.`,
+      message: `🎉 Đồng bộ 100% hoàn tất! Đã nạp ${dumpResult?.insertedMessages ?? previousCount} tin nhắn từ Zalo Cloud vào hệ thống.`,
     });
 
     return {

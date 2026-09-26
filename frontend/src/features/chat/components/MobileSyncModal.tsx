@@ -35,7 +35,7 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
     onSyncProgress: (payload) => {
       if (payload.accountId === targetAccountId) {
         setProgress(payload);
-        if (payload.step === 'scanned') {
+        if (payload.step === 'waiting_phone_confirm' || payload.step === 'receiving_chunks' || (payload.step as string) === 'scanned') {
           setQrCode(null);
         } else if (payload.step === 'completed') {
           setSyncing(false);
@@ -67,7 +67,7 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
       accountId: activeAccount.accountId,
       step: 'connecting',
       percent: 15,
-      message: 'Đang tạo mã QR đồng bộ từ Zalo Web...',
+      message: 'Đang mở phiên Zalo Web & tạo mã QR đồng bộ...',
     });
 
     try {
@@ -102,9 +102,9 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
     onOpenChange(false);
   };
 
-  const isWaitingScan = Boolean(qrCode);
-  const isImporting = progress?.step === 'importing' || progress?.step === 'importing_db';
   const isCompleted = progress?.step === 'completed';
+  const isReceiving = (progress?.step as string) === 'receiving_chunks';
+  const isUnpacking = (progress?.step as string) === 'unpacking_db' || (progress?.step as string) === 'importing_postgres';
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!syncing) { onOpenChange(v); setQrCode(null); setProgress(null); } }}>
@@ -180,27 +180,26 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
             </div>
           )}
 
-          {/* Progress Bar & Status */}
+          {/* Progress Bar & Status (Real Chunk Streaming) */}
           {progress && !qrCode && (
             <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-3 animate-in fade-in">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-blue-500 flex items-center gap-1.5">
-                  {isCompleted ? '✅ Đã hoàn tất' : syncing ? '⏳ Đang đồng bộ...' : 'Thông báo'}
+                  {isCompleted ? '✅ Đã hoàn tất 100%' : isReceiving ? '⚡ Đang truyền gói tin từ điện thoại...' : isUnpacking ? '📦 Đang nạp cơ sở dữ liệu...' : syncing ? '⏳ Đang đồng bộ...' : 'Thông báo'}
                 </span>
                 <span className="font-mono font-bold text-foreground">{progress.percent}%</span>
               </div>
 
               <Progress value={progress.percent} className="h-2.5 bg-[var(--muted)]" />
 
-              <div className="text-xs text-muted-foreground leading-relaxed">
+              <div className="text-xs text-foreground leading-relaxed font-medium">
                 {progress.message || 'Đang xử lý dữ liệu...'}
               </div>
 
-              {progress.total ? (
-                <div className="text-[11px] text-muted-foreground font-mono">
-                  {progress.current !== undefined
-                    ? `Đối soát: ${progress.current.toLocaleString()} / ${progress.total.toLocaleString()} tin nhắn`
-                    : `Tổng cộng: ${progress.total.toLocaleString()} tin nhắn`}
+              {progress.current ? (
+                <div className="p-2.5 rounded-lg bg-[var(--muted)]/50 border border-[var(--border)] text-[11px] text-muted-foreground font-mono flex items-center justify-between">
+                  <span>Dữ liệu đã nhận:</span>
+                  <span className="font-bold text-foreground">{progress.current.toLocaleString()} tin nhắn</span>
                 </div>
               ) : null}
             </div>
@@ -210,10 +209,10 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
           {!syncing && !progress && !qrCode && (
             <div className="p-3.5 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 space-y-1.5">
               <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                <span>💡</span> Bù đắp toàn bộ tin nhắn bị hụt:
+                <span>💡</span> Chu trình truyền dữ liệu thật:
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Khi quét mã QR, Zalo Cloud sẽ chuyển toàn bộ tin nhắn 14 ngày về. Hệ thống sẽ tự động đối soát và nạp thêm các tin bị thiếu (như đoạn 15:52) vào database.
+                Hệ thống sẽ giữ kết nối và cập nhật số lượng tin nhắn tăng dần theo từng lượt tải thực tế từ điện thoại cho đến khi điện thoại báo truyền xong 100%.
               </p>
             </div>
           )}
@@ -227,7 +226,7 @@ export function MobileSyncModal({ open, onOpenChange, accounts, selectedAccountI
           >
             {isCompleted ? 'Đóng' : 'Hủy'}
           </Button>
-          {!qrCode && !isImporting && (
+          {!qrCode && !syncing && (
             <Button
               onClick={handleStartQrSync}
               disabled={syncing || !activeAccount}
