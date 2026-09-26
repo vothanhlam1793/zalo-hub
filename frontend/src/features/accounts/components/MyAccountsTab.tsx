@@ -335,17 +335,27 @@ function AccountCard({
               </span>
             )}
             {acc.hasSession && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-6 text-[10px] px-2 border-[rgba(255,255,255,0.1)] text-muted-foreground"
-                onClick={async () => {
-                  try { await bff.restartAccount(acc.accountId); }
-                  catch { /* ignore */ }
-                }}
-              >
-                ↻ Restart
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[10px] px-2 border-[rgba(255,255,255,0.1)] text-muted-foreground hover:text-white"
+                  onClick={async () => {
+                    try { await bff.restartAccount(acc.accountId); }
+                    catch { /* ignore */ }
+                  }}
+                >
+                  ↻ Restart
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[10px] px-2 text-[#ffa03c] border-[rgba(255,160,60,0.3)] hover:bg-[rgba(255,160,60,0.1)]"
+                  onClick={() => onReconnect(acc.accountId)}
+                >
+                  🔄 Đăng nhập lại
+                </Button>
+              </>
             )}
           </div>
           <p className="text-[11px] text-muted-foreground">{acc.phoneNumber || acc.accountId}</p>
