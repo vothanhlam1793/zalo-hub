@@ -206,11 +206,36 @@ export function createAuthRouter(
     }
   });
 
+  // POST /api/login/cancel — Explicitly abort previous QR session
+  router.post('/login/cancel', requireAuth, (_req, res) => {
+    try {
+      currentQrImage = null;
+      setLoginPromise(undefined);
+      loginRuntime.releaseTransientSession();
+      logger.info('login_qr_session_cancelled');
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Cannot cancel session' });
+    }
+  });
+
   router.post('/login/start', requireAuth, (req, res) => {
     const userId = (req as any).systemUserId as string;
+    const force = Boolean(req.body?.force);
+
     let loginPromise = getLoginPromise();
+    if (force && loginPromise) {
+      logger.info('native_login_force_refresh_requested', { userId });
+      currentQrImage = null;
+      setLoginPromise(undefined);
+      try {
+        loginRuntime.releaseTransientSession();
+      } catch {}
+      loginPromise = undefined;
+    }
+
     if (!loginPromise) {
-      logger.info('native_login_start_requested', { userId });
+      logger.info('native_login_start_requested', { userId, force });
       currentQrImage = null;
 
       loginPromise = (async () => {

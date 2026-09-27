@@ -65,7 +65,8 @@ export const api = {
   status: () => req<SessionStatus>('/api/status'),
   health: () => req<SessionStatus>('/api/health'),
 
-  loginStart: () => req<{ started: boolean }>('/api/login/start', { method: 'POST', body: '{}' }),
+  loginStart: (force = false) => req<{ started: boolean }>('/api/login/start', { method: 'POST', body: JSON.stringify({ force }) }),
+  loginCancel: () => req<{ ok: boolean }>('/api/login/cancel', { method: 'POST', body: '{}' }),
   loginQr: () => req<{ qrCode: string | null; ready: boolean }>('/api/login/qr'),
   loginCookie: (cookie: string, userAgent?: string) => req<{ ok: boolean; account: { accountId: string; displayName: string; avatar?: string } }>('/api/login/cookie', {
     method: 'POST',

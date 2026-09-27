@@ -118,7 +118,8 @@ export const bff = {
   createPoll: (accountId: string, groupId: string, question: string, options: string[]) =>
     api.accountCreatePoll(accountId, groupId, question, options),
 
-  loginStart: () => api.loginStart(),
+  loginStart: (force = false) => api.loginStart(force),
+  loginCancel: () => api.loginCancel(),
   loginQr: () => api.loginQr(),
   loginCookie: (cookie: string, userAgent?: string) => api.loginCookie(cookie, userAgent),
   reconnectStart: (accountId: string) => api.reconnectStart(accountId),

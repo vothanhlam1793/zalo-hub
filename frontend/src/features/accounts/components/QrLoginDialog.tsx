@@ -16,6 +16,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [status, setStatus] = useState('Đang tạo mã QR...');
   const [progress, setProgress] = useState<SyncProgressPayload | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isReconnect = Boolean(accountId);
 
@@ -25,6 +26,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
         setProgress(payload);
         if (payload.step === 'qr_ready' && payload.qrCode) {
           setQrCode(payload.qrCode);
+          setRefreshing(false);
           setStatus(isReconnect ? 'Quét QR bằng Zalo trên điện thoại để kết nối' : 'Quét QR bằng Zalo để thêm tài khoản');
         } else if (payload.step === 'completed') {
           setStatus('✅ Đăng nhập hoàn tất!');
@@ -34,10 +36,46 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
           }, 1500);
         } else if (payload.step === 'error') {
           setStatus(payload.message || 'Đăng nhập thất bại');
+          setRefreshing(false);
         }
       }
     },
   });
+
+  const loadFreshQr = (force = false) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    setQrCode(null);
+    setProgress(null);
+    setRefreshing(true);
+    setStatus('Đang tạo mã QR Zalo mới...');
+
+    const startFn = isReconnect
+      ? () => bff.reconnectStart(accountId!)
+      : () => bff.loginStart(force);
+
+    const qrFn = isReconnect
+      ? () => bff.reconnectQr(accountId!)
+      : () => bff.loginQr();
+
+    startFn().then(() => {
+      timerRef.current = setInterval(async () => {
+        try {
+          const qr = await qrFn();
+          if (qr.qrCode) {
+            setQrCode(qr.qrCode);
+            setRefreshing(false);
+            setStatus(isReconnect ? 'Quét QR bằng Zalo trên điện thoại để kết nối' : 'Quét QR bằng Zalo để thêm tài khoản');
+          }
+        } catch {
+          // keep polling
+        }
+      }, 1000);
+    }).catch(() => {
+      setStatus('Lỗi tạo QR');
+      setRefreshing(false);
+    });
+  };
 
   useEffect(() => {
     if (!open) {
@@ -45,39 +83,20 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
       timerRef.current = null;
       setQrCode(null);
       setProgress(null);
+      if (!isReconnect) {
+        bff.loginCancel().catch(() => {});
+      }
       return;
     }
 
-    setQrCode(null);
-    setProgress(null);
-    setStatus('Đang tạo mã QR Zalo...');
-
-    const startFn = isReconnect
-      ? () => bff.reconnectStart(accountId!)
-      : () => bff.loginStart();
-
-    const qrFn = isReconnect
-      ? () => bff.reconnectQr(accountId!)
-      : () => bff.loginQr();
-
-    startFn().then(() => {
-      // Poll exclusively for the QR image code until scanned
-      timerRef.current = setInterval(async () => {
-        try {
-          const qr = await qrFn();
-          if (qr.qrCode) {
-            setQrCode(qr.qrCode);
-            setStatus(isReconnect ? 'Quét QR bằng Zalo trên điện thoại để kết nối' : 'Quét QR bằng Zalo để thêm tài khoản');
-          }
-        } catch {
-          // keep polling
-        }
-      }, 1000);
-    }).catch(() => setStatus('Lỗi tạo QR'));
+    loadFreshQr(true);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = null;
+      if (!isReconnect) {
+        bff.loginCancel().catch(() => {});
+      }
     };
   }, [open, isReconnect, accountId]);
 
@@ -114,6 +133,14 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
                   <p className="text-[11px] text-muted-foreground text-center max-w-[260px]">
                     Mở app Zalo trên điện thoại để quét mã QR đăng nhập.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => loadFreshQr(true)}
+                    disabled={refreshing}
+                    className="mt-1 inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 font-medium px-2.5 py-1 rounded bg-blue-500/10 hover:bg-blue-500/20 transition disabled:opacity-50"
+                  >
+                    <span>🔄</span> {refreshing ? 'Đang tạo mã mới...' : 'Đổi mã QR mới'}
+                  </button>
                 </div>
               ) : (
                 <div className="w-52 h-52 rounded-xl border border-[var(--border)] bg-[#0d1015] flex flex-col items-center justify-center text-muted-foreground text-xs gap-2">

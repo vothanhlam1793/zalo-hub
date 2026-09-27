@@ -37,7 +37,9 @@ export const api = {
 
   accounts: () => req<{ accounts: any[]; activeAccountId: string }>("/api/accounts"),
 
-  loginStart: () => req<{ started: boolean }>("/api/login/start", { method: "POST", body: "{}" }),
+  loginStart: (force = false) => req<{ started: boolean }>("/api/login/start", { method: "POST", body: JSON.stringify({ force }) }),
+
+  loginCancel: () => req<{ ok: boolean }>("/api/login/cancel", { method: "POST", body: "{}" }),
 
   loginQr: () => req<{ qrCode: string | null; ready: boolean }>("/api/login/qr"),
 
