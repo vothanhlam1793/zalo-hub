@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { QrLoginDialog } from './QrLoginDialog';
+import { CookieLoginDialog } from './CookieLoginDialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -44,6 +45,7 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferEmail, setTransferEmail] = useState('');
   const [qrOpen, setQrOpen] = useState(false);
+  const [cookieOpen, setCookieOpen] = useState(false);
   const [reconnectId, setReconnectId] = useState<string | null>(null);
 
   const loadAccounts = async () => {
@@ -140,9 +142,14 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
     <div>
       <div className="flex items-center justify-between mb-4 gap-3">
         <h2 className="text-sm font-bold text-[#eee]">Tài khoản Zalo của tôi</h2>
-        <Button size="sm" className="text-[11px] h-8" onClick={() => setQrOpen(true)}>
-          + Thêm tài khoản (QR)
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" className="text-[11px] h-8 border-blue-500/30 text-blue-400 hover:text-blue-300" onClick={() => setCookieOpen(true)}>
+            🍪 Thêm bằng Cookie
+          </Button>
+          <Button size="sm" className="text-[11px] h-8" onClick={() => setQrOpen(true)}>
+            + Thêm (QR)
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -269,6 +276,12 @@ export function MyAccountsTab({ setError, setStatus }: { setError: (msg: string)
         open={qrOpen}
         onOpenChange={setQrOpen}
         onSuccess={() => { setQrOpen(false); loadAccounts(); }}
+      />
+
+      <CookieLoginDialog
+        open={cookieOpen}
+        onOpenChange={setCookieOpen}
+        onSuccess={() => { setCookieOpen(false); loadAccounts(); }}
       />
 
       {reconnectId && (

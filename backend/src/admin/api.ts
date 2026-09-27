@@ -41,6 +41,12 @@ export const api = {
 
   loginQr: () => req<{ qrCode: string | null; ready: boolean }>("/api/login/qr"),
 
+  loginCookie: (cookie: string, userAgent?: string) =>
+    req<{ ok: boolean; account: { accountId: string; displayName: string; avatar?: string } }>("/api/login/cookie", {
+      method: "POST",
+      body: JSON.stringify({ cookie, userAgent }),
+    }),
+
   reconnectStart: (accountId: string) =>
     req<{ started: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/reconnect`, { method: "POST", body: "{}" }),
 

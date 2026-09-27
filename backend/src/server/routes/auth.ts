@@ -1,9 +1,53 @@
 import { Router } from 'express';
 import type { Knex } from 'knex';
+import * as ZaloApi from 'zalo-api-final';
 import type { GoldRuntime } from '../../core/runtime.js';
 import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
 import { createAuthMiddleware } from '../helpers/auth-middleware.js';
+import type { GoldStoredCredential } from '../../core/types.js';
+
+const { Zalo } = ZaloApi as {
+  Zalo: new (options?: Record<string, unknown>) => any;
+};
+
+export function parseCookieInput(raw: unknown): Array<{ name: string; value: string; domain?: string; path?: string }> {
+  if (Array.isArray(raw)) {
+    return raw.map((c: any) => ({
+      name: String(c.name || c.key || ''),
+      value: String(c.value || ''),
+      domain: String(c.domain || 'chat.zalo.me'),
+      path: String(c.path || '/'),
+    })).filter((c) => c.name && c.value);
+  }
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parseCookieInput(parsed);
+      } catch {}
+    }
+
+    // Standard Cookie header string: key=val; key2=val2
+    return trimmed.split(';').map((pair) => {
+      const idx = pair.indexOf('=');
+      if (idx === -1) return null;
+      const name = pair.slice(0, idx).trim();
+      const value = pair.slice(idx + 1).trim();
+      if (!name || !value) return null;
+      return {
+        name,
+        value,
+        domain: 'chat.zalo.me',
+        path: '/',
+      };
+    }).filter(Boolean) as Array<{ name: string; value: string; domain?: string; path?: string }>;
+  }
+
+  return [];
+}
 
 export function createAuthRouter(
   logger: GoldLogger,
@@ -18,6 +62,153 @@ export function createAuthRouter(
   const router = Router();
   const { requireAuth } = createAuthMiddleware(knex);
   let currentQrImage: string | null = null;
+
+  // POST /api/login/cookie — Direct Cookie / Session Import
+  router.post('/login/cookie', requireAuth, async (req, res) => {
+    const userId = (req as any).systemUserId as string;
+    try {
+      const rawCookie = req.body?.cookie;
+      const userAgent = String(req.body?.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
+      
+      const parsedCookies = parseCookieInput(rawCookie);
+      if (!parsedCookies.length) {
+        res.status(400).json({ error: 'Chuỗi Cookie không hợp lệ hoặc rỗng. Vui lòng kiểm tra lại.' });
+        return;
+      }
+
+      logger.info('cookie_login_started', { userId, cookieCount: parsedCookies.length });
+
+      // Generate random imei if not supplied
+      const crypto = await import('node:crypto');
+      const imei = `${crypto.randomUUID()}-${crypto.createHash('md5').update(userAgent).digest('hex')}`;
+
+      // 1. Verify cookie with Zalo API
+      const zalo = new Zalo({ selfListen: false, checkUpdate: false, logging: false } as any);
+      let api: any;
+      try {
+        api = await zalo.login({
+          cookie: parsedCookies,
+          imei,
+          userAgent,
+        } as any);
+      } catch (loginErr) {
+        logger.error('cookie_login_verification_failed', { error: String(loginErr) });
+        res.status(400).json({ error: `Cookie Zalo không hợp lệ hoặc đã hết hạn: ${loginErr instanceof Error ? loginErr.message : String(loginErr)}` });
+        return;
+      }
+
+      // 2. Fetch account info
+      let accountId: string | undefined;
+      let displayName: string | undefined;
+      let avatar: string | undefined;
+      let phoneNumber: string | undefined;
+
+      try {
+        const info = await api.fetchAccountInfo?.().catch(() => null);
+        accountId = String(info?.userId || info?.uid || api.userId || '').trim();
+        displayName = String(info?.displayName || info?.name || 'Tài khoản Zalo').trim();
+        avatar = String(info?.avatar || '').trim();
+        phoneNumber = String(info?.phoneNumber || info?.phone || '').trim();
+      } catch {
+        accountId = String(api?.userId || '').trim();
+      }
+
+      if (!accountId) {
+        res.status(400).json({ error: 'Đăng nhập thành công nhưng không lấy được ID tài khoản Zalo.' });
+        return;
+      }
+
+      // 3. Save to accounts & account_sessions
+      const credential: GoldStoredCredential = {
+        cookie: JSON.stringify(parsedCookies),
+        imei,
+        userAgent,
+      };
+
+      await knex('accounts')
+        .insert({
+          account_id: accountId,
+          display_name: displayName,
+          avatar,
+          phone_number: phoneNumber,
+          last_login_at: knex.fn.now(),
+          updated_at: knex.fn.now(),
+        })
+        .onConflict('account_id')
+        .merge({
+          display_name: displayName,
+          avatar,
+          phone_number: phoneNumber,
+          last_login_at: knex.fn.now(),
+          updated_at: knex.fn.now(),
+        });
+
+      await knex('account_sessions')
+        .insert({
+          account_id: accountId,
+          cookie_json: JSON.stringify(parsedCookies),
+          imei,
+          user_agent: userAgent,
+          is_active: 1,
+          created_at: knex.fn.now(),
+          updated_at: knex.fn.now(),
+        })
+        .onConflict('account_id')
+        .merge({
+          cookie_json: JSON.stringify(parsedCookies),
+          imei,
+          user_agent: userAgent,
+          is_active: 1,
+          updated_at: knex.fn.now(),
+        });
+
+      // 4. Assign membership (master if new, viewer if existed)
+      const { rows: existingMem } = await knex.raw(
+        'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
+        [userId, accountId]
+      );
+      if (existingMem.length === 0) {
+        await knex.raw(
+          'INSERT INTO zalo_account_memberships (user_id, account_id, role) VALUES (?, ?, ?)',
+          [userId, accountId, 'master']
+        );
+        logger.info('cookie_login_master_assigned', { userId, accountId });
+      }
+
+      // 5. Activate primary account and start runtime
+      await accountManager.activatePrimaryAccount(accountId);
+      await accountManager.ensureRuntime(accountId).catch((error) => {
+        logger.error('cookie_login_runtime_ensure_failed', {
+          accountId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+      // 6. Broadcast updates
+      broadcast({
+        type: 'session_state',
+        accountId,
+        status: { loggedIn: true, sessionActive: true, account: { userId: accountId, displayName, avatar, phoneNumber } },
+      });
+
+      void accountManager.syncAccountAfterLogin(accountId);
+
+      logger.info('cookie_login_succeeded', { userId, accountId, displayName });
+
+      res.json({
+        ok: true,
+        account: {
+          accountId,
+          displayName,
+          avatar,
+          phoneNumber,
+        },
+      });
+    } catch (err) {
+      logger.error('cookie_login_unexpected_error', { error: String(err) });
+      res.status(500).json({ error: `Lỗi máy chủ khi xử lý cookie: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  });
 
   router.post('/login/start', requireAuth, (req, res) => {
     const userId = (req as any).systemUserId as string;

@@ -274,6 +274,7 @@ export interface SyncProgressPayload {
   accountId: string;
   step: 'connecting' | 'qr_ready' | 'waiting_phone_confirm' | 'receiving_chunks' | 'unpacking_db' | 'importing_postgres' | 'importing' | 'completed' | 'error';
   percent: number;
+  qrCode?: string;
   current?: number;
   total?: number;
   message?: string;

@@ -120,6 +120,7 @@ export const bff = {
 
   loginStart: () => api.loginStart(),
   loginQr: () => api.loginQr(),
+  loginCookie: (cookie: string, userAgent?: string) => api.loginCookie(cookie, userAgent),
   reconnectStart: (accountId: string) => api.reconnectStart(accountId),
   reconnectQr: (accountId: string) => api.reconnectQr(accountId),
   activateAccount: (accountId: string) => api.activateAccount(accountId),
