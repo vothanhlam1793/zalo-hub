@@ -57,7 +57,7 @@ export function AdminAccountsTab({ accounts, onRefresh, setError, setStatus }: P
     setStatus('Dang dong bo...');
     try {
       const r = await bff.accountSyncAll(accountId);
-      setStatus(`Dong bo xong: ${r.synced} cuoc tro chuyen`);
+      setStatus(r.message);
     } catch (err) { setError(err instanceof Error ? err.message : 'Dong bo that bai'); }
   };
 

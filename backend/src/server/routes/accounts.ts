@@ -12,6 +12,10 @@ import { canUserAccessConversation, filterConversationsForUser } from '../helper
 import { IndexedDbImporter } from '../../core/indexeddb-importer.js';
 import { PlaywrightSyncWorker } from '../../core/playwright-sync-worker.js';
 import { PlaywrightQrLogin } from '../../core/playwright-qr.js';
+import { createComposerRouter } from './composer.js';
+import { ComposerService } from '../services/composer-service.js';
+import { ComposerObjectStore } from '../services/composer-object-store.js';
+import { createExtendedToolsRouter } from './extended-tools.js';
 
 export function createAccountsRouter(
   logger: GoldLogger,
@@ -37,6 +41,8 @@ export function createAccountsRouter(
   const sendRepo = new SendRequestRepo(knex);
   const sends = sendRequestService ?? new SendRequestService(sendRepo, logger);
   const metadataInFlight = new Set<string>();
+  router.use('/:accountId/composer/tools', ...editAny, createExtendedToolsRouter(knex,
+    account => accountManager.getRuntime(account)?.getExtendedToolsApi()));
   const sendError = (res: Response, error: unknown) => {
     if (error instanceof SendRequestError || error instanceof SendFailure) {
       res.status(error instanceof SendRequestError ? error.status : error.httpStatus).json({ error: error.message, code: error.code });
@@ -49,7 +55,7 @@ export function createAccountsRouter(
     const targetRuntime = await getRuntimeForAccount(input.accountId, accountManager);
     if (!targetRuntime.isSessionActive()) throw new SendFailure('SESSION_UNAVAILABLE', 'Phiên Zalo chưa sẵn sàng.', true, 409);
     const result = input.attachment
-      ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text }, lifecycle)
+      ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text, mentions: input.mentions, quoteMessageId: input.quoteMessageId }, lifecycle)
       : await targetRuntime.sendText(input.conversationId, input.text, {
           mentions: input.mentions,
           quoteMessageId: input.quoteMessageId,
@@ -65,6 +71,18 @@ export function createAccountsRouter(
 
     return result;
   };
+
+  router.use('/:accountId/composer', ...editAny, createComposerRouter(knex,
+    new ComposerService(knex, new ComposerObjectStore(), sends, async (input, lifecycle) => {
+      // Recheck permissions at each child dispatch, not only when the batch was submitted.
+      const user = await knex('system_users').where({ id: input.systemUserId }).first();
+      const membership = await knex('zalo_account_memberships').where({ user_id: input.systemUserId, account_id: input.accountId }).first();
+      if ((user?.role !== 'super_admin' && !['editor', 'admin', 'master'].includes(membership?.role))
+        || !await canUserAccessConversation(knex, input.systemUserId, input.accountId, input.conversationId)) {
+        throw new SendFailure('PRE_DISPATCH_FAILED', 'Conversation access revoked.', false, 403);
+      }
+      return dispatch(input, lifecycle);
+    }, logger), logger));
 
   router.get('/', ...auth, (_req, res) => {
     void (async () => {
@@ -206,6 +224,35 @@ export function createAccountsRouter(
     })();
   });
 
+  // POST /api/accounts/:accountId/sync-contacts — sync friends and aliases from Zalo
+  router.post('/:accountId/sync-contacts', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        if (!targetRuntime.isSessionActive()) {
+          res.status(400).json({ ok: false, error: 'Phiên Zalo của tài khoản hiện không hoạt động' });
+          return;
+        }
+
+        const contacts = await targetRuntime.listFriends();
+        const summaries = await targetRuntime.getConversationSummaries().catch(() => []);
+        broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+
+        const withAlias = contacts.filter((c: any) => Boolean(c.zaloAlias)).length;
+        res.json({
+          ok: true,
+          count: contacts.length,
+          aliasCount: withAlias,
+          message: `Đã đồng bộ ${contacts.length} bạn bè và ${withAlias} tên gợi nhớ.`,
+        });
+      } catch (error) {
+        logger.error('sync_contacts_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Đồng bộ danh bạ thất bại' });
+      }
+    })();
+  });
+
   // POST /api/accounts/:accountId/restart — restart account runtime (reattach Dify executor)
   router.post('/:accountId/restart', ...editAny, (req, res) => {
     void (async () => {
@@ -278,16 +325,18 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const userId = (req as any).systemUserId as string;
-      const limit = req.query.limit ? Number(req.query.limit) : 100;
+      const limit = req.query.limit ? Number(req.query.limit) : 150;
       const offset = req.query.offset ? Number(req.query.offset) : 0;
       const q = typeof req.query.q === 'string' ? req.query.q : undefined;
 
       try {
         let conversations: any[] = [];
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
-        if (targetRuntime && targetRuntime.isSessionActive() && !q && offset === 0) {
-          // If session active and default load, get from sync memory / store
-          conversations = await targetRuntime.getConversationSummaries().catch(() => []);
+        // If offset > 0 or q is present, always query store with pagination
+        if (offset === 0 && !q) {
+          const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
+          if (targetRuntime && targetRuntime.isSessionActive()) {
+            conversations = await targetRuntime.getConversationSummaries().catch(() => []);
+          }
         }
 
         if (conversations.length === 0) {
@@ -302,7 +351,8 @@ export function createAccountsRouter(
           conversations = await filterConversationsForUser(knex, userId, accountId, conversations);
         }
 
-        res.json({ conversations, count: conversations.length });
+        const hasMore = conversations.length >= limit;
+        res.json({ conversations, count: conversations.length, hasMore, offset, limit });
       } catch (error) {
         logger.warn('account_conversations_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
         let offlineConversations = await accountManager
@@ -312,7 +362,8 @@ export function createAccountsRouter(
         if (userId) {
           offlineConversations = await filterConversationsForUser(knex, userId, accountId, offlineConversations);
         }
-        res.json({ conversations: offlineConversations, count: offlineConversations.length, offline: true });
+        const hasMore = offlineConversations.length >= limit;
+        res.json({ conversations: offlineConversations, count: offlineConversations.length, hasMore, offset, limit, offline: true });
       }
     })();
   });

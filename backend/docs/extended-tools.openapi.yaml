@@ -1,0 +1,94 @@
+openapi: 3.1.0
+info:
+  title: Composer extended tools
+  version: 1.0.0
+servers:
+  - url: /api/accounts/{accountId}/composer/tools
+    variables:
+      accountId: { default: account }
+security:
+  - bearerAuth: []
+paths:
+  /capabilities:
+    get:
+      parameters: [{ $ref: '#/components/parameters/conversation' }]
+      responses:
+        '200': { description: Runtime method availability; voice and location false, poll only groups. }
+  /stickers:
+    get:
+      parameters:
+        - { $ref: '#/components/parameters/conversation' }
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200': { description: Up to 40 sticker details (id, text, optional HTTPS preview url). Requires a nonempty trimmed keyword of at most 100 characters. No empty-keyword catalogue. }
+        '400': { description: Missing or invalid search keyword. }
+  /actions:
+    get:
+      parameters: [{ $ref: '#/components/parameters/conversation' }]
+      responses:
+        '200': { description: All unresolved plus latest 50 terminal receipts belonging to this user/account/conversation; never dispatches. }
+    post:
+      parameters: [{ $ref: '#/components/parameters/conversation' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, action]
+              properties:
+                id: { type: string, format: uuid }
+                action: { enum: [sticker, poll, forward, undo, reminder, editReminder, contact] }
+                stickerId: { type: integer, minimum: 1 }
+                question: { type: string, maxLength: 2000 }
+                options: { type: array, minItems: 2, maxItems: 10, items: { type: string, maxLength: 500 } }
+                messageId: { type: string, maxLength: 255 }
+                target: { type: string, pattern: '^(direct|group):[^\s:]+$' }
+                title: { type: string, maxLength: 2000 }
+                startTime: { type: integer, minimum: 1, description: Unix milliseconds }
+                topicId: { type: string, maxLength: 255 }
+                userId: { type: string, maxLength: 100 }
+      responses:
+        '202': { description: Durable receipt (id, action, accepted|unknown|rejected status, sanitized result, retryable false). Preparation follows reservation; preparation failure records rejected with result.dispatched false. 15s response budget; no automatic retry. }
+        '200': { description: Same-identity replay; never redispatches. }
+        '400': { description: Invalid action or unsupported source/context. }
+        '401': { description: Authentication required. }
+        '403': { description: Account editor or source/target conversation authorization denied. }
+        '404': { description: Source message or owned receipt not found. }
+        '409': { description: Immutable payload conflict or unavailable capability. }
+        '429': { description: Synchronous admission rejection includes reserved false and dispatched false for this invocation only. Explicit same-ID recovery seals absent identities against delayed requests. }
+        '503': { description: Unavailable; query same ID, do not create another send identity. }
+  /actions/{id}:
+    get:
+      parameters:
+        - { $ref: '#/components/parameters/conversation' }
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Owned durable receipt, no provider retry. }
+        '404': { description: No owned receipt found; not proof that a delayed request cannot arrive. }
+  /actions/{id}/recover:
+    post:
+      description: No provider send. Under the conversation reservation lock, return existing owned receipt or insert a terminal rejected tombstone for absent ID. A delayed POST cannot dispatch that ID afterwards. Unknown existing operations remain unknown.
+      parameters:
+        - { $ref: '#/components/parameters/conversation' }
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Existing receipt or terminal no-dispatch proof; never retries provider. }
+        '404': { description: Identity belongs to a different scope. }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    conversation:
+      in: query
+      name: conversationId
+      required: true
+      schema: { type: string, pattern: '^(direct|group):[^\s:]+$' }

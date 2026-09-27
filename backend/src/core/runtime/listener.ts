@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { projectRichMessage } from '../message-projection.js';
 import { normalizeMessageText, normalizeMessageKind, normalizeAttachments, normalizeImageUrl, normalizeMessageTimestamp, summarizeListenerData, getConversationTypeFromThreadId, getConversationId, normalizeMessageQuote, normalizeMessageMentions, normalizeMessageReactions, mapReactionIconToEmoji, normalizeReactionEvent } from './normalizer.js';
 import type { GoldConversationMessage, GoldConversationType, GoldAttachment, GoldMessageKind, GoldMessageReactionItem } from '../types.js';
 import type { SharedState, ListenerMessage, ListenerLike, HistorySyncResult } from './types.js';
@@ -11,7 +12,7 @@ export class GoldListener {
   private _knownGroupIdsCachedAt = 0;
   private _resolveGroupSenderName?: (groupId: string, senderId?: string) => Promise<string | undefined>;
   private _ensureGroupMetadata?: (groupId: string) => Promise<void>;
-  private _appendConversationMessage?: (message: GoldConversationMessage) => Promise<boolean>;
+  private _appendConversationMessage?: (message: GoldConversationMessage, notifyNew?: boolean) => Promise<boolean>;
   private _persistMessageAttachmentsLocally?: (message: GoldConversationMessage) => Promise<GoldConversationMessage>;
   private _handleReactionUpdate?: (conversationId: string, targetGlobalMsgId: string, emoji: string, count: number, userIds: string[]) => Promise<boolean>;
 
@@ -22,7 +23,7 @@ export class GoldListener {
   init(deps: {
     resolveGroupSenderName: (groupId: string, senderId?: string) => Promise<string | undefined>;
     ensureGroupMetadata: (groupId: string) => Promise<void>;
-    appendConversationMessage: (message: GoldConversationMessage) => Promise<boolean>;
+    appendConversationMessage: (message: GoldConversationMessage, notifyNew?: boolean) => Promise<boolean>;
     persistMessageAttachmentsLocally: (message: GoldConversationMessage) => Promise<GoldConversationMessage>;
     handleReactionUpdate: (conversationId: string, targetGlobalMsgId: string, emoji: string, count: number, userIds: string[]) => Promise<boolean>;
   }) {
@@ -260,7 +261,7 @@ export class GoldListener {
       rawMessageJson: JSON.stringify(data),
     };
 
-    return normalized;
+    return projectRichMessage(normalized);
   }
 
   private async handleOldMessages(messages: ListenerMessage[], threadType: number) {
@@ -273,7 +274,7 @@ export class GoldListener {
     let dedupedCount = 0;
     for (const message of allNormalized) {
       const persisted = await this._persistMessageAttachmentsLocally?.(message) ?? message;
-      if (await this._appendConversationMessage?.(persisted)) {
+      if (await this._appendConversationMessage?.(persisted, false)) {
         insertedCount += 1;
       } else {
         dedupedCount += 1;
@@ -423,7 +424,7 @@ export class GoldListener {
     });
   }
 
-  onConversationMessage(listener: (message: GoldConversationMessage) => void) {
+  onConversationMessage(listener: (message: GoldConversationMessage, event?: 'new') => void) {
     this.state.conversationListeners.add(listener);
     return () => {
       this.state.conversationListeners.delete(listener);

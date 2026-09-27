@@ -1,13 +1,15 @@
 import { create } from 'zustand';
 import type { Contact, ConversationSummary, Group, Message } from '../types';
 import type { SendReceipt } from '../types';
-import { applyReceipt, mergeMessages } from '../features/chat/model/message-reconciliation';
+import { applyReceipt, mergeMessages, messageAliases } from '../features/chat/model/message-reconciliation';
 import { chatSession, conversationKey, parseConversationKey } from '../features/chat/model/chat-session';
 import { clientDb } from '../lib/client-db';
+import { conversationRecovery } from '../features/chat/model/conversation-recovery';
 
 export interface ConversationMessages {
   messages: Message[];
   revision: number;
+  messageRevisions?: Record<string, number>;
   loadState: 'idle' | 'loading' | 'ready' | 'error';
   hasMore: boolean;
   error?: string;
@@ -19,7 +21,8 @@ interface ChatState {
   byConversation: Record<string, ConversationMessages>;
   activeKey: string;
   selectKey: (key: string) => void;
-  mergeForKey: (key: string, messages: Message[], stale?: boolean) => Message[];
+  /** true = cache hydration; number = authoritative HTTP request's start revision. */
+  mergeForKey: (key: string, messages: Message[], stale?: boolean | number) => Message[];
   receiptForKey: (key: string, receipt: SendReceipt) => void;
   patchMessage: (key: string, localId: string, patch: Partial<Message>) => void;
   removeMessage: (key: string, localId: string) => void;
@@ -34,6 +37,7 @@ interface ChatState {
   loadingOlder: boolean;
   syncingHistory: boolean;
 
+  appendAccountConversations: (accountId: string, c: ConversationSummary[]) => void;
   replaceAccountConversations: (accountId: string, c: ConversationSummary[]) => void;
   setSidebarConversationsForAccount: (accountId: string, c: ConversationSummary[]) => void;
   markConversationReadLocal: (accountId: string, conversationId: string, readAt?: string) => void;
@@ -66,8 +70,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const [user, account, conversation] = parseConversationKey(key);
     if (user !== chatSession.capture().userId || !user) return [];
     const old = get().byConversation[key] || emptyEntry();
-    const messages = mergeMessages(old.messages, incoming.filter((m) => m.conversationId === conversation && !old.discardedLocalIds?.includes(m.localId || m.id)), account, stale);
-    get().setLoadState(key, { messages, revision: old.revision + (stale ? 0 : 1) });
+    let messages = old.messages;
+    const revision = old.revision + (stale === true ? 0 : 1);
+    const messageRevisions = { ...old.messageRevisions };
+    for (const message of incoming.filter((m) => m.conversationId === conversation && !old.discardedLocalIds?.includes(m.localId || m.id))) {
+      const aliases = messageAliases(message, account);
+      const preserveNewer = stale === true || (typeof stale === 'number' && aliases.some(alias => (messageRevisions[alias] || 0) > stale));
+      messages = mergeMessages(messages, [message], account, preserveNewer);
+      if (!preserveNewer) for (const alias of aliases) messageRevisions[alias] = revision;
+    }
+    get().setLoadState(key, { messages, revision, messageRevisions });
     return messages;
   },
   receiptForKey: (key, receipt) => {
@@ -75,7 +87,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (user !== chatSession.capture().userId || receipt.accountId !== account || receipt.conversationId !== conversation) return;
     const old = get().byConversation[key] || emptyEntry();
     const messages = applyReceipt(old.messages, receipt);
-    get().setLoadState(key, { messages, revision: old.revision + 1 });
+    const messageRevisions = { ...old.messageRevisions };
+    for (const message of messages.filter(m => m.clientRequestId === receipt.clientRequestId)) {
+      for (const alias of messageAliases(message, account)) messageRevisions[alias] = old.revision + 1;
+    }
+    get().setLoadState(key, { messages, revision: old.revision + 1, messageRevisions });
   },
   patchMessage: (key, localId, patch) => {
     const old = get().byConversation[key];
@@ -83,7 +99,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const messages = old.messages.map((m) => (m.localId || m.id) !== localId ? m : {
       ...m, ...patch, delivery: m.delivery === 'sent' ? 'sent' : patch.delivery || m.delivery,
     });
-    get().setLoadState(key, { messages, revision: old.revision + 1 });
+    const messageRevisions = { ...old.messageRevisions };
+    const account = parseConversationKey(key)[1];
+    for (const message of messages.filter(m => (m.localId || m.id) === localId)) {
+      for (const alias of messageAliases(message, account)) messageRevisions[alias] = old.revision + 1;
+    }
+    get().setLoadState(key, { messages, revision: old.revision + 1, messageRevisions });
   },
   removeMessage: (key, localId) => {
     const old = get().byConversation[key];
@@ -109,8 +130,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   replaceAccountConversations: (accountId, c) => set((state) => {
     const nextPending = { ...state.pendingReadAtByConversation };
-    const merged = c.map((snapshot) => {
-      const current = state.conversationsByAccount[accountId]?.find((entry) => entry.id === snapshot.id);
+    const currentList = state.conversationsByAccount[accountId] ?? [];
+    const incomingMap = new Map(c.map((item) => [item.id, item]));
+
+    // 1. Process incoming items with read-state reconciliation
+    const processedIncoming = c.map((snapshot) => {
+      const current = currentList.find((entry) => entry.id === snapshot.id);
       const entry = current && current.lastMessageTimestamp > snapshot.lastMessageTimestamp
         ? { ...snapshot, lastMessageText: current.lastMessageText, lastMessageKind: current.lastMessageKind,
           lastMessageTimestamp: current.lastMessageTimestamp, lastDirection: current.lastDirection,
@@ -128,11 +153,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       return { ...entry, unreadCount: 0, lastReadAt: pendingReadAt };
     });
+
+    // 2. CRITICAL PRESERVATION: If an active conversation or existing conversation in current list
+    // is NOT in the incoming snapshot (e.g. backend only returned top 100/150 or it's from a pagination/direct open),
+    // preserve it so it never vanishes from the sidebar while user is chatting!
+    const retainedCurrent = currentList.filter((existing) => !incomingMap.has(existing.id));
+    const merged = [...processedIncoming, ...retainedCurrent];
+    merged.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
+
     return {
       pendingReadAtByConversation: nextPending,
       conversationsByAccount: {
         ...state.conversationsByAccount,
         [accountId]: merged,
+      },
+    };
+  }),
+
+  appendAccountConversations: (accountId, c) => set((state) => {
+    const current = state.conversationsByAccount[accountId] ?? [];
+    const existingIds = new Set(current.map((item) => item.id));
+    const toAdd = c.filter((item) => !existingIds.has(item.id));
+    if (toAdd.length === 0) return state;
+    const next = [...current, ...toAdd];
+    next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
+    return {
+      conversationsByAccount: {
+        ...state.conversationsByAccount,
+        [accountId]: next,
       },
     };
   }),
@@ -180,18 +228,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
   updateConversationFromWs: (accountId, msg) => set((state) => {
     const current = state.conversationsByAccount[accountId] ?? [];
     const idx = current.findIndex((e) => e.id === msg.conversationId);
-    if (idx < 0) return state;
     const isViewing = state.activeConversationId === msg.conversationId;
     const isIncoming = msg.direction === 'incoming';
     const next = [...current];
-    next[idx] = {
-      ...next[idx],
-      lastMessageText: msg.text,
-      lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
-      lastMessageTimestamp: msg.timestamp,
-      lastDirection: msg.direction as 'incoming' | 'outgoing',
-      unreadCount: isViewing ? 0 : (isIncoming ? (next[idx].unreadCount || 0) + 1 : (next[idx].unreadCount || 0)),
-    };
+
+    if (idx < 0) {
+      // If conversation is not in current loaded list, synthesize and prepend so it appears immediately!
+      const isGroup = msg.conversationId.startsWith('group:');
+      const threadId = msg.conversationId.replace(/^(group|direct):/, '');
+      const newEntry: ConversationSummary = {
+        id: msg.conversationId,
+        accountId,
+        threadId,
+        type: isGroup ? 'group' : 'direct',
+        title: isGroup ? `Nhóm ${threadId}` : `Hội thoại ${threadId}`,
+        lastMessageText: msg.text,
+        lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
+        lastMessageTimestamp: msg.timestamp,
+        lastDirection: msg.direction as 'incoming' | 'outgoing',
+        messageCount: 1,
+        unreadCount: isViewing ? 0 : (isIncoming ? 1 : 0),
+      };
+      next.unshift(newEntry);
+    } else {
+      next[idx] = {
+        ...next[idx],
+        lastMessageText: msg.text,
+        lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
+        lastMessageTimestamp: msg.timestamp,
+        lastDirection: msg.direction as 'incoming' | 'outgoing',
+        unreadCount: isViewing ? 0 : (isIncoming ? (next[idx].unreadCount || 0) + 1 : (next[idx].unreadCount || 0)),
+      };
+    }
     next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
     return {
       conversationsByAccount: {
@@ -214,6 +282,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         lastDirection: msg.direction as 'incoming' | 'outgoing',
         messageCount: next[idx].messageCount + 1,
       };
+    } else {
+      const isGroup = msg.conversationId.startsWith('group:');
+      const threadId = msg.conversationId.replace(/^(group|direct):/, '');
+      const newEntry: ConversationSummary = {
+        id: msg.conversationId,
+        accountId,
+        threadId,
+        type: isGroup ? 'group' : 'direct',
+        title: isGroup ? `Nhóm ${threadId}` : `Hội thoại ${threadId}`,
+        lastMessageText: msg.text,
+        lastMessageKind: msg.kind as ConversationSummary['lastMessageKind'],
+        lastMessageTimestamp: msg.timestamp,
+        lastDirection: msg.direction as 'incoming' | 'outgoing',
+        messageCount: 1,
+        unreadCount: 0,
+      };
+      next.unshift(newEntry);
     }
     next.sort((a, b) => b.lastMessageTimestamp.localeCompare(a.lastMessageTimestamp));
     return {
@@ -275,7 +360,7 @@ useChatStore.subscribe((state, previous) => {
     pendingSnapshots.add(key);
     queueMicrotask(() => {
       pendingSnapshots.delete(key);
-      if (!chatSession.valid(session)) return;
+      if (!chatSession.valid(session) || !conversationRecovery.ready(key)) return;
       const latest = useChatStore.getState().byConversation[key];
       if (!latest) return;
       const [user, account, conversation] = parseConversationKey(key);
@@ -284,3 +369,9 @@ useChatStore.subscribe((state, previous) => {
   }
 });
 chatSession.subscribe(() => pendingSnapshots.clear());
+conversationRecovery.subscribe(key => {
+  if (!conversationRecovery.ready(key)) return;
+  const entry = useChatStore.getState().byConversation[key];
+  const [, account, conversation] = parseConversationKey(key);
+  if (entry) void clientDb.saveMessages(account, conversation, entry.messages);
+});

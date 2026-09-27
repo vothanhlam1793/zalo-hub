@@ -9,6 +9,7 @@ export interface SendExecution {
   providerMessageIds: string[];
   acceptedAt?: string;
   localPersistenceFailed?: boolean;
+  mediaMirrorComplete?: boolean;
 }
 
 export interface SendLifecycle {

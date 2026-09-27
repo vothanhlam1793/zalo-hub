@@ -18,9 +18,10 @@ interface MiniSidebarProps {
   onSelectAccount: (accountId: string) => void;
   onOpenAdmin: () => void;
   onMoveAccount?: (accountId: string, direction: 'up' | 'down') => void;
+  onReorderAccounts?: (newOrder: string[]) => void;
 }
 
-export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, conversations, onSelectAccount, onOpenAdmin, onMoveAccount }: MiniSidebarProps) {
+export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, conversations, onSelectAccount, onOpenAdmin, onMoveAccount, onReorderAccounts }: MiniSidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [userSettings, setUserSettings] = useState(() => notificationService.getSettings());
@@ -178,7 +179,12 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
         </Tooltip>
       </div>
 
-      <UserSettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <UserSettingsModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        accounts={accounts}
+        onReorderAccounts={onReorderAccounts}
+      />
     </div>
   );
 }

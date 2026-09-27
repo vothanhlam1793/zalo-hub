@@ -1,5 +1,8 @@
 # Decision Log
 
+## Extended tools — 2026-09-27
+Use separate account/user/conversation-scoped action receipts rather than overloading text/file send_requests. Reserve unknown before mutation and never replay uncertain calls. Installed SDK uses sticker detail objects, poll options, text-forward payloads and `undo`; native browser voice codec is unverified, so explicitly stage/send recording as a file. No location API invented. Preserve main-owned batch outbox/unlock scope.
+
 ## Current Precedence — 2026-09-22
 
 The entries below this section describing independent services are retained history. The following decisions govern the current delivery:
@@ -73,3 +76,23 @@ Gateway now owns `zalo_gateway.accounts` and `zalo_gateway.account_sessions`. It
 ## Follow-up
 - Move contacts/groups and the account-ready event contract next.
 - Add a copy-verify migration from legacy `accounts` and `account_sessions` before production cutover.
+# Rich-message decisions — 2026-09-27
+- Repair history and summaries on read from retained provider payloads; do not rewrite production rows during this milestone.
+- Keep numeric call outcomes unknown until verified; ID-only stickers use fallback.
+- Separate new-message notifications from subscribed detail events and history/metadata updates; enforce conversation access.
+- Version presentation cache without deleting drafts or unresolved sends.
+- Report cross-pagination albums, full recall/group/reminder ingestion and interactive cards as unfinished scope; do not infer support from renderer availability.
+# Album frontend decisions — 2026-09-27
+
+Use contiguous verified album runs only, with explicit account scope and sender/date boundaries. SDK reverse indices are inspected, not assumed ascending. Keep ordinary history pagination with honest partial-count hints; no context endpoint is required for this checkpoint. See album sprint frontend report for evidence and constraints.
+# Composer blockers decisions — 2026-09-27
+- Explicit persisted detach unlocks the draft; batch payloads remain immutable and separately addressable in a scoped outbox. No automatic batch sends.
+- Retain durable outbox records across logout (unlike disposable cache); only the matching authenticated user may load them. Browser data clearing still destroys local recovery.
+- Keep staging FK metadata permanently; release only bytes and mark deleted. Receipt requires sender-confirmed mirror evidence plus completed persistence. Legacy receipts lacking proof are intentionally retained.
+- TTL applies to unreferenced objects; terminal proven references may release immediately. Failed references require explicit abandonment. Unknown/sending/queued references do not expire destructively.
+- Cleanup shares the global execution advisory gate and runs after batch execution, before upload quota admission, or via explicit cleanup. No production background job/migration added.
+# UI polish decisions — 2026-09-27
+- Keep manual preparation with a compact explicit Chuẩn bị tệp button; no upload lifecycle/controller changes.
+- Use portal popovers for independent emoji/templates triggers and category navigation for extended tools. Preserve capability checks and recovery barriers.
+- Keep required destination/contact/reminder identifiers as clearly explained inputs; no fake searchable API.
+- Hide opaque receipt JSON/UUID presentation only; keep all query/recovery/retry controls accessible through explicit details.

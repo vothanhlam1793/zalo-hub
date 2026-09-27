@@ -1,0 +1,11 @@
+.composer-tools section:not([hidden]) { display: grid; gap: .75rem; }
+.composer-tools input, .composer-tools textarea, .composer-tools select { width: 100%; min-width: 0; min-height: 40px; border: 1px solid var(--border); border-radius: .625rem; padding: .5rem; background: var(--background); }
+.composer-tools button { min-height: 40px; min-width: 40px; border-radius: .625rem; padding: .5rem .75rem; }
+.composer-tools section button, .composer-tools details button { border: 1px solid var(--border); }
+.composer-tools button:hover { background: var(--accent); color: var(--accent-foreground); }
+.composer-tools button:disabled { opacity: .5; }
+.composer-tools :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.composer-tools { overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dialog-content"], [data-slot="dialog-overlay"] { animation: none !important; }
+}

@@ -1,4 +1,8 @@
 import type { UserSettings } from '@/types';
+import { api } from '@/api';
+import { chatSession } from '@/features/chat/model/chat-session';
+import { messagePreview } from '@/features/chat/model/message-preview';
+import type { WsConversationNotificationPayload } from '@/features/realtime/useWebSocket';
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   desktopNotification: true,
@@ -8,12 +12,12 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   showMessagePreview: true,
 };
 
-const STORAGE_KEY = 'zalohub_user_settings';
+const storageKey = () => `zalohub_user_settings:${chatSession.capture().userId}`;
 
 function loadStoredSettings(): UserSettings {
   if (typeof window === 'undefined') return { ...DEFAULT_USER_SETTINGS };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey());
     if (!raw) return { ...DEFAULT_USER_SETTINGS };
     const parsed = JSON.parse(raw);
     return {
@@ -28,15 +32,36 @@ function loadStoredSettings(): UserSettings {
   }
 }
 
-class NotificationService {
+export class NotificationService {
   private audioCtx: AudioContext | null = null;
   private settings: UserSettings = loadStoredSettings();
   private originalTitle = typeof document !== 'undefined' ? (document.title || 'ZaloHub') : 'ZaloHub';
   private flashInterval: any = null;
   private isWindowFocused = true;
   private listeners = new Set<(settings: UserSettings) => void>();
+  private seen = new Set<string>();
+  private revision = 0;
+  private loadGeneration = 0;
+  private saveTimer?: ReturnType<typeof setTimeout>;
+  private saveQueue: Promise<void> = Promise.resolve();
+  private pendingSave = false;
+  private desktops = new Map<Notification, ReturnType<typeof setTimeout>>();
 
   constructor() {
+    chatSession.subscribe(() => {
+      this.revision++;
+      this.loadGeneration++;
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+      this.saveQueue = Promise.resolve();
+      this.pendingSave = false;
+      this.seen.clear();
+      this.stopTabFlashing();
+      for (const [notification, timer] of this.desktops) { clearTimeout(timer); notification.close(); }
+      this.desktops.clear();
+      this.settings = loadStoredSettings();
+      this.notifyListeners();
+    });
     if (typeof window !== 'undefined') {
       this.isWindowFocused = document.hasFocus();
       window.addEventListener('focus', () => {
@@ -70,18 +95,80 @@ class NotificationService {
   }
 
   public updateSettings(newSettings: Partial<UserSettings>, saveToStorage = true) {
+    this.revision++;
     this.settings = { ...this.settings, ...newSettings };
+    // Remove any already visible private preview immediately when disabled.
+    if (!this.settings.showMessagePreview) {
+      this.stopTabFlashing();
+      for (const [notification, timer] of this.desktops) { clearTimeout(timer); notification.close(); }
+      this.desktops.clear();
+    }
     if (saveToStorage && typeof window !== 'undefined') {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.settings));
+        localStorage.setItem(storageKey(), JSON.stringify(this.settings));
       } catch {}
     }
     this.notifyListeners();
   }
 
+  public async loadSettings() {
+    const session = chatSession.capture();
+    if (!chatSession.valid(session) || this.pendingSave) return;
+    const generation = ++this.loadGeneration;
+    const revision = this.revision;
+    try {
+      const res = await api.getUserSettings();
+      if (chatSession.valid(session) && generation === this.loadGeneration && revision === this.revision
+        && res.ok && res.settings) this.updateSettings(res.settings);
+    } catch { /* local settings remain usable offline */ }
+  }
+
+  public saveSettings(patch: Partial<UserSettings>) {
+    const session = chatSession.capture();
+    if (!chatSession.valid(session)) return;
+    this.updateSettings(patch);
+    this.pendingSave = true;
+    const revision = this.revision;
+    const next = this.getSettings();
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      // Serialize writes so a slower older save cannot overwrite the latest.
+      this.saveQueue = this.saveQueue.then(async () => {
+        if (!chatSession.valid(session) || revision !== this.revision) return;
+        try { await api.updateUserSettings(next); } catch { /* retain local preference */ }
+        if (chatSession.valid(session) && revision === this.revision) this.pendingSave = false;
+      });
+    }, 400);
+  }
+
+  public notifyMessage(event: WsConversationNotificationPayload, context: {
+    activeAccountId: string; activeConversationId: string;
+    conversation?: { isMuted?: boolean; muteUntil?: number | null; title?: string; avatar?: string };
+    onClick?: () => void;
+  }) {
+    if (!chatSession.valid(chatSession.capture()) || !event.accountId || !event.conversationId || !event.messageId) return;
+    const key = JSON.stringify([event.accountId, event.conversationId, event.messageId]);
+    if (this.seen.has(key)) return;
+    this.seen.add(key);
+    if (this.seen.size > 10_000) this.seen.delete(this.seen.values().next().value!);
+    const conv = context.conversation;
+    if (event.isMuted && (event.muteUntil == null || event.muteUntil === -1 || event.muteUntil > Date.now())) return;
+    if (conv?.isMuted && (conv.muteUntil == null || conv.muteUntil === -1 || conv.muteUntil > Date.now())) return;
+    if (event.kind === 'reaction' || (event.conversationType === 'group' && !this.settings.notifyGroupMessages)) return;
+    if (context.activeAccountId === event.accountId && context.activeConversationId === event.conversationId && this.isFocused()) return;
+    this.playChime();
+    const title = this.settings.showMessagePreview ? event.senderName || conv?.title || 'Tin nhắn mới' : 'ZaloHub';
+    const body = messagePreview(event, this.settings);
+    const session = chatSession.capture();
+    this.showDesktopNotification(title, body, this.settings.showMessagePreview ? conv?.avatar : undefined,
+      () => { if (chatSession.valid(session)) context.onClick?.(); });
+    this.startTabFlashing(this.settings.showMessagePreview ? `${title}: ${body}` : body);
+  }
+
   public toggleSound(): boolean {
     const nextState = !this.settings.soundEnabled;
-    this.updateSettings({ soundEnabled: nextState });
+    this.saveSettings({ soundEnabled: nextState });
     return nextState;
   }
 
@@ -171,7 +258,7 @@ class NotificationService {
     if (Notification.permission !== 'granted') return;
 
     try {
-      const notif = new Notification(title, {
+      const notif = new Notification(this.settings.showMessagePreview ? title : 'ZaloHub', {
         body: this.settings.showMessagePreview ? body : 'Có tin nhắn mới',
         icon: icon || '/favicon.ico',
         silent: true, // We handle audio ourselves with fine volume control
@@ -191,7 +278,7 @@ class NotificationService {
       }
 
       // Auto close after 5 seconds
-      setTimeout(() => notif.close(), 5000);
+      this.desktops.set(notif, setTimeout(() => { notif.close(); this.desktops.delete(notif); }, 5000));
     } catch {
       // ignore
     }
@@ -205,7 +292,7 @@ class NotificationService {
     this.originalTitle = document.title;
 
     this.flashInterval = setInterval(() => {
-      document.title = isOriginal ? this.originalTitle : `🔔 ${message}`;
+      document.title = isOriginal ? this.originalTitle : `🔔 ${this.settings.showMessagePreview ? message : 'Tin nhắn mới'}`;
       isOriginal = !isOriginal;
     }, 1000);
   }

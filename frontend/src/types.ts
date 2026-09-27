@@ -1,4 +1,17 @@
-export type MessageKind = 'text' | 'image' | 'file' | 'video' | 'sticker' | 'reaction' | 'poll' | 'voice' | 'gif';
+export type MessageKind = 'text' | 'image' | 'file' | 'video' | 'sticker' | 'reaction' | 'poll' | 'voice' | 'gif' | 'call' | 'system' | 'location' | 'link' | 'card' | 'unknown';
+export interface MessagePresentation {
+  version: 1;
+  durationSeconds?: number;
+  url?: string;
+  thumbnailUrl?: string;
+  latitude?: number;
+  longitude?: number;
+  albumId?: string;
+  albumIndex?: number;
+  albumTotal?: number;
+  unavailable?: boolean;
+  stickerId?: number;
+}
 export type ConversationType = 'direct' | 'group';
 
 export interface MessageMention {
@@ -36,9 +49,12 @@ export interface Attachment {
   size?: number;
   width?: number;
   height?: number;
+  /** Milliseconds, matching the backend attachment contract. */
+  duration?: number;
 }
 
 export interface Message {
+  composerBatchId?: string;
   /** Browser identity survives HTTP/WS acknowledgement. Never a provider ID. */
   localId?: string;
   clientRequestId?: string;
@@ -63,6 +79,7 @@ export interface Message {
   senderAvatar?: string;
   providerMessageId?: string;
   imageUrl?: string; // legacy
+  presentation?: MessagePresentation;
   quote?: MessageQuote;
   mentions?: MessageMention[];
   reactions?: MessageReactionItem[];
@@ -255,12 +272,10 @@ export interface StorageStats {
 export interface SyncProgressPayload {
   type: 'ws_sync_progress';
   accountId: string;
-  step: 'connecting' | 'waiting_phone_confirm' | 'importing' | 'completed' | 'error';
+  step: 'connecting' | 'qr_ready' | 'waiting_phone_confirm' | 'receiving_chunks' | 'unpacking_db' | 'importing_postgres' | 'importing' | 'completed' | 'error';
   percent: number;
   current?: number;
   total?: number;
   message?: string;
   error?: string;
 }
-
-

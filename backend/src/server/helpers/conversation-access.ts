@@ -46,8 +46,7 @@ export async function getUserRoleContext(
 
     return { systemRole, accountRole, isBypass };
   } catch {
-    // Graceful fallback if mock knex in tests doesn't support specific query
-    return { systemRole: 'user', isBypass: true };
+    return { systemRole: 'user', isBypass: false };
   }
 }
 
@@ -100,8 +99,7 @@ export async function canUserAccessConversation(
     const convTagIds = (convTagRows || []).map((r: any) => String(r.tag_id));
     return convTagIds.some((id: string) => allowedTagIds.includes(id));
   } catch {
-    // If table does not exist or test environment mock, allow access
-    return true;
+    return false;
   }
 }
 
@@ -126,8 +124,8 @@ export async function filterConversationsForUser<T extends { id: string; isRestr
 
     // Fetch restricted IDs and tag permissions in parallel
     const [restrictedRows, userTagRows] = await Promise.all([
-      knex.raw('SELECT id FROM conversations WHERE account_id = ? AND is_restricted = true', [accountId]).catch(() => ({ rows: [] })),
-      knex.raw('SELECT tag_id FROM user_tag_permissions WHERE user_id = ? AND account_id = ?', [userId, accountId]).catch(() => ({ rows: [] })),
+      knex.raw('SELECT id FROM conversations WHERE account_id = ? AND is_restricted = true', [accountId]),
+      knex.raw('SELECT tag_id FROM user_tag_permissions WHERE user_id = ? AND account_id = ?', [userId, accountId]),
     ]);
 
     const restrictedSet = new Set<string>((restrictedRows.rows || []).map((r: any) => r.id));
@@ -143,7 +141,7 @@ export async function filterConversationsForUser<T extends { id: string; isRestr
         FROM conversation_tags ct
         JOIN conversations c ON c.id = ct.conversation_id
         WHERE c.account_id = ?
-      `, [accountId]).catch(() => ({ rows: [] }));
+      `, [accountId]);
 
       convToTagsMap = new Map();
       for (const r of (allConvTags || [])) {
@@ -181,7 +179,6 @@ export async function filterConversationsForUser<T extends { id: string; isRestr
       return false;
     });
   } catch {
-    // If anything fails or in mock test env, return original conversations
-    return conversations;
+    return [];
   }
 }

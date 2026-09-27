@@ -266,6 +266,10 @@ export class GoldStore {
     return this.conversationRepo.listConversationSummariesByAccount(accountId, options);
   }
 
+  async updateDirectConversationTitlesByFriends(accountId: string, friends: Array<{ userId: string; displayName?: string }>) {
+    return this.conversationRepo.updateDirectConversationTitlesByFriends(accountId, friends);
+  }
+
   async canonicalizeConversationData() {
     return this.conversationRepo.canonicalizeConversationDataForAccount(
       this.accountRepo.activeAccountId,

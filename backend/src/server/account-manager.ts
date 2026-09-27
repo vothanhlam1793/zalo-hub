@@ -8,6 +8,7 @@ import type { DifyBotExecutor } from './services/dify-bot-executor.js';
 export type AccountMessageEvent = {
   accountId: string;
   message: GoldConversationMessage;
+  event?: 'new';
 };
 
 export class AccountRuntimeManager {
@@ -179,9 +180,9 @@ export class AccountRuntimeManager {
     const startPromise = (async () => {
       const store = new GoldStore(this.knex);
       const runtime = new GoldRuntime(store, this.logger, { boundAccountId: normalizedAccountId });
-      runtime.onConversationMessage((message) => {
+      runtime.onConversationMessage((message, event) => {
         for (const listener of this.messageListeners) {
-          listener({ accountId: normalizedAccountId, message });
+          listener({ accountId: normalizedAccountId, message, event });
         }
       });
 

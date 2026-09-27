@@ -102,13 +102,25 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
       // DB policy and before/after-query expiry checks remain mandatory to send.
       if (!eligible() || !(await refreshPolicy(socket, state)) || !eligible()) return;
 
-      // Scoped check for conversation messages: verify user has permission on conversationId
-      if (payload.type === 'conversation_message') {
-        const msg = payload.message as GoldConversationMessage | undefined;
-        if (msg?.conversationId && state.userId) {
-          const allowed = await canUserAccessConversation(knex, state.userId, accountId, msg.conversationId).catch(() => false);
-          if (!allowed) return;
-        }
+      // Every conversation-scoped update (including mute/tags/notes) uses the
+      // same permission boundary. Detail traffic remains subscription-filtered.
+      const conversationId = payload.type === 'conversation_message'
+        ? (payload.message as GoldConversationMessage | undefined)?.conversationId
+        : payload.conversationId;
+      if (conversationId !== undefined || (typeof payload.type === 'string'
+        && payload.type.startsWith('conversation_') && payload.type !== 'conversation_summaries')) {
+        if (typeof conversationId !== 'string' || !conversationId || !state.userId) return;
+        if (!(await canUserAccessConversation(knex, state.userId, accountId, conversationId))) return;
+        if (!eligible() || Date.now() >= state.expiresAt) return;
+      }
+
+      if (payload.type === 'conversation_notification') {
+        if (typeof conversationId !== 'string' || !conversationId) return;
+        // Summaries are debounced and may not yet exist in a browser cache.
+        const { rows } = await knex.raw('SELECT is_muted, mute_until FROM conversations WHERE account_id = ? AND id = ?', [accountId, conversationId]);
+        if (!eligible() || Date.now() >= state.expiresAt) return;
+        send(socket, { ...payload, isMuted: Boolean(rows[0]?.is_muted), muteUntil: rows[0]?.mute_until == null ? null : Number(rows[0].mute_until) });
+        return;
       }
 
       // Filter conversation summaries according to user's permissions
@@ -155,9 +167,25 @@ export function createWsHandler(server: Server, accountManager: AccountRuntimeMa
     summaryDebounceTimers.set(accountId, timer);
   }
 
-  const removeMessageListener = accountManager.onConversationMessage(({ accountId, message }) => {
+  const notified = new Set<string>();
+  const removeMessageListener = accountManager.onConversationMessage(({ accountId, message, event }) => {
     // Deliver incoming message frame immediately to connected clients
     broadcastConversationMessage(accountId, message);
+
+    // Only the append path marks new messages. Reaction/mirror updates must
+    // never alert, even if this process has not seen the original message.
+    if (event === 'new' && message.direction === 'incoming' && message.kind !== 'reaction' && message.id) {
+      const key = JSON.stringify([accountId, message.conversationId, message.id]);
+      if (!notified.has(key)) {
+        notified.add(key);
+        if (notified.size > 10_000) notified.delete(notified.values().next().value!);
+        broadcast({
+          type: 'conversation_notification', accountId, conversationId: message.conversationId,
+          messageId: message.id, conversationType: message.conversationType,
+          kind: message.kind, text: message.text, senderName: message.senderName,
+        });
+      }
+    }
 
     // Compute and broadcast updated summaries in background asynchronously (debounced)
     scheduleAccountSummaryBroadcast(accountId);

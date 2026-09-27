@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { projectRichMessage, providerMessageData } from '../message-projection.js';
 import * as ZaloApi from 'zalo-api-final';
 import { GoldLogger } from '../logger.js';
 import { GoldMediaStore } from '../media-store.js';
@@ -8,7 +9,7 @@ import { GoldListener } from './listener.js';
 import { GoldSender } from './sender.js';
 import { GoldSync } from './sync.js';
 import { renderQrToTerminal, parseSendArgs } from './qr.js';
-import { mergeAttachmentMetadata, localMediaUrlNeedsRepair, normalizeMessageKind, normalizeMessageText, normalizeAttachments, normalizeImageUrl, normalizeMessageQuote, normalizeMessageReactions } from './normalizer.js';
+import { localMediaUrlNeedsRepair, normalizeMessageQuote, normalizeMessageReactions } from './normalizer.js';
 import type {
   GoldAttachment,
   GoldConversationMessage,
@@ -32,6 +33,8 @@ export * from './normalizer.js';
 export * from './types.js';
 
 export class GoldRuntime {
+  /** Server-only SDK access for the scoped extended-tools adapter. Never serialize this object. */
+  getExtendedToolsApi() { return this.state.session?.api; }
   private readonly auth: GoldSessionAuth;
   private readonly listener: GoldListener;
   private readonly sender: GoldSender;
@@ -257,11 +260,11 @@ export class GoldRuntime {
 
     const attachments = await Promise.all(message.attachments.map((attachment) => this.persistAttachmentLocally(message.id, attachment)));
     const imageAttachment = attachments.find((attachment) => attachment.type === 'image' && attachment.url);
-    const updated: GoldConversationMessage = {
+    const updated: GoldConversationMessage = projectRichMessage({
       ...message,
       attachments,
       imageUrl: imageAttachment?.url ?? message.imageUrl,
-    };
+    });
 
     // Update DB row and memory cache with mirrored local URLs
     await this.state.store.appendConversationMessageByAccount(this.state.boundAccountId, updated);
@@ -276,46 +279,16 @@ export class GoldRuntime {
   }
 
   private repairMessageFromRawPayload(message: GoldConversationMessage) {
-    if (!message.rawMessageJson) {
-      return message;
-    }
-
-    try {
-      const raw = JSON.parse(message.rawMessageJson) as Record<string, unknown>;
-      const normalizedKind = normalizeMessageKind(raw);
-      const normalizedText = normalizeMessageText(raw);
-      const normalizedAttachments = normalizeAttachments(raw);
-      const normalizedImageUrl = normalizeImageUrl(raw);
-      const normalizedQuote = normalizeMessageQuote(raw);
-      const normalizedReactions = normalizeMessageReactions(raw);
-
-      if (normalizedAttachments.length === 0 && normalizedKind === 'text' && !normalizedImageUrl && !normalizedQuote && !normalizedReactions) {
-        return message;
-      }
-
-      const nextAttachments = normalizedAttachments.length > 0
-        ? normalizedAttachments.map((attachment, index) => mergeAttachmentMetadata(message.attachments[index], attachment, normalizedKind))
-        : message.attachments;
-
-      return {
-        ...message,
-        text: normalizedText || message.text,
-        kind: normalizedKind !== 'text' || nextAttachments.length > 0 ? normalizedKind : message.kind,
-        attachments: nextAttachments,
-        imageUrl: normalizedImageUrl ?? nextAttachments.find((attachment) => attachment.type === 'image')?.url ?? message.imageUrl,
-        quote: normalizedQuote ?? message.quote,
-        reactions: normalizedReactions ?? message.reactions,
-      } satisfies GoldConversationMessage;
-    } catch (error) {
-      this.state.logger.error('repair_message_from_raw_payload_failed', {
-        messageId: message.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return message;
-    }
+    const raw = providerMessageData(message.rawMessageJson);
+    return {
+      ...projectRichMessage(message),
+      quote: normalizeMessageQuote(raw) ?? message.quote,
+      reactions: normalizeMessageReactions(raw) ?? message.reactions,
+    } satisfies GoldConversationMessage;
   }
 
-  private async appendConversationMessage(message: GoldConversationMessage) {
+  private async appendConversationMessage(message: GoldConversationMessage, notifyNew = true) {
+    message = projectRichMessage(message);
     const key = this.buildSeenKey(message);
     if (this.state.seenMessageKeys.has(key)) {
       return false;
@@ -342,7 +315,7 @@ export class GoldRuntime {
     // Fast-path: Notify live WebSocket subscribers first before awaiting Postgres persistence
     for (const listener of this.state.conversationListeners) {
       try {
-        listener(message);
+        listener(message, notifyNew ? 'new' : undefined);
       } catch (listenerError) {
         this.logger.error('conversation_listener_dispatch_failed', { error: listenerError });
       }
@@ -555,6 +528,7 @@ export class GoldRuntime {
   }
 
   async sendAttachment(conversationId: string, options: {
+    mentions?: import('../types.js').GoldMessageMention[]; quoteMessageId?: string;
     fileBuffer: Buffer;
     fileName: string;
     mimeType: string;
@@ -630,7 +604,7 @@ export class GoldRuntime {
     return parseSendArgs(argv);
   }
 
-  onConversationMessage(listener: (message: GoldConversationMessage) => void) {
+  onConversationMessage(listener: (message: GoldConversationMessage, event?: 'new') => void) {
     this.state.conversationListeners.add(listener);
     return () => {
       this.state.conversationListeners.delete(listener);

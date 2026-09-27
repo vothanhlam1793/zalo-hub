@@ -24,7 +24,20 @@ async function fixture() {
   const policyReads = new Map<string, number>();
   const policyGates = new Map<string, { wait: Promise<void>; started: () => void }>();
   const releasePolicyGates = new Set<() => void>();
+  const restricted = new Set<string>();
+  let failConversationQuery = false;
   const knex = { raw: async (sql: string, bindings: string[]) => {
+    if (!sql.includes('LEFT JOIN') && !sql.includes('WITH')) {
+      if (sql === 'SELECT role FROM system_users WHERE id = ?') {
+        if (failConversationQuery) throw new Error('private conversation DB failure');
+        return { rows: [{ role: users.get(bindings[0])?.role }] };
+      }
+      if (sql.startsWith('SELECT role FROM zalo_account_memberships')) return { rows: users.get(bindings[0])?.accounts.includes(bindings[1]) ? [{ role: 'editor' }] : [] };
+      if (sql.startsWith('SELECT is_restricted')) return { rows: [{ is_restricted: restricted.has(`${bindings[0]}:${bindings[1]}`) }] };
+      if (sql.startsWith('SELECT is_muted')) return { rows: [{ is_muted: false, mute_until: null }] };
+      if (sql.startsWith('SELECT id FROM conversations')) return { rows: [...restricted].filter((key) => key.startsWith(`${bindings[0]}:`)).map((key) => ({ id: key.slice(bindings[0].length + 1) })) };
+      if (sql.startsWith('SELECT tag_id')) return { rows: [] };
+    }
     assert.match(sql, /FROM system_users/);
     assert.match(sql, /zalo_account_memberships/);
     assert.equal(bindings.length, 1);
@@ -90,7 +103,12 @@ async function fixture() {
     };
   }
   return {
-    ...handler, users, client, backendEvents, policyReads,
+    ...handler, users, client, backendEvents, policyReads, restricted,
+    failConversationQuery() { failConversationQuery = true; },
+    incoming(accountId: string, conversationId: string, id = 'new', event?: 'new') {
+      const message = { id, conversationId, conversationType: 'direct', direction: 'incoming', kind: 'voice', text: 'Canonical voice', rawMessageJson: 'PRIVATE', attachments: [{ url: 'PRIVATE' }] } as unknown as GoldConversationMessage;
+      for (const listener of listeners) listener({ accountId, message, event });
+    },
     pauseNextPolicyRead(userId: string) {
       assert.ok(!policyGates.has(userId), 'Only one pending gate per user');
       let release!: () => void;
@@ -129,6 +147,41 @@ test('anonymous sockets receive connected/auth error only; no global data escape
   c.send({ type: 'subscribe', accountId: 'A', conversationId: 'direct:1' });
   assert.equal(await c.closed, 4401);
   assert.ok(c.events.every((e) => ['connected', 'error'].includes(e.type)));
+});
+
+test('new-only notifications fan out without detail subscriptions, dedup and enforce conversation permissions', async (t) => {
+  const f = await fixture(); t.after(() => f.close());
+  const a = await f.client(); const b = await f.client();
+  await a.auth('alice'); await b.auth('bob');
+  a.send({ type: 'subscribe', accountId: 'A', conversationId: 'direct:1' });
+  await a.waitFor((e) => e.type === 'subscribed');
+  f.restricted.add('A:direct:private');
+  f.incoming('A', 'direct:1', 'active', 'new');
+  f.incoming('A', 'direct:2', 'other', 'new');
+  f.incoming('A', 'direct:2', 'other', 'new');
+  f.incoming('C', 'direct:2', 'other', 'new');
+  f.incoming('A', 'direct:private', 'secret', 'new');
+  f.incoming('A', 'direct:2', 'old-reaction-update');
+  for (const type of ['conversation_mute_updated', 'conversation_notes_updated', 'conversation_tags_updated', 'conversation_restriction_updated']) {
+    f.broadcast({ type, accountId: 'A', conversationId: 'direct:private', private: true });
+    f.broadcast({ type, accountId: 'A', conversationId: 'direct:2', allowed: true });
+  }
+  f.broadcast({ type: 'barrier', accountId: 'A' });
+  await a.waitFor((e) => e.type === 'barrier');
+  const notifications = a.events.filter((e) => e.type === 'conversation_notification');
+  assert.deepEqual(notifications.map((e) => [e.accountId, e.messageId]), [['A', 'active'], ['A', 'other'], ['C', 'other']]);
+  assert.equal(notifications[0].kind, 'voice');
+  assert.equal(notifications[0].text, 'Canonical voice');
+  assert.ok(!JSON.stringify(notifications).includes('PRIVATE'));
+  assert.equal(a.events.filter((e) => e.type === 'conversation_message').length, 1);
+  assert.equal(a.events.filter((e) => e.allowed).length, 4);
+  assert.ok(!a.events.some((e) => e.private));
+  assert.ok(!b.events.some((e) => e.type === 'conversation_notification'));
+  f.failConversationQuery();
+  f.incoming('A', 'direct:2', 'failed-authorization', 'new');
+  f.broadcast({ type: 'barrier2', accountId: 'A' });
+  await a.waitFor((e) => e.type === 'barrier2');
+  assert.ok(!a.events.some((e) => e.messageId === 'failed-authorization'));
 });
 
 test('two users: initial status, summaries, unknown events and messages are scoped', { timeout: 10_000 }, async (t) => {

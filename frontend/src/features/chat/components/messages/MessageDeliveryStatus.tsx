@@ -13,6 +13,7 @@ export function MessageDeliveryIndicator({ message, ...actions }: { message: Mes
   const [showErrorPopover, setShowErrorPopover] = useState(false);
   const delivery = message.delivery;
   if (!delivery) return null;
+  if (message.composerBatchId && delivery !== 'sent') return <span className="text-[10px]" title="Dùng bảng trạng thái đợt gửi trong khung soạn tin để kiểm tra/tiếp tục.">{delivery === 'sending' ? 'Đang gửi qua Zalo' : delivery === 'queued' ? 'Chờ tiếp tục' : delivery === 'unknown' ? 'Chưa rõ kết quả' : 'Tệp lỗi · xem đợt gửi'}</span>;
 
   // 1. Sending / Queued: Tròn xoay nhẹ, bấm vào để kiểm tra hoặc gửi lại/hủy nếu bị treo
   if (delivery === 'queued' || delivery === 'sending') {

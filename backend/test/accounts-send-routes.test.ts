@@ -17,6 +17,13 @@ async function harness(t: TestContext) {
   const db = ((table: string) => ({ where() { return this; }, select() { return this; },
     async first() { return { role: table === 'system_users' ? systemRole : role }; },
   })) as unknown as Knex;
+  db.raw = (async (sql: string) => {
+    if (sql.startsWith('SELECT role FROM system_users')) return { rows: [{ role: systemRole }] };
+    if (sql.startsWith('SELECT role FROM zalo_account_memberships')) return { rows: role === 'none' ? [] : [{ role }] };
+    if (sql.startsWith('SELECT is_restricted')) return { rows: [{ is_restricted: false }] };
+    if (sql.startsWith('SELECT tag_id')) return { rows: [] };
+    throw new Error(`Unexpected authorization SQL: ${sql}`);
+  }) as Knex['raw'];
   const repo = new FakeSendRepo(); const service = new SendRequestService(repo, logger);
   const manager = { ensureRuntime: async () => { runtimeCalls++; throw new Error('reconnect must not be awaited'); },
     getRegistryStore: () => ({ listConversationMessagesByAccount: async (account: string, conversation: string) => [{

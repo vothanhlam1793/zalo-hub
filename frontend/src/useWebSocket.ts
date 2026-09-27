@@ -1,1 +1,1 @@
-export { useWebSocket, type WsConversationMuteUpdatedPayload } from './features/realtime/useWebSocket';
+export { useWebSocket, type WsConversationMuteUpdatedPayload, type WsConversationNotificationPayload } from './features/realtime/useWebSocket';

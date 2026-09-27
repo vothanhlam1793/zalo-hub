@@ -11,6 +11,7 @@ import {
   toMessageKind,
 } from './helpers.js';
 import type { RawAttachmentRow, RawMessageRow } from './helpers.js';
+import { projectRichMessage, providerMessageData } from '../message-projection.js';
 
 function deduplicateMessagesByPreferredPayload(messages: GoldConversationMessage[]): GoldConversationMessage[] {
   const seen = new Map<string, GoldConversationMessage>();
@@ -189,7 +190,7 @@ export class GoldMessageRepo {
       }
     }
 
-    return rows.map((row) => {
+    const rowsEnriched = rows.map((row) => {
       const canonical = canonicalizeStoredMessage(row, attachmentsByMessageId.get(row.id) ?? []);
       let raw: Record<string, unknown> | undefined;
       if (row.raw_message_json) {
@@ -216,6 +217,7 @@ export class GoldMessageRepo {
         threadId: row.thread_id ?? row.friend_id,
         conversationType: row.conversation_type ?? 'direct',
         text: canonical.text,
+        presentation: canonical.presentation,
         kind: canonical.kind,
         attachments: canonical.attachments,
         senderId: row.sender_id ?? undefined,
@@ -223,19 +225,47 @@ export class GoldMessageRepo {
         senderAvatar: row.sender_avatar ?? undefined,
         providerMessageId: row.provider_message_id ?? undefined,
         imageUrl: canonical.imageUrl,
-        quote: raw ? normalizeMessageQuote(raw) : undefined,
-        mentions: raw ? normalizeMessageMentions(raw) : undefined,
+        quote: raw ? normalizeMessageQuote(providerMessageData(raw)) : undefined,
+        mentions: raw ? normalizeMessageMentions(providerMessageData(raw)) : undefined,
         reactions: mergeReactions(
-          raw ? normalizeMessageReactions(raw) : undefined,
+          raw ? normalizeMessageReactions(providerMessageData(raw)) : undefined,
           row.reactions_json ? tryParseReactions(row.reactions_json) : undefined,
         ),
-        rawMessageJson: row.raw_message_json ?? undefined,
+        rawMessageJson: typeof row.raw_message_json === 'string' ? row.raw_message_json : row.raw_message_json ? JSON.stringify(row.raw_message_json) : undefined,
         cliMsgId,
         direction: row.direction,
         isSelf: Boolean(row.is_self),
         timestamp: row.timestamp,
       } satisfies GoldConversationMessage;
     });
+
+    // Enrich stickers with cached URLs if missing
+    const stickerMessages = rowsEnriched.filter(m => (m.kind === 'sticker' || m.presentation?.stickerId) && !m.presentation?.url && !m.attachments[0]?.url);
+    if (stickerMessages.length > 0) {
+      const stickerIds = stickerMessages.map(m => m.presentation?.stickerId).filter((id): id is number => typeof id === 'number');
+      if (stickerIds.length > 0) {
+        try {
+          const cachedStickers = await this.knex('sticker_cache').whereIn('sticker_id', stickerIds);
+          const cacheMap = new Map(cachedStickers.map((s: any) => [s.sticker_id, s.local_url || s.remote_url]));
+          for (const msg of stickerMessages) {
+            if (msg.presentation?.stickerId) {
+              const url = cacheMap.get(msg.presentation.stickerId);
+              if (url) {
+                if (!msg.presentation) msg.presentation = { version: 1 };
+                msg.presentation.url = url;
+                msg.presentation.unavailable = false;
+                if (msg.attachments[0]) msg.attachments[0].url = url;
+                else msg.attachments.push({ id: `stk-${msg.presentation.stickerId}`, type: 'sticker', url, thumbnailUrl: url });
+              }
+            }
+          }
+        } catch {
+          // Table might not exist or db query failed
+        }
+      }
+    }
+
+    return rowsEnriched;
   }
 
   async hasMessageByProviderId(activeAccountId: string | undefined, conversationId: string, providerMessageId: string) {
@@ -286,6 +316,7 @@ export class GoldMessageRepo {
     const canonicalConversationId = `${canonicalType}:${parsedConversation.threadId}`;
 
     const sortedMessages = [...messages]
+      .map(message => projectRichMessage(message))
       .map((message) => ({
         ...message,
         threadId: message.threadId || parsedConversation.threadId,
@@ -439,6 +470,7 @@ export class GoldMessageRepo {
     upsertConversation: (accountId: string, conversationId: string, messages: GoldConversationMessage[], trx?: Knex.Transaction) => Promise<void>,
   ) {
     const resolvedAccountId = this.requireAccountId(activeAccountId);
+    message = projectRichMessage(message);
     const parsedConversation = parseConversationId(message.conversationId);
     const canonicalType = await this.resolveCanonicalConversationType(resolvedAccountId, parsedConversation.threadId, parsedConversation.type);
     const canonicalConversationId = `${canonicalType}:${parsedConversation.threadId}`;
@@ -539,11 +571,27 @@ export class GoldMessageRepo {
         ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         ON CONFLICT(account_id, friend_id) DO UPDATE SET
           id = EXCLUDED.id,
-          last_message_text = EXCLUDED.last_message_text,
-          last_message_kind = EXCLUDED.last_message_kind,
-          last_direction = EXCLUDED.last_direction,
-          last_message_sender_name = EXCLUDED.last_message_sender_name,
-          last_message_timestamp = EXCLUDED.last_message_timestamp,
+          last_message_text = CASE
+            WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+            THEN EXCLUDED.last_message_text
+            ELSE conversations.last_message_text
+          END,
+          last_message_kind = CASE
+            WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+            THEN EXCLUDED.last_message_kind
+            ELSE conversations.last_message_kind
+          END,
+          last_direction = CASE
+            WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+            THEN EXCLUDED.last_direction
+            ELSE conversations.last_direction
+          END,
+          last_message_sender_name = CASE
+            WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+            THEN EXCLUDED.last_message_sender_name
+            ELSE conversations.last_message_sender_name
+          END,
+          last_message_timestamp = GREATEST(conversations.last_message_timestamp, EXCLUDED.last_message_timestamp),
           message_count = conversations.message_count + 1,
           updated_at = EXCLUDED.updated_at
       `, [
@@ -683,6 +731,7 @@ export class GoldMessageRepo {
         threadId: row.thread_id ?? row.friend_id,
         conversationType: row.conversation_type ?? 'direct',
         text: canonical.text,
+        presentation: canonical.presentation,
         kind: canonical.kind,
         attachments: canonical.attachments,
         direction: row.direction,
@@ -692,7 +741,7 @@ export class GoldMessageRepo {
         senderName: row.sender_name ?? undefined,
         providerMessageId: row.provider_message_id ?? undefined,
         imageUrl: canonical.imageUrl,
-        rawMessageJson: row.raw_message_json ?? undefined,
+        rawMessageJson: typeof row.raw_message_json === 'string' ? row.raw_message_json : row.raw_message_json ? JSON.stringify(row.raw_message_json) : undefined,
         cliMsgId: undefined as string | undefined,
         quote: undefined,
         reactions: row.reactions_json ? tryParseReactions(row.reactions_json) : undefined,
@@ -758,6 +807,7 @@ export class GoldMessageRepo {
       threadId: row.thread_id ?? row.friend_id,
       conversationType: row.conversation_type ?? 'direct',
       text: canonical.text,
+      presentation: canonical.presentation,
       kind: canonical.kind,
       attachments: canonical.attachments,
       direction: row.direction,
@@ -767,13 +817,13 @@ export class GoldMessageRepo {
       senderName: row.sender_name ?? undefined,
       providerMessageId: row.provider_message_id ?? undefined,
       imageUrl: canonical.imageUrl,
-      quote: raw ? normalizeMessageQuote(raw) : undefined,
-      mentions: raw ? normalizeMessageMentions(raw) : undefined,
+      quote: raw ? normalizeMessageQuote(providerMessageData(raw)) : undefined,
+      mentions: raw ? normalizeMessageMentions(providerMessageData(raw)) : undefined,
       reactions: mergeReactions(
-        raw ? normalizeMessageReactions(raw) : undefined,
+        raw ? normalizeMessageReactions(providerMessageData(raw)) : undefined,
         row.reactions_json ? tryParseReactions(row.reactions_json) : undefined,
       ),
-      rawMessageJson: row.raw_message_json ?? undefined,
+      rawMessageJson: typeof row.raw_message_json === 'string' ? row.raw_message_json : row.raw_message_json ? JSON.stringify(row.raw_message_json) : undefined,
       cliMsgId: raw?.cliMsgId ? String(raw.cliMsgId) : undefined,
     } satisfies GoldConversationMessage;
   }

@@ -1,5 +1,8 @@
 # Brief
 
+## Active approval — 2026-09-27
+User approved implementation of the reviewed rich-message upgrade on baseline 2ea9921: PC/realtime normalization, historical projection, media/event presentation and notification compatibility. See gold_2_sales_chat/sprint_2/upgrade-plan.md. Preserve account/conversation permissions, drafts and pending sends. No commit or production data rewrite is implied.
+
 ## Current Initiative — 2026-09-22
 
 **The active goal is Sales Chat Readiness in the existing monolith.** The independent-service brief below is retained as historical context, not current execution scope.

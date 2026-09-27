@@ -53,7 +53,7 @@ export type ListenerState = {
   needsRelogin: boolean;
 };
 
-export type ConversationListener = (message: GoldConversationMessage) => void;
+export type ConversationListener = (message: GoldConversationMessage, event?: 'new') => void;
 
 export type HistorySyncState = {
   conversationId: string;

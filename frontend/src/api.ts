@@ -40,7 +40,7 @@ async function req<T>(url: string, options: RequestInit = {}, identity: RequestI
   return body as T;
 }
 
-async function upload(url: string, formData: FormData, signal?: AbortSignal, identity = chatSession.capture()): Promise<SendResponse> {
+async function upload<T = SendResponse>(url: string, formData: FormData, signal?: AbortSignal, identity = chatSession.capture()): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
     headers: identityHeaders(identity),
@@ -51,6 +51,14 @@ async function upload(url: string, formData: FormData, signal?: AbortSignal, ide
   assertIdentity(identity);
   if (!res.ok) throw new ApiError(body.error ?? `HTTP ${res.status}`, res.status, body.receipt, body.code);
   return body;
+}
+
+/** Composer calls share the same auth/session boundary as existing sends. */
+export function composerRequest<T>(account: string, conversation: string, path: string, options: RequestInit = {}, identity = chatSession.capture()): Promise<T> {
+  const url = `/api/accounts/${encodeURIComponent(account)}/composer${path}${path.includes('?') ? '&' : '?'}conversationId=${encodeURIComponent(conversation)}`;
+  return options.body instanceof FormData
+    ? upload<T>(url, options.body, options.signal || undefined, identity)
+    : req<T>(url, options, identity);
 }
 
 export const api = {
@@ -82,17 +90,34 @@ export const api = {
   accountContacts: (accountId: string, refresh = false) =>
     req<{ contacts: Contact[] }>(`/api/accounts/${encodeURIComponent(accountId)}/contacts${refresh ? '?refresh=1' : ''}`),
 
+  accountSyncContacts: (accountId: string) =>
+    req<{ ok: boolean; count: number; aliasCount: number; message: string }>(`/api/accounts/${encodeURIComponent(accountId)}/sync-contacts`, {
+      method: 'POST',
+    }),
+
   groups: (refresh = false) =>
     req<{ groups: Group[] }>(`/api/groups${refresh ? '?refresh=1' : ''}`),
 
   accountGroups: (accountId: string, refresh = false) =>
     req<{ groups: Group[] }>(`/api/accounts/${encodeURIComponent(accountId)}/groups${refresh ? '?refresh=1' : ''}`),
 
-  conversations: () =>
-    req<{ conversations: ConversationSummary[] }>('/api/conversations'),
+  conversations: (options?: { limit?: number; offset?: number; q?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+    if (options?.q) params.set('q', options.q);
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return req<{ conversations: ConversationSummary[]; count: number; hasMore?: boolean }>(`/api/conversations${suffix}`);
+  },
 
-  accountConversations: (accountId: string) =>
-    req<{ conversations: ConversationSummary[] }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations`),
+  accountConversations: (accountId: string, options?: { limit?: number; offset?: number; q?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+    if (options?.q) params.set('q', options.q);
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return req<{ conversations: ConversationSummary[]; count: number; hasMore?: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations${suffix}`);
+  },
 
   messages: (conversationId: string, options: { since?: string; before?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();

@@ -1,16 +1,16 @@
-import React, { memo } from 'react';
-import { formatSize, formatTime, getFileIcon, getInitial, isImageAttachment, isVideoAttachment } from '@/utils';
-import type { Contact, Message, MessageReactionOption } from '@/types';
+import React, { memo, useState } from 'react';
+import { formatTime, getInitial } from '@/utils';
+import type { Message, MessageMention, MessageReactionOption } from '@/types';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { MessageDeliveryStatus, type DeliveryActions } from './messages/MessageDeliveryStatus';
+import { MessageMedia } from './messages/MessageMedia';
+import { RichMessageContent } from './messages/RichMessageContent';
+import { messageCaption, messagePreview } from '../model/message-preview';
 
 const REACTION_OPTIONS: MessageReactionOption[] = [
-  { emoji: '❤️', icon: '/-heart' },
-  { emoji: '👍', icon: '/-strong' },
-  { emoji: '😆', icon: ':>' },
-  { emoji: '😮', icon: ':o' },
-  { emoji: '😢', icon: ':-((' },
-  { emoji: '😡', icon: ':-h' },
+  { emoji: '❤️', icon: '/-heart' }, { emoji: '👍', icon: '/-strong' },
+  { emoji: '😆', icon: ':>' }, { emoji: '😮', icon: ':o' },
+  { emoji: '😢', icon: ':-((' }, { emoji: '😡', icon: ':-h' },
 ];
 
 export interface MessageGroupItem {
@@ -28,297 +28,78 @@ interface MessageBubbleProps extends DeliveryActions {
   senderAvatar?: string;
   onReact?: (message: Message, reaction: MessageReactionOption) => void;
   onReply?: (message: Message) => void;
-  onOpenLightbox?: (messageId: string) => void;
+  onOpenLightbox?: (attachmentKey: string) => void;
 }
 
-function renderMessageText(text: string, mentions?: import('@/types').MessageMention[]) {
-  if (!text) return null;
-  if (mentions && mentions.length > 0) {
-    const sorted = [...mentions].sort((a, b) => a.pos - b.pos);
-    const elements: React.ReactNode[] = [];
-    let lastIndex = 0;
-    for (let i = 0; i < sorted.length; i++) {
-      const m = sorted[i];
-      if (m.pos > lastIndex) {
-        elements.push(text.slice(lastIndex, m.pos));
-      }
-      const mentionText = text.slice(m.pos, m.pos + m.len);
-      elements.push(
-        <span key={i} className="font-semibold text-blue-500 dark:text-blue-400 bg-blue-500/10 px-1 py-0.5 rounded">
-          {mentionText}
-        </span>
-      );
-      lastIndex = m.pos + m.len;
-    }
-    if (lastIndex < text.length) {
-      elements.push(text.slice(lastIndex));
-    }
-    return elements;
+export function renderMessageText(text: string, mentions?: MessageMention[]) {
+  if (!mentions?.length) return text;
+  const result: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const mention of [...mentions].sort((a, b) => a.pos - b.pos)) {
+    if (!Number.isInteger(mention.pos) || !Number.isInteger(mention.len) || mention.pos < cursor || mention.len <= 0 || mention.pos + mention.len > text.length) continue;
+    result.push(text.slice(cursor, mention.pos));
+    result.push(<span key={`${mention.pos}:${mention.uid}`} className="font-semibold text-blue-500 bg-blue-500/10 rounded px-1">{text.slice(mention.pos, mention.pos + mention.len)}</span>);
+    cursor = mention.pos + mention.len;
   }
-
-  // Fallback regex detection for @Name or @All
-  const mentionRegex = /(@[A-Za-z0-9_\u00C0-\u1EF9]+(?:\s+[A-Za-z0-9_\u00C0-\u1EF9]+)*|@All)/g;
-  const parts = text.split(mentionRegex);
-  if (parts.length === 1) return text;
-
-  return parts.map((part, i) => {
-    if (part.startsWith('@')) {
-      return (
-        <span key={i} className="font-semibold text-blue-500 dark:text-blue-400 bg-blue-500/10 px-1 py-0.5 rounded">
-          {part}
-        </span>
-      );
-    }
-    return part;
-  });
+  result.push(text.slice(cursor));
+  return result;
 }
 
 export const MessageBubble = memo(function MessageBubble({
-  msg,
-  isGroup,
-  isFirstInGroup = true,
-  isLastInGroup = true,
-  senderAvatar,
-  onReact,
-  onReply,
-  onOpenLightbox,
-  onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
+  msg, isGroup, isFirstInGroup = true, isLastInGroup = true, senderAvatar,
+  onReact, onReply, onOpenLightbox, onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
 }: MessageBubbleProps) {
-  const dir = msg.direction;
-  const isOutgoing = dir === 'outgoing' || msg.isSelf;
-  const att = msg.attachments?.[0];
-  const imageUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
-  const fallbackFileLabel = att?.fileName ?? msg.text ?? (msg.kind === 'video' ? 'Video' : 'File');
-  const fileIcon = getFileIcon(msg, att?.fileName, att?.mimeType);
-  const hasAttachmentUrl = Boolean(att?.url);
-  const shouldRenderImage = Boolean(imageUrl && isImageAttachment(msg, att?.fileName, att?.mimeType));
-  const shouldRenderVideo = Boolean(att?.url && isVideoAttachment(msg, att?.fileName, att?.mimeType));
-  const shouldRenderFile = Boolean(att && !shouldRenderImage && !shouldRenderVideo);
-  const isSticker = msg.kind === 'sticker';
-  const quoteLabel = msg.quote?.senderName ?? msg.quote?.senderId ?? 'Tin nhắn gốc';
-  const quoteText = msg.quote?.text?.trim() || (msg.quote?.kind ? `[${msg.quote.kind}]` : 'Tin nhắn đã trả lời');
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const receivedReactions = (msg.reactions ?? []).filter(reaction => Number.isFinite(reaction.count) && reaction.count > 0);
+  const isOutgoing = msg.direction === 'outgoing' || msg.isSelf;
+  const compact = msg.kind === 'system' || msg.kind === 'reaction';
+  const rich = ['call', 'system', 'reaction', 'poll', 'unknown', 'location', 'link', 'card'].includes(msg.kind);
+  const caption = messageCaption(msg);
   const canReact = Boolean(onReact && msg.providerMessageId && (!msg.delivery || msg.delivery === 'sent') && msg.kind !== 'reaction');
-  const delivery = <MessageDeliveryStatus message={msg} onRetryMessage={onRetryMessage} onQueryMessage={onQueryMessage} onCancelMessage={onCancelMessage} onRestoreDraft={onRestoreDraft} />;
-  const defaultReaction = REACTION_OPTIONS[1];
-
-  const actionDock = (canReact || onReply) ? (
-    <div className={`pointer-events-none absolute top-full z-10 mt-0.5 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${isOutgoing ? 'right-0 justify-end' : 'left-0 justify-start'}`}>
-      {onReply && (
-        <button
-          type="button"
-          className="h-6 px-1.5 rounded-full text-[11px] bg-[rgba(8,12,18,0.7)] text-[rgba(255,255,255,0.7)] hover:text-white hover:bg-black/90 flex items-center gap-1 transition shadow-xs border border-white/10"
-          onClick={() => onReply(msg)}
-          title="Trả lời tin nhắn này"
-        >
-          <span>↩️</span>
-          <span className="text-[10px] hidden sm:inline">Trả lời</span>
-        </button>
-      )}
-      {canReact && (
-        <div className="group/reaction relative flex items-center">
-          <button
-            type="button"
-            className="h-6 w-6 rounded-full text-[13px] text-[rgba(255,255,255,0.20)] transition hover:text-[rgba(255,255,255,0.55)] hover:bg-white/5 focus-visible:text-[rgba(255,255,255,0.55)] focus-visible:outline-none"
-            onClick={() => onReact?.(msg, defaultReaction)}
-            title="Thả thích"
-          >
-            👍
-          </button>
-          <div className={`pointer-events-none absolute top-1/2 -translate-y-1/2 opacity-0 transition-all duration-150 group-hover/reaction:pointer-events-auto group-hover/reaction:opacity-100 group-focus-within/reaction:pointer-events-auto group-focus-within/reaction:opacity-100 ${isOutgoing ? 'right-full mr-0.5' : 'left-full ml-0.5'}`}>
-            <div className="flex items-center gap-1 rounded-full border border-white/10 bg-[rgba(8,12,18,0.95)] px-1.5 py-1 shadow-lg backdrop-blur-sm">
-              {REACTION_OPTIONS.map((reaction) => (
-                <button
-                  key={reaction.emoji}
-                  type="button"
-                  className="h-7 w-7 rounded-full text-sm hover:bg-white/10 active:scale-95 transition-transform"
-                  onClick={() => onReact?.(msg, reaction)}
-                  title={`Thả cảm xúc ${reaction.emoji}`}
-                >
-                  {reaction.emoji}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  ) : null;
-
-  const showText = msg.text && msg.text !== '[image]' && msg.text !== '[file]' && msg.text !== '[video]' && !isSticker;
-
-  // Custom rounded corners based on position in group for clean Slack/Telegram look
+  const avatarUrl = senderAvatar || msg.senderAvatar;
   const roundedClass = isOutgoing
     ? `rounded-2xl ${isFirstInGroup ? 'rounded-tr-2xl' : 'rounded-tr-md'} ${isLastInGroup ? 'rounded-br-sm' : 'rounded-br-md'}`
     : `rounded-2xl ${isFirstInGroup ? 'rounded-tl-2xl' : 'rounded-tl-md'} ${isLastInGroup ? 'rounded-bl-sm' : 'rounded-bl-md'}`;
 
-  // Avatar component for group member
-  const showGroupSenderAvatar = isGroup && !isOutgoing;
-  const avatarUrl = senderAvatar || msg.senderAvatar;
-  const displayName = msg.senderName || 'Thành viên';
-
-  const avatarSlot = showGroupSenderAvatar ? (
-    <div className="w-8 shrink-0 flex items-start justify-center select-none pt-0.5">
-      {isFirstInGroup ? (
-        <Avatar className="w-7 h-7 text-[11px] ring-1 ring-[var(--border)] shadow-2xs">
-          {avatarUrl ? (
-            <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover rounded-full" />
-          ) : null}
-          <AvatarFallback className="bg-gradient-to-br from-indigo-500/80 to-purple-600/80 text-white font-semibold">
-            {getInitial(displayName)}
-          </AvatarFallback>
-        </Avatar>
-      ) : (
-        <div className="w-7 h-7" />
-      )}
-    </div>
-  ) : null;
-
-  if (isSticker) {
-    const stickerUrl = imageUrl || att?.url || '';
-    return (
-      <div className={`flex items-start gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-1'}`}>
-        {avatarSlot}
-        <div className="flex flex-col items-start max-w-[160px]">
-          {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
-            <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-0.5">{msg.senderName}</div>
-          )}
-          <div className="group relative">
-            <div className="min-h-[120px] min-w-[120px] flex items-center justify-center">
-              <img src={stickerUrl} alt="Sticker" className="w-full h-auto block" loading="lazy" />
-            </div>
-            <div className="flex items-center justify-end gap-1 mt-0.5">
-              <span className="text-[10px] text-[rgba(255,255,255,0.30)]">{formatTime(msg.timestamp)}</span>
-              {isOutgoing && delivery}
-            </div>
-            {actionDock}
-          </div>
+  return <div className={`flex items-start gap-2 ${compact ? 'justify-center' : isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-0.5'}`}>
+    {!compact && isGroup && !isOutgoing && <div className="w-8 shrink-0 pt-0.5">
+      {isFirstInGroup && <Avatar className="h-7 w-7 text-[11px]">
+        {avatarUrl && <img src={avatarUrl} alt={msg.senderName || 'Thành viên'} className="h-full w-full rounded-full object-cover" />}
+        <AvatarFallback>{getInitial(msg.senderName || 'Thành viên')}</AvatarFallback>
+      </Avatar>}
+    </div>}
+    <div className="min-w-0 max-w-[85%] sm:max-w-[500px] flex flex-col items-start">
+      {!compact && isGroup && !isOutgoing && isFirstInGroup && msg.senderName && <div className="mb-1 pl-1 text-[11px] font-semibold text-blue-500">{msg.senderName}</div>}
+      <div className={`group relative hover:z-20 focus-within:z-20 min-w-0 max-w-full break-words ${compact ? 'rounded-xl bg-[var(--muted)] px-3 py-1.5' : `px-3.5 py-2.5 text-sm leading-relaxed shadow-xs ${roundedClass} ${isOutgoing
+        ? 'bg-[var(--bubble-out-bg)] border border-[var(--bubble-out-border)] text-[var(--bubble-out-text)]'
+        : 'bg-[var(--bubble-in-bg)] border border-[var(--bubble-in-border)] text-[var(--bubble-in-text)]'}`}`}>
+        {msg.quote && <div className="mb-2 rounded-xl border border-current/20 bg-black/5 px-3 py-2 text-xs">
+          <div className="truncate font-bold">{msg.quote.senderName ?? msg.quote.senderId ?? 'Tin nhắn gốc'}</div>
+          <div className="mt-0.5 truncate opacity-85">{messagePreview({ kind: msg.quote.kind ?? 'text', text: msg.quote.text ?? '' })}</div>
+        </div>}
+        {rich && <RichMessageContent message={msg} />}
+        <MessageMedia message={msg} onOpenLightbox={onOpenLightbox} />
+        {!rich && caption && <div className={`whitespace-pre-wrap select-text ${msg.kind !== 'text' || msg.attachments.length ? 'mt-2' : ''}`}>{renderMessageText(caption, msg.mentions)}</div>}
+        {receivedReactions.length > 0 && <div aria-label="Cảm xúc đã nhận" title={receivedReactions.map(reaction => `${reaction.emoji}: ${reaction.count}`).join(' · ')} className="absolute -bottom-1.5 left-1 z-10 flex max-w-[calc(100vw-6rem)] flex-nowrap items-center gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--card)] px-1.5 py-px text-[11px] leading-4 text-[var(--foreground)] shadow-sm">
+          {receivedReactions.slice(0, 3).map((reaction, index) =>
+            <span key={`${reaction.emoji}:${index}`} aria-label={`${reaction.emoji}: ${reaction.count}`} className="shrink-0">{reaction.emoji} {reaction.count}</span>)}
+          {receivedReactions.length > 3 && <span className="shrink-0">+{receivedReactions.length - 3}</span>}
+        </div>}
+        <div className="mt-1 flex items-center justify-end gap-1.5">
+          <span className="text-[10px] opacity-60">{formatTime(msg.timestamp)}</span>
+          {isOutgoing && <MessageDeliveryStatus message={msg} onRetryMessage={onRetryMessage} onQueryMessage={onQueryMessage} onCancelMessage={onCancelMessage} onRestoreDraft={onRestoreDraft} />}
         </div>
-      </div>
-    );
-  }
-
-  if (msg.kind === 'poll') {
-    return (
-      <div className={`flex items-start gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-1'}`}>
-        {avatarSlot}
-        <div className="max-w-[85%] sm:max-w-[480px] flex flex-col items-start">
-          {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
-            <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-1">{msg.senderName}</div>
-          )}
-          <div className={`group relative px-4 py-3 text-sm leading-relaxed bg-[rgba(255,255,255,0.06)] border border-white/10 text-[#ddd] ${roundedClass}`}>
-            <div className="font-semibold text-[#eee] mb-2">📊 {msg.text}</div>
-            <div className="flex flex-col gap-1.5">
-              {(msg.attachments || []).slice(0, 1).map((a, i) => (
-                <div key={i} className="text-xs text-muted-foreground">
-                  {a.fileName ? `Tùy chọn: ${a.fileName}` : 'Xem chi tiết poll trên Zalo'}
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center justify-end gap-1 mt-2">
-              <span className="text-[10px] text-[rgba(255,255,255,0.35)]">{formatTime(msg.timestamp)}</span>
-              {isOutgoing && delivery}
-            </div>
-            {actionDock}
+        {(canReact || onReply) && <div className={`absolute bottom-0 z-30 ${isOutgoing ? 'right-0' : 'left-0'}`}>
+          <button type="button" aria-label="Thao tác tin nhắn" aria-expanded={actionsOpen} onClick={() => setActionsOpen(open => !open)} className={`absolute bottom-6 flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--card)] text-xs text-[var(--foreground)] shadow-sm sm:hidden ${isOutgoing ? 'right-0' : 'left-0'}`}>⋯</button>
+          <div className={`absolute top-0 w-max max-w-[calc(100vw-5rem)] pt-1 ${actionsOpen ? 'visible pointer-events-auto opacity-100' : 'invisible pointer-events-none opacity-0'} sm:invisible sm:pointer-events-none sm:opacity-0 sm:transition-opacity sm:group-hover:visible sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-within:visible sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100 ${isOutgoing ? 'right-0' : 'left-0'}`}>
+          <div className="flex flex-wrap items-center justify-end gap-0.5 rounded-xl border border-[var(--border)] bg-[var(--card)] p-1 text-[var(--foreground)] shadow-lg">
+          {onReply && <button type="button" className="rounded px-2 py-1 text-xs hover:bg-black/10 focus-visible:outline-2" onClick={() => { setActionsOpen(false); onReply(msg); }} title="Trả lời tin nhắn này">↩ Trả lời</button>}
+          {canReact && REACTION_OPTIONS.map(reaction => <button key={reaction.emoji} type="button" className="rounded px-1.5 py-1 text-sm hover:bg-black/10 focus-visible:outline-2"
+            onClick={() => { setActionsOpen(false); onReact?.(msg, reaction); }} title={`Thả cảm xúc ${reaction.emoji}`} aria-label={`Thả cảm xúc ${reaction.emoji}`}>{reaction.emoji}</button>)}
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (msg.kind === 'reaction') {
-    return (
-      <div className="flex justify-center my-1.5">
-        <span className="text-xs px-2.5 py-0.5 rounded-full bg-white/5 border border-white/5 text-[#9aa4b2]">{msg.text}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`flex items-start gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-0.5'}`}>
-      {avatarSlot}
-      <div className="max-w-[85%] sm:max-w-[500px] flex flex-col items-start">
-        {isGroup && !isOutgoing && isFirstInGroup && msg.senderName && (
-          <div className="text-[11px] text-blue-500 dark:text-blue-400 font-semibold mb-1 pl-1">{msg.senderName}</div>
-        )}
-        <div className={`group relative px-3.5 py-2.5 text-[14px] leading-relaxed break-words shadow-xs ${roundedClass} ${
-          isOutgoing
-            ? 'bg-[var(--bubble-out-bg)] border border-[var(--bubble-out-border)] text-[var(--bubble-out-text)] font-normal'
-            : 'bg-[var(--bubble-in-bg)] border border-[var(--bubble-in-border)] text-[var(--bubble-in-text)]'
-        }`}>
-          {msg.quote && (
-            <div className={`mb-2 rounded-xl border px-3 py-2 text-xs ${
-              isOutgoing
-                ? 'border-blue-400/30 bg-black/5 dark:bg-black/25 text-inherit opacity-90'
-                : 'border-[var(--border)] bg-[var(--muted)] text-muted-foreground'
-            }`}>
-              <div className="font-bold truncate">{quoteLabel}</div>
-              <div className="mt-0.5 truncate opacity-85">{quoteText}</div>
-            </div>
-          )}
-
-          {shouldRenderImage ? (
-            <button type="button" className="cursor-pointer block w-full text-left overflow-hidden rounded-xl" onClick={() => onOpenLightbox?.(msg.id)} title="Xem ảnh lớn">
-              <div className="min-h-[140px] max-w-[280px] bg-black/5 dark:bg-black/20 rounded-xl overflow-hidden flex items-center justify-center">
-                <img src={imageUrl} alt={msg.text || 'Hình ảnh'} className="max-w-full max-h-[320px] w-auto h-auto object-cover rounded-xl block transition-transform hover:scale-[1.02]" loading="lazy" />
-              </div>
-            </button>
-          ) : shouldRenderVideo && att?.url ? (
-            <div className="flex flex-col gap-2">
-              <video className="max-w-[320px] w-full rounded-xl bg-black" controls preload="metadata">
-                <source src={att.url} type={att.mimeType ?? 'video/mp4'} />
-              </video>
-              <div className="flex gap-3 flex-wrap mt-1">
-                <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline">Mở video</a>
-                <a href={att.url} download={att.fileName ?? 'video'} className="text-xs text-blue-500 hover:underline">Tải xuống</a>
-              </div>
-            </div>
-          ) : shouldRenderFile && att ? (
-            <div className="flex items-start gap-2.5 p-2.5 bg-black/5 dark:bg-black/20 rounded-xl border border-[var(--border)]">
-              <span className="text-[26px] leading-none shrink-0">{fileIcon}</span>
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-semibold truncate">
-                  {hasAttachmentUrl ? (
-                    <a href={att.url} target="_blank" rel="noreferrer" className="text-inherit no-underline hover:underline">
-                      {fallbackFileLabel}
-                    </a>
-                  ) : (
-                    fallbackFileLabel
-                  )}
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  {att.mimeType && (
-                    <span className="text-[10px] font-bold text-blue-500 bg-blue-500/10 border border-blue-500/20 rounded-full px-1.5 py-0.2">
-                      {att.mimeType.split('/').pop()?.toUpperCase()}
-                    </span>
-                  )}
-                  {att.size ? <div className="text-[11px] opacity-75">{formatSize(att.size)}</div> : null}
-                </div>
-                {hasAttachmentUrl && (
-                  <div className="flex gap-3 flex-wrap mt-1.5">
-                    <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 no-underline hover:underline font-semibold">Xem file</a>
-                    <a href={att.url} download={att.fileName ?? 'download'} className="text-xs text-blue-500 no-underline hover:underline font-semibold">Tải xuống</a>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : null}
-
-          {showText && (
-            <div className={`whitespace-pre-wrap select-text ${shouldRenderImage || shouldRenderVideo || shouldRenderFile ? 'mt-2' : ''}`}>
-              {renderMessageText(msg.text, msg.mentions)}
-            </div>
-          )}
-
-          <div className="flex items-center justify-end gap-1.5 mt-1 select-none">
-            <span className="text-[10px] opacity-60 font-medium">
-              {formatTime(msg.timestamp)}
-            </span>
-            {isOutgoing && delivery}
           </div>
-
-          {actionDock}
-        </div>
+        </div>}
       </div>
     </div>
-  );
+  </div>;
 });

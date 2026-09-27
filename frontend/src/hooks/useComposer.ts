@@ -2,6 +2,9 @@ import { useCallback, useRef, useState } from 'react';
 import { useChatStore } from '../stores/chat-store';
 import { useComposerStore } from '../stores/composer-store';
 import { submitMessage } from '../features/chat/model/send-controller';
+import { sendComposerBatch } from '../features/chat/model/composer-controller';
+import { conversationRecovery } from '../features/chat/model/conversation-recovery';
+import { ensureConversationRecovered } from '../stores/composer-store';
 
 export function useComposer() {
   const isComposingRef = useRef(false);
@@ -12,8 +15,17 @@ export function useComposer() {
     if (isComposingRef.current || handledEvents.current.has(event.nativeEvent)) return;
     handledEvents.current.add(event.nativeEvent);
     const key = useChatStore.getState().activeKey;
+    if (key && !conversationRecovery.ready(key)) {
+      void ensureConversationRecovered(key);
+      useComposerStore.getState().setStatusMsg('Đang khôi phục hội thoại. Giữ bản nháp và bấm gửi sau khi khôi phục xong.');
+      return;
+    }
     const draft = useComposerStore.getState().drafts[key];
     if (!key || !draft || (draft.missingFileName && !draft.attachFile)) return;
+    if (draft.attachments.length || draft.batch) {
+      if (!draft.batch) void sendComposerBatch(key);
+      return;
+    }
     const quote = draft.replyingTo ? {
       messageId: draft.replyingTo.id,
       senderId: draft.replyingTo.senderId,

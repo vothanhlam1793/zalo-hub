@@ -26,7 +26,7 @@ export function useConversationManager() {
       if (!chatSession.valid(session)) return r;
       const stillActive = activeConversationIdRef.current === conversationId && token === selectionTokenRef.current;
       if (r.messages && r.messages.length > 0) {
-        useChatStore.getState().mergeForKey(key, r.messages, (useChatStore.getState().byConversation[key]?.revision || 0) !== revision);
+        useChatStore.getState().mergeForKey(key, r.messages, revision);
         if (stillActive) {
           setHasMoreHistory(Boolean(r.hasMore));
         }
@@ -130,7 +130,7 @@ export function useConversationManager() {
         const messagesRes = await bff.chatGetMessages(accountId, conversationId, { limit: 50 });
         if (!chatSession.valid(session)) return;
         const store = useChatStore.getState();
-        store.mergeForKey(key, messagesRes.messages, (store.byConversation[key]?.revision || 0) !== revision);
+        store.mergeForKey(key, messagesRes.messages, revision);
         store.setLoadState(key, { loadState: 'ready', hasMore: Boolean(messagesRes.hasMore), error: undefined });
       } catch (error) {
         if (chatSession.valid(session)) useChatStore.getState().setLoadState(key, {
@@ -170,16 +170,17 @@ export function useConversationManager() {
       const dbOlder = await clientDb.getMessages(accountId, activeConversationId, 40, oldest);
       if (!stillActive()) return;
       if (dbOlder.length > 0) {
-        prependMessages(accountId, activeConversationId, dbOlder);
+        useChatStore.getState().mergeForKey(key, dbOlder, true);
         setHasMoreHistory(true);
         return;
       }
 
       // 2. Fetch from backend DB
+      const revision = useChatStore.getState().byConversation[key]?.revision || 0;
       const r = await bff.chatGetMessages(accountId, activeConversationId, { before: oldest, limit: 40 });
       if (!stillActive()) return;
       if (r.messages && r.messages.length > 0) {
-        prependMessages(accountId, activeConversationId, r.messages);
+        useChatStore.getState().mergeForKey(key, r.messages, revision);
         setHasMoreHistory(Boolean(r.hasMore));
       } else {
         // 3. Fallback: sync from Zalo cloud if DB is exhausted

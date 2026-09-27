@@ -1,10 +1,14 @@
 import { api, ApiError, SEND_TIMEOUT_MS } from '../../../api';
 import type { Message, SendReceipt } from '../../../types';
 import { useChatStore } from '../../../stores/chat-store';
-import { useComposerStore } from '../../../stores/composer-store';
+import { ensureConversationRecovered, useComposerStore } from '../../../stores/composer-store';
+import { conversationRecovery } from './conversation-recovery';
 import { chatSession, parseConversationKey } from './chat-session';
 import { canRetry, canReleasePreview } from './message-reconciliation';
 import { ManualSendQueue } from './manual-send-queue';
+import { unresolvedBatch } from './composer-types';
+import { actionRecovery } from './action-recovery';
+import { createLocalMediaPreview, revokeLocalMediaPreview } from './local-media-preview';
 
 type Intent = {
   key: string;
@@ -24,7 +28,11 @@ const controllers = new Set<AbortController>();
 const polling = new Set<string>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const rows = (key: string) => useChatStore.getState().byConversation[key]?.messages || [];
-const queue = new ManualSendQueue((key) => rows(key).some((m) => m.delivery === 'unknown' || m.delivery === 'sending'));
+const queue = new ManualSendQueue((key) => {
+  if (!conversationRecovery.ready(key) || actionRecovery.unresolved(key)) return true;
+  const draft = useComposerStore.getState().drafts[key];
+  return unresolvedBatch(draft?.batch) || draft?.outbox?.some(e => unresolvedBatch(e.batch)) || rows(key).some((m) => m.delivery === 'unknown' || m.delivery === 'sending') || false;
+});
 const patch = (intent: Intent, data: Partial<Message>) => {
   if (chatSession.valid(intent.session)) useChatStore.getState().patchMessage(intent.key, intent.localId, data);
 };
@@ -86,9 +94,9 @@ function poll(key: string, requestId: string) {
         const target = rows(key).find((m) => m.clientRequestId === requestId);
         if (target && target.delivery !== 'sent') {
           useChatStore.getState().patchMessage(key, target.localId || target.id, {
-            delivery: 'failed',
-            retryable: true,
-            errorText: 'Quá thời gian chờ phản hồi từ máy chủ. Bấm để gửi lại.',
+            delivery: 'unknown',
+            retryable: false,
+            errorText: 'Chưa rõ kết quả. Kiểm tra trạng thái trước khi thử lại.',
           });
           void queue.resume(key);
         }
@@ -99,7 +107,7 @@ function poll(key: string, requestId: string) {
 }
 
 async function dispatch(intent: Intent, retry = false) {
-  if (!chatSession.valid(intent.session)) return;
+  if (!chatSession.valid(intent.session) || !conversationRecovery.ready(intent.key)) return;
   attempts.set(intent.requestId, (attempts.get(intent.requestId) || 0) + 1);
   const [, account, conversation] = parseConversationKey(intent.key);
   patch(intent, { delivery: 'sending', errorText: undefined, errorCode: undefined, retryable: false });
@@ -145,10 +153,11 @@ export function submitMessage(
 ): Message | undefined {
   const session = chatSession.capture();
   if (!chatSession.valid(session) || parseConversationKey(key)[0] !== session.userId || (!text.trim() && !file)) return;
+  void ensureConversationRecovered(key);
   const [, account, conversation] = parseConversationKey(key);
   const requestId = crypto.randomUUID();
   const localId = `pending-${requestId}`;
-  const preview = file ? URL.createObjectURL(file) : undefined;
+  const preview = file ? createLocalMediaPreview(file) : undefined;
   const kind = file ? file.type.startsWith('image/') ? 'image' : 'file' : 'text';
   const message: Message = {
     id: localId, localId, clientRequestId: requestId, delivery: 'queued',
@@ -177,18 +186,21 @@ export function submitMessage(
 }
 
 export function cancelQueued(key: string, message: Message) {
+  if (message.composerBatchId) return;
   if (!message.clientRequestId) return;
   const current = rows(key).find((m) => (m.localId || m.id) === (message.localId || message.id));
-  if (!current || current.delivery === 'sent') return;
+  if (!current || current.delivery === 'sent' || current.delivery === 'sending' || current.delivery === 'unknown') return;
   queue.cancel(key, message.clientRequestId);
   const intent = intents.get(message.clientRequestId);
-  if (intent?.preview) URL.revokeObjectURL(intent.preview);
+  if (intent?.preview) revokeLocalMediaPreview(intent.preview);
   intents.delete(message.clientRequestId);
   useChatStore.getState().removeMessage(key, message.localId || message.id);
   void queue.resume(key);
 }
 
 export function retryMessage(key: string, message: Message, reselected?: File) {
+  void ensureConversationRecovered(key);
+  if (message.composerBatchId) return;
   if (!canRetry(message)) return;
   const current = rows(key).find((m) => (m.localId || m.id) === (message.localId || message.id));
   if (!current || !canRetry(current)) return;
@@ -221,6 +233,7 @@ export function retryMessage(key: string, message: Message, reselected?: File) {
 }
 
 export function restoreDraft(key: string, message: Message) {
+  if (message.composerBatchId) return;
   const current = rows(key).find((m) => (m.localId || m.id) === (message.localId || message.id));
   if (message.delivery !== 'failed' || current?.delivery !== 'failed') return;
   const composer = useComposerStore.getState();
@@ -236,7 +249,7 @@ export function restoreDraft(key: string, message: Message) {
 
 export function recheckUnresolved() {
   for (const [key, entry] of Object.entries(useChatStore.getState().byConversation)) {
-    for (const m of entry.messages) if (m.clientRequestId && (m.delivery === 'sending' || m.delivery === 'unknown')) {
+    for (const m of entry.messages) if (!m.composerBatchId && m.clientRequestId && (m.delivery === 'sending' || m.delivery === 'unknown')) {
       void querySendStatus(key, m.clientRequestId);
       poll(key, m.clientRequestId);
     }
@@ -251,7 +264,7 @@ useChatStore.subscribe((state) => {
     const messages = state.byConversation[intent.key]?.messages || [];
     const own = messages.filter((m) => m.clientRequestId === intent.requestId);
     if (intent.preview && canReleasePreview(own, intent.localId, intent.preview)) {
-      URL.revokeObjectURL(intent.preview); intent.preview = undefined; intent.file = undefined;
+      revokeLocalMediaPreview(intent.preview); intent.preview = undefined; intent.file = undefined;
     }
     if (!intent.preview && own.length && own.every((m) => m.delivery === 'sent')) intents.delete(intent.requestId);
     void queue.resume(intent.key);
@@ -261,6 +274,7 @@ chatSession.subscribe(() => {
   queue.clear();
   controllers.forEach((controller) => controller.abort()); controllers.clear();
   timers.forEach(clearTimeout); timers.clear(); polling.clear();
-  intents.forEach((intent) => { if (intent.preview) URL.revokeObjectURL(intent.preview); }); intents.clear();
+  intents.forEach((intent) => { if (intent.preview) revokeLocalMediaPreview(intent.preview); }); intents.clear();
   attempts.clear();
 });
+conversationRecovery.subscribe(key => { if (conversationRecovery.ready(key)) void queue.resume(key); });

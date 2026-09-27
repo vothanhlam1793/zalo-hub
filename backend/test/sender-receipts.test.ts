@@ -86,6 +86,18 @@ test('missing ID result stays unknown, no fabricated provider/local IDs or appen
   assert.equal(result.status, 'unknown'); assert.deepEqual(result.providerMessageIds, []);
   assert.deepEqual(result.messages, []); assert.equal(appended.length, 0);
 });
+test('duplicate append false keeps accepted media pending repair; mention whitespace reaches SDK unchanged', async () => {
+  const { instance, state } = sender(imageReceipt);
+  let payload: any;
+  state.session!.api.sendMessage = async (value: any) => { payload = value; return imageReceipt; };
+  instance.init({ loginWithStoredCredential: async () => state.session, appendConversationMessage: async () => false,
+    resolveConversationTarget: () => ({ type: 'group', threadId: 'g' }), getActiveAccountId: () => 'account-a' });
+  const result = await instance.sendAttachment('group:g', { fileBuffer: Buffer.from('bytes'), fileName: 'a.png', mimeType: 'image/png',
+    caption: '  @Old ', mentions: [{ uid: 'u', pos: 2, len: 4 }] });
+  assert.equal(payload.msg, '  @Old '); assert.equal(payload.mentions[0].pos, 2);
+  assert.equal(result.status, 'sent'); assert.equal(result.mediaMirrorComplete, true);
+  assert.equal(result.localPersistenceFailed, true, 'seen-key skip must not certify row persistence');
+});
 
 test('SDK coded text rejection is definite, attachment exception remains ambiguous (caption may already be sent)', async () => {
   const { instance, state } = sender(null);

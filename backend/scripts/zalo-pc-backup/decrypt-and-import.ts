@@ -2,6 +2,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import readline from 'node:readline';
 import knexLib from 'knex';
+import { projectRichMessage } from '../../src/core/message-projection.js';
+
+/** Shared, pure mapping; importing this helper never starts an import or connects to a DB. */
+export function projectPcBackupMessage(raw: unknown) {
+  return projectRichMessage({}, raw);
+}
 
 /**
  * Zalo PC Backup Extractor & Ingestion Engine
@@ -194,26 +200,14 @@ export async function runImport(options: ImportOptions) {
           // Composite unique primary key id in ZaloHub format: <account_id>::<conversation_id>::<msg_id>
           const uniqueId = `${targetAccountId}::${conversationId}::${rawMsgId}`;
 
-          let content = '';
-          if (typeof obj.message === 'string') {
-            content = obj.message;
-          } else if (obj.message && typeof obj.message === 'object') {
-            content = obj.message.title || obj.message.description || obj.message.params || '';
-          } else if (typeof obj.content === 'string') {
-            content = obj.content;
-          }
+          const projected = projectPcBackupMessage(obj);
+          const content = projected.text;
 
           const rawTs = Number(obj.sendDttm || obj.serverTime || obj.localDttm || obj.ts || Date.now());
           const createdAt = new Date(isNaN(rawTs) ? Date.now() : rawTs);
           const isoTimestamp = createdAt.toISOString();
 
-          let msgType = 'text';
-          if (obj.msgType === 2) msgType = 'image';
-          else if (obj.msgType === 3) msgType = 'voice';
-          else if (obj.msgType === 4) msgType = 'video';
-          else if (obj.msgType === 5) msgType = 'sticker';
-          else if (obj.msgType === 19 || obj.msgType === 26) msgType = 'system';
-          else if (obj.msgType === 14) msgType = 'file';
+          const msgType = projected.kind;
 
           const dbRecord = {
             id: uniqueId,
@@ -228,7 +222,7 @@ export async function runImport(options: ImportOptions) {
             direction: direction,
             kind: msgType,
             text: content || '',
-            image_url: null,
+            image_url: projected.imageUrl ?? null,
             is_self: isSelf ? 1 : 0,
             timestamp: isoTimestamp,
             raw_summary_json: null,

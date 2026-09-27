@@ -75,9 +75,10 @@ export const bff = {
   tagUnassign: (conversationId: string, tagId: string, accountId?: string) => api.unassignTag(conversationId, tagId, accountId),
   tagsSync: (accountId: string) => api.syncTags(accountId),
   accountRestart: (accountId: string) => api.restartAccount(accountId),
+  accountSyncContacts: (accountId: string) => api.accountSyncContacts(accountId),
 
-  chatGetConversations: (accountId: string) =>
-    api.accountConversations(accountId),
+  chatGetConversations: (accountId: string, options?: { limit?: number; offset?: number; q?: string }) =>
+    api.accountConversations(accountId, options),
 
   send: (params: {
     accountId: string; conversationId: string;

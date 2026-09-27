@@ -14,10 +14,24 @@ export type WsConversationMuteUpdatedPayload = {
   muteUntil: number | null;
 };
 
+export type WsConversationNotificationPayload = {
+  type: 'conversation_notification';
+  accountId: string;
+  conversationId: string;
+  messageId: string;
+  conversationType: 'direct' | 'group';
+  kind: import('@/types').MessageKind;
+  text: string;
+  senderName?: string;
+  isMuted: boolean;
+  muteUntil: number | null;
+};
+
 interface WsHandlers {
   onStatus?: (payload: WsSessionStatusPayload) => void;
   onConversations?: (payload: WsConversationSummariesPayload) => void;
   onMessage?: (payload: WsConversationMessagePayload) => void;
+  onNotification?: (payload: WsConversationNotificationPayload) => void;
   onConversationMuteUpdated?: (payload: WsConversationMuteUpdatedPayload) => void;
   onSyncStatus?: (payload: { accountId: string; status: string; requ18Received?: number; historySynced?: number; historyMsgs?: number; error?: string }) => void;
   onSyncProgress?: (payload: import('@/types').SyncProgressPayload) => void;
@@ -198,7 +212,7 @@ export function useWebSocket(handlers: WsHandlers) {
     const transport = createRealtimeConnection({
       url: `${protocol}//${window.location.host}/ws`,
       getToken,
-      isSessionCurrent: () => useAuthStore.getState().user?.id === userId,
+       isSessionCurrent: () => useAuthStore.getState().user === user,
       onPayload(payload) {
         const current = handlersRef.current;
         // Forward the original envelope, including additive receipt/unknown
@@ -206,7 +220,8 @@ export function useWebSocket(handlers: WsHandlers) {
         if (typeof payload.accountId === 'string' && payload.accountId) {
           if (payload.type === 'session_state') current.onStatus?.(payload as unknown as WsSessionStatusPayload);
           if (payload.type === 'conversation_summaries') current.onConversations?.(payload as unknown as WsConversationSummariesPayload);
-          if (payload.type === 'conversation_message') current.onMessage?.(payload as unknown as WsConversationMessagePayload);
+           if (payload.type === 'conversation_message') current.onMessage?.(payload as unknown as WsConversationMessagePayload);
+           if (payload.type === 'conversation_notification') current.onNotification?.(payload as unknown as WsConversationNotificationPayload);
           if (payload.type === 'conversation_mute_updated') current.onConversationMuteUpdated?.(payload as unknown as WsConversationMuteUpdatedPayload);
           if (payload.type === 'ws_sync_status') current.onSyncStatus?.(payload as unknown as Parameters<NonNullable<WsHandlers['onSyncStatus']>>[0]);
           if (payload.type === 'ws_sync_progress') current.onSyncProgress?.(payload as unknown as import('@/types').SyncProgressPayload);
@@ -220,13 +235,13 @@ export function useWebSocket(handlers: WsHandlers) {
     // Zustand notifies synchronously: close immediately on logout/replacement,
     // rather than waiting for React's next effect cleanup.
     const stopOnSessionChange = useAuthStore.subscribe((state) => {
-      if (state.user?.id !== userId || getToken() !== token) {
+      if (state.user !== user || getToken() !== token) {
         selection.current = null;
         transport.dispose();
       }
     });
     const checkCredentials = () => {
-      if (getToken() !== token || useAuthStore.getState().user?.id !== userId) {
+      if (getToken() !== token || useAuthStore.getState().user !== user) {
         selection.current = null;
         transport.dispose();
       }

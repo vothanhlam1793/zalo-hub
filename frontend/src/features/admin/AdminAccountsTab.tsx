@@ -94,9 +94,20 @@ export function AdminAccountsTab({ onRefresh, setError, setStatus }: Props) {
     setStatus('Đang đồng bộ toàn bộ lịch sử tin nhắn...');
     try {
       const r = await bff.accountSyncAll(accountId);
-      setStatus(`Đồng bộ thành công: ${r.synced} cuộc trò chuyện`);
+      setStatus(r.message);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Đồng bộ thất bại');
+    }
+  };
+
+  const handleSyncContacts = async (accountId: string) => {
+    setStatus('Đang đồng bộ danh bạ & tên gợi nhớ (alias) từ Zalo...');
+    try {
+      const res = await bff.accountSyncContacts(accountId);
+      setStatus(res.message || `Đã đồng bộ ${res.count} bạn bè (${res.aliasCount} tên gợi nhớ).`);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Đồng bộ danh bạ thất bại');
     }
   };
 
@@ -193,6 +204,9 @@ export function AdminAccountsTab({ onRefresh, setError, setStatus }: Props) {
             <div className="flex flex-wrap gap-2">
               <Button variant="secondary" size="sm" className="h-8 text-[11px]" onClick={() => openAliasDialog(a)}>
                 ✏️ Sửa alias
+              </Button>
+              <Button variant="secondary" size="sm" className="h-8 text-[11px] bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 border border-blue-500/30" onClick={() => handleSyncContacts(a.accountId)} title="Đồng bộ danh bạ và tên gợi nhớ bạn đặt trên Zalo">
+                👥 Sync danh bạ & alias
               </Button>
               <Button variant="secondary" size="sm" className="h-8 text-[11px]" onClick={() => handleSyncProfile(a.accountId)}>
                 👤 Sync profile

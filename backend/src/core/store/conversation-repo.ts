@@ -6,11 +6,12 @@ import type {
   GoldGroupRecord,
 } from '../types.js';
 import {
+  canonicalizeStoredMessage,
   nowIso,
   parseConversationId,
   toMessageKind,
 } from './helpers.js';
-import type { RawConversationRow } from './helpers.js';
+import type { RawConversationRow, RawMessageRow, RawAttachmentRow } from './helpers.js';
 
 export class GoldConversationRepo {
   private knex: Knex;
@@ -19,6 +20,58 @@ export class GoldConversationRepo {
   private getGroupAvatarFn: (groupId: string, accountId?: string) => Promise<string | undefined>;
   private getFriendDisplayNameFn: (friendId: string, accountId?: string) => Promise<string | undefined>;
   private getFriendAvatarFn: (friendId: string, accountId?: string) => Promise<string | undefined>;
+
+  /** One bounded query per 200 summaries, not one history/attachment request per row.
+   * LATERAL LIMIT allows account/conversation index lookups and returns only the
+   * latest message and its primary attachment. No history backfill or DB mutation.
+   */
+  private async projectSummaryPreviews(accountId: string, rows: Array<{
+    id: string; last_message_text: string; last_message_kind: string;
+  }>) {
+    for (let offset = 0; offset < rows.length; offset += 200) {
+      const batch = rows.slice(offset, offset + 200);
+      const latest = (await this.knex.raw(`
+        SELECT c.id AS preview_conversation_id, m.*,
+               a.attachment AS preview_attachment
+        FROM conversations c
+        JOIN LATERAL (
+          SELECT id, conversation_id, thread_id, conversation_type, friend_id,
+                 text, kind, image_url, raw_message_json, direction, is_self,
+                 timestamp, sender_id, sender_name, provider_message_id, reactions_json
+          FROM messages m
+          WHERE m.account_id = c.account_id
+            AND (m.conversation_id = c.id OR
+                 (m.conversation_id IS NULL AND c.type = 'direct' AND m.friend_id = c.friend_id))
+          ORDER BY m.timestamp DESC, m.created_at DESC, m.id DESC
+          LIMIT 1
+        ) m ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT row_to_json(att) AS attachment FROM attachments att
+          WHERE att.message_id = m.id ORDER BY att.id LIMIT 1
+        ) a ON TRUE
+        WHERE c.account_id = ? AND c.id = ANY(?::text[])
+      `, [accountId, batch.map(row => row.id)])).rows as Array<RawMessageRow & {
+        preview_conversation_id: string; preview_attachment: RawAttachmentRow | null;
+      }>;
+      const previews = new Map(latest.map(message => {
+        const a = message.preview_attachment;
+        const projected = canonicalizeStoredMessage(message, a ? [{
+          id: a.id, type: toMessageKind(a.type), url: a.url ?? undefined,
+          sourceUrl: a.source_url ?? undefined, localPath: a.local_path ?? undefined,
+          thumbnailUrl: a.thumbnail_url ?? undefined, fileName: a.file_name ?? undefined,
+          mimeType: a.mime_type ?? undefined, duration: a.duration ?? undefined,
+        }] : []);
+        return [message.preview_conversation_id, projected] as const;
+      }));
+      for (const row of batch) {
+        const preview = previews.get(row.id);
+        if (preview) {
+          row.last_message_text = preview.text;
+          row.last_message_kind = preview.kind;
+        }
+      }
+    }
+  }
 
   constructor(
     knex: Knex,
@@ -43,11 +96,23 @@ export class GoldConversationRepo {
     trx?: Knex.Transaction,
   ) {
     const db = trx ?? this.knex;
-    const lastMessage = messages[messages.length - 1];
     const timestamp = nowIso();
 
-    if (!lastMessage) {
+    if (!messages || messages.length === 0) {
       await db.raw('DELETE FROM conversations WHERE account_id = ? AND id = ?', [accountId, conversationId]);
+      return;
+    }
+
+    // Always sort by true timestamp so the latest message in time is selected, never an older ID
+    const sortedByTime = [...messages].sort((a, b) => {
+      const tA = Date.parse(a.timestamp);
+      const tB = Date.parse(b.timestamp);
+      if (!Number.isNaN(tA) && !Number.isNaN(tB) && tA !== tB) return tA - tB;
+      return a.timestamp.localeCompare(b.timestamp);
+    });
+    const lastMessage = sortedByTime[sortedByTime.length - 1];
+
+    if (!lastMessage) {
       return;
     }
 
@@ -94,15 +159,31 @@ export class GoldConversationRepo {
         id = EXCLUDED.id,
         thread_id = EXCLUDED.thread_id,
         type = EXCLUDED.type,
-        title = EXCLUDED.title,
-        avatar = EXCLUDED.avatar,
-        display_name_snapshot = EXCLUDED.display_name_snapshot,
-        last_message_text = EXCLUDED.last_message_text,
-        last_message_kind = EXCLUDED.last_message_kind,
-        last_direction = EXCLUDED.last_direction,
-        last_message_sender_name = EXCLUDED.last_message_sender_name,
-        last_message_timestamp = EXCLUDED.last_message_timestamp,
-        message_count = EXCLUDED.message_count,
+        title = COALESCE(conversations.title, EXCLUDED.title),
+        avatar = COALESCE(EXCLUDED.avatar, conversations.avatar),
+        display_name_snapshot = COALESCE(conversations.display_name_snapshot, EXCLUDED.display_name_snapshot),
+        last_message_text = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_message_text
+          ELSE conversations.last_message_text
+        END,
+        last_message_kind = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_message_kind
+          ELSE conversations.last_message_kind
+        END,
+        last_direction = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_direction
+          ELSE conversations.last_direction
+        END,
+        last_message_sender_name = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_message_sender_name
+          ELSE conversations.last_message_sender_name
+        END,
+        last_message_timestamp = GREATEST(conversations.last_message_timestamp, EXCLUDED.last_message_timestamp),
+        message_count = GREATEST(conversations.message_count, EXCLUDED.message_count),
         updated_at = EXCLUDED.updated_at
     `, [
       storedConversationId,
@@ -137,7 +218,7 @@ export class GoldConversationRepo {
       return [];
     }
 
-    const limit = Math.min(Math.max(Number(options?.limit) || 100, 1), 200);
+    const limit = Math.min(Math.max(Number(options?.limit) || 150, 1), 300);
     const offset = Math.max(Number(options?.offset) || 0, 0);
     const q = options?.q?.trim() ? `%${options.q.trim().toLowerCase()}%` : null;
 
@@ -191,6 +272,7 @@ export class GoldConversationRepo {
       notes_updated_at?: string | null;
     })[];
 
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
     const unreadMap = new Map<string, number>();
     if (rows.length > 0) {
       const unreadRows = (await this.knex.raw(`
@@ -586,7 +668,7 @@ export class GoldConversationRepo {
     }
 
     let whereExtra = '';
-    const bindings: any[] = [resolvedAccountId, options.from, options.to];
+    const bindings: any[] = [options.from, options.to, resolvedAccountId, options.from, options.to];
 
     if (options.type) {
       whereExtra += ' AND c.type = ?';
@@ -644,7 +726,7 @@ export class GoldConversationRepo {
         ${whereExtra}
       ORDER BY c.last_message_timestamp DESC
       LIMIT ?
-    `, [...bindings, options.from, options.to, resolvedAccountId, options.from, options.to, limit + 1])).rows as Array<{
+    `, bindings)).rows as Array<{
       id: string;
       thread_id: string;
       type: 'direct' | 'group';
@@ -664,6 +746,8 @@ export class GoldConversationRepo {
 
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
+
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
 
     const items: GoldConversationSummary[] = [];
     for (const row of rows) {
@@ -748,6 +832,7 @@ export class GoldConversationRepo {
       unread_count: number;
     }>;
 
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
     const items: GoldConversationSummary[] = [];
     for (const row of rows) {
       const threadOrFriend = row.thread_id ?? row.friend_id;
@@ -839,6 +924,8 @@ export class GoldConversationRepo {
     const row = rows[0];
     if (!row) return undefined;
 
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
+
     let parsedLabels: any = undefined;
     if (row.labels_json) {
       try {
@@ -906,6 +993,30 @@ export class GoldConversationRepo {
       notesUpdatedBy: row.notes_updated_by || undefined,
       notesUpdatedAt: row.notes_updated_at || undefined,
     } satisfies GoldConversationSummary;
+  }
+
+  async updateDirectConversationTitlesByFriends(
+    accountId: string,
+    friends: Array<{ userId: string; displayName?: string }>,
+  ) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId || friends.length === 0) return;
+
+    for (const friend of friends) {
+      if (friend.displayName) {
+        await this.knex('conversations')
+          .where({ account_id: resolvedAccountId })
+          .andWhere((builder) => {
+            builder.where({ id: `direct:${friend.userId}` }).orWhere({ friend_id: friend.userId });
+          })
+          .update({
+            title: friend.displayName,
+            display_name_snapshot: friend.displayName,
+            updated_at: nowIso(),
+          })
+          .catch(() => {});
+      }
+    }
   }
 
   async updateConversationNotes(

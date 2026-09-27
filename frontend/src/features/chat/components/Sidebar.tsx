@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { messagePreview } from '../model/message-preview';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -39,6 +40,8 @@ interface SidebarProps {
   selectedTagId?: string | null;
   onSelectTag?: (tagId: string | null) => void;
   onSyncTags?: () => void;
+  onSyncContacts?: () => void;
+  syncingContacts?: boolean;
   onMarkAllRead?: () => void;
   onSyncUnread?: () => void;
   onReconnectAccount?: (accountId?: string) => void;
@@ -46,6 +49,9 @@ interface SidebarProps {
   onSelectConversation: (id: string) => void;
   onOpenDirectConversation: (contact: Contact) => void;
   onOpenGroupConversation: (group: Group) => void;
+  onLoadOlderConversations?: () => void;
+  loadingOlderConversations?: boolean;
+  hasMoreConversations?: boolean;
 }
 
 export function Sidebar({
@@ -68,6 +74,8 @@ export function Sidebar({
   selectedTagId,
   onSelectTag,
   onSyncTags,
+  onSyncContacts,
+  syncingContacts,
   onMarkAllRead,
   onSyncUnread,
   onReconnectAccount,
@@ -75,6 +83,9 @@ export function Sidebar({
   onSelectConversation,
   onOpenDirectConversation,
   onOpenGroupConversation,
+  onLoadOlderConversations,
+  loadingOlderConversations,
+  hasMoreConversations,
 }: SidebarProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(accountHubAlias ?? '');
@@ -282,11 +293,38 @@ export function Sidebar({
                 🏷️ Nhãn
               </Button>
             )}
+
+            {onSyncContacts && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onSyncContacts}
+                disabled={syncingContacts}
+                className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)] disabled:opacity-50"
+                title="Đồng bộ danh bạ & tên gợi nhớ bạn đặt trên Zalo"
+              >
+                {syncingContacts ? (
+                  <span className="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  '👥 Tên gợi nhớ'
+                )}
+              </Button>
+            )}
           </div>
         )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div
+        className="flex-1 min-h-0 overflow-y-auto"
+        onScroll={(e) => {
+          if (sidebarTab !== 'conversations' || !onLoadOlderConversations || loadingOlderConversations || !hasMoreConversations) return;
+          const el = e.currentTarget;
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+            onLoadOlderConversations();
+          }
+        }}
+      >
         {sidebarTab === 'conversations' && conversations.map((entry) => (
           (() => {
             const resolvedContact = entry.type === 'direct'
@@ -350,8 +388,7 @@ export function Sidebar({
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5 truncate">
                     <span className={senderPrefix ? 'font-medium text-[var(--foreground)]/80' : ''}>{senderPrefix}</span>
-                    {entry.lastMessageKind !== 'text' ? `[${entry.lastMessageKind}] ` : ''}
-                    {entry.lastMessageText}
+                    {messagePreview({ kind: entry.lastMessageKind, text: entry.lastMessageText })}
                   </div>
                   {Array.isArray(entry.labels) && entry.labels.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
@@ -371,6 +408,19 @@ export function Sidebar({
             );
           })()
         ))}
+
+        {sidebarTab === 'conversations' && loadingOlderConversations && (
+          <div className="py-3 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+            <span className="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            <span>Đang tải thêm cuộc trò chuyện...</span>
+          </div>
+        )}
+
+        {sidebarTab === 'conversations' && conversations.length > 0 && !hasMoreConversations && !loadingOlderConversations && (
+          <div className="py-4 text-center text-[11px] text-muted-foreground/60 select-none">
+            Đã hiển thị tất cả cuộc trò chuyện
+          </div>
+        )}
 
         {sidebarTab === 'contacts' && contacts.map((entry) => {
           const contactConvId = directConversationId(entry.userId);

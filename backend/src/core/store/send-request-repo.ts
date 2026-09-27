@@ -2,6 +2,8 @@ import type { Knex } from 'knex';
 import type { GoldConversationMessage, SendReceipt } from '../types.js';
 import type { RawAttachmentRow, RawMessageRow } from './helpers.js';
 import { attachmentRepairPatch, repairMediaUrl } from './send-message-repair.js';
+import { projectRichMessage } from '../message-projection.js';
+import { lockConversation, assertConversationClear } from '../../server/services/conversation-send-barrier.js';
 
 export interface SendRequestRow {
   account_id: string;
@@ -11,7 +13,7 @@ export interface SendRequestRow {
   payload_hash: string;
   status: SendReceipt['status'];
   provider_receipt_json: { method?: string; kind?: string; result?: unknown; providerMessageIds?: string[]; acceptedAt?: string;
-    localPersistence?: 'pending' | 'complete' | 'failed' | 'interrupted' };
+    localPersistence?: 'pending' | 'complete' | 'failed' | 'interrupted'; mediaMirrorComplete?: boolean; localPersistenceVerified?: boolean };
   message_refs_json: GoldConversationMessage[];
   error_code: string | null;
   retryable: boolean;
@@ -26,21 +28,51 @@ export interface SendRequestRepository {
   repairLocal?(row: SendRequestRow): Promise<void>;
 }
 
+/** Verify actual scoped rows, never a seen-key or append callback's success flag. */
+export async function hasDurableSendMedia(db: Knex | Knex.Transaction, row: SendRequestRow): Promise<boolean> {
+  const refs = row.message_refs_json;
+  const ids = row.provider_receipt_json.providerMessageIds || [];
+  if (!ids.length || !refs.length || ids.some(id => !refs.some(m => m.providerMessageId === id))
+    || !refs.some(m => m.attachments.length)) return false;
+  for (const message of refs) {
+    if (!message.providerMessageId) return false;
+    const stored = await db('messages').where({ account_id: row.account_id, conversation_id: row.conversation_id,
+      provider_message_id: message.providerMessageId }).first();
+    if (!stored) return false;
+    if (message.kind !== 'text' && !message.attachments.length) return false;
+    const media = await db('attachments').where({ message_id: stored.id });
+    if (message.attachments.some(a => !a.url || !media.some(m => m.url === a.url && m.type === a.type))) return false;
+  }
+  return true;
+}
+
 export class SendRequestRepo implements SendRequestRepository {
   constructor(private readonly db: Knex) {}
   async claim(row: SendRequestRow) {
-    const rows = await this.db('send_requests').insert(this.serialize(row))
+    return this.db.transaction(async trx => {
+    await lockConversation(trx, row.account_id, row.conversation_id);
+    if (await trx('send_requests').where({ account_id: row.account_id, client_request_id: row.client_request_id }).first()) return false;
+    const child = await trx('composer_batch_items').where({ account_id: row.account_id, client_request_id: row.client_request_id }).first();
+    await assertConversationClear(trx, row.account_id, row.conversation_id, undefined, child?.client_batch_id);
+    const rows = await trx('send_requests').insert(this.serialize(row))
       .onConflict(['account_id', 'client_request_id']).ignore().returning('client_request_id');
     return rows.length === 1;
+    });
   }
   async get(accountId: string, requestId: string): Promise<SendRequestRow | undefined> {
-    return this.db('send_requests').where({ account_id: accountId, client_request_id: requestId }).first();
+    const row: SendRequestRow | undefined = await this.db('send_requests').where({ account_id: accountId, client_request_id: requestId }).first();
+    return row ? { ...row, message_refs_json: row.message_refs_json.map(message => projectRichMessage(message)) } : undefined;
   }
   async retry(row: SendRequestRow) {
-    const changed = await this.key(row).where({ status: 'failed', retryable: true, attempt_count: row.attempt_count })
+    return this.db.transaction(async trx => {
+    await lockConversation(trx, row.account_id, row.conversation_id);
+    const child = await trx('composer_batch_items').where({ account_id: row.account_id, client_request_id: row.client_request_id }).first();
+    await assertConversationClear(trx, row.account_id, row.conversation_id, row.client_request_id, child?.client_batch_id);
+    const changed = await trx('send_requests').where({ account_id: row.account_id, client_request_id: row.client_request_id }).where({ status: 'failed', retryable: true, attempt_count: row.attempt_count })
       .update({ status: 'sending', retryable: false, error_code: null,
         attempt_count: row.attempt_count + 1, updated_at: this.db.fn.now() });
     return changed === 1;
+    });
   }
   async update(row: SendRequestRow, patch: Partial<SendRequestRow>) {
     // Fence late completions by attempt. Terminal sent can only receive richer sent data.
@@ -131,6 +163,13 @@ export class SendRequestRepo implements SendRequestRepository {
           last_message_timestamp: last.timestamp, message_count: Number(count?.count ?? 0),
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         }).onConflict(['account_id', 'friend_id']).ignore();
+      }
+      // Certify repaired persistence only with sender-confirmed mirrored bytes and all rows.
+      if (latest.provider_receipt_json.mediaMirrorComplete && latest.message_refs_json.length) {
+        const complete = await hasDurableSendMedia(trx, latest);
+        if (complete) await trx('send_requests').where({ account_id: row.account_id, client_request_id: row.client_request_id,
+          attempt_count: latest.attempt_count, status: 'sent' }).update({ error_code: null,
+          provider_receipt_json: JSON.stringify({ ...latest.provider_receipt_json, localPersistence: 'complete', localPersistenceVerified: true }) });
       }
     });
   }

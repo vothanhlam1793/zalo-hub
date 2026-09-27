@@ -28,8 +28,8 @@ for (const captionFile of [false, true]) test(`status GET + POST replay during d
     conversations: new Map(), seenMessageKeys: new Set(), conversationListeners: new Set([(m: GoldConversationMessage) => published.push(m.id)]),
     store: {
       hasMessageByProviderIdForAccount: async (_a: string, _c: string, id: string) => history.has(id),
-      replaceConversationMessagesByAccount: async (_a: string, c: string, messages: GoldConversationMessage[]) => {
-        for (const m of messages) history.set(m.providerMessageId!, structuredClone(m)); summaries.add(c);
+      appendConversationMessageByAccount: async (_a: string, m: GoldConversationMessage) => {
+        history.set(m.providerMessageId!, structuredClone(m)); summaries.add(m.conversationId);
       },
     },
     session: { api: { sendMessage: async () => { providerCalls++; return { message: captionFile ? { msgId: 103 } : null, attachment: [{ msgId: 104 }] }; } } },

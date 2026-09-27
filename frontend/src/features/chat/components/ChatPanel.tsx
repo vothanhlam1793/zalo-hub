@@ -7,9 +7,17 @@ import { cn } from '@/lib/utils';
 import { formatSize, getInitial, isImageAttachment } from '@/utils';
 import { MessageBubble, type MessageGroupItem } from './MessageBubble';
 import Lightbox, { type LightboxImage } from './Lightbox';
+import { attachmentSource } from '../model/message-media';
+import { messagePreview } from '../model/message-preview';
+import { selectAlbumRows } from '../model/album-selector';
+import { AlbumMessage } from './messages/AlbumMessage';
 import type { Contact, ConversationSummary, GroupMember, Message, MessageReactionOption } from '@/types';
 import { useComposerStore } from '@/stores/composer-store';
 import type { DeliveryActions } from './messages/MessageDeliveryStatus';
+import { ComposerAttachments, useAttachmentInput } from './ComposerAttachments';
+import { ComposerLocalTools } from './ComposerLocalTools';
+import { ComposerExtendedTools } from './ComposerExtendedTools';
+import { ImagePlus, Paperclip, Send } from 'lucide-react';
 
 interface ChatPanelProps extends DeliveryActions {
   loadState?: 'idle' | 'loading' | 'ready' | 'error';
@@ -38,6 +46,7 @@ interface ChatPanelProps extends DeliveryActions {
   typingUsers: string[];
   detailsOpen: boolean;
   onScroll: (e: React.UIEvent<HTMLDivElement>) => void;
+  onLoadOlder?: () => Promise<void>;
   onTextChange: (text: string) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onCompositionStart?: () => void;
@@ -90,6 +99,7 @@ export function ChatPanel({
   typingUsers,
   detailsOpen,
   onScroll,
+  onLoadOlder,
   onTextChange,
   onKeyDown,
   onCompositionStart,
@@ -109,6 +119,10 @@ export function ChatPanel({
   const attachFile = useComposerStore((s) => s.attachFile);
   const missingFileName = useComposerStore((s) => s.missingFileName);
   const replyingTo = useComposerStore((s) => s.replyingTo);
+  const composerKey = useComposerStore(s => s.activeKey);
+  const attachments = useComposerStore(s => s.attachments);
+  const batch = useComposerStore(s => s.batch);
+  const attachmentInput = useAttachmentInput(composerKey);
 
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionPos, setMentionPos] = useState<number>(-1);
@@ -254,25 +268,45 @@ export function ChatPanel({
   const isAutoScrollingRef = useRef(false);
   const [showScrollBottomButton, setShowScrollBottomButton] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
-  const scrollSnapshot = useRef({ height: 0, top: 0, first: '', ids: new Set<string>(), anchor: '', offset: 0 });
+  const olderPendingRef = useRef(false);
+  const [olderPending, setOlderPending] = useState(false);
+  const requestOlder = async () => {
+    if (!onLoadOlder || olderPendingRef.current || loadingOlder || syncingHistory || !hasMoreHistory) return;
+    olderPendingRef.current = true;
+    setOlderPending(true);
+    userInteractedScrollRef.current = true;
+    try { await onLoadOlder(); }
+    finally { olderPendingRef.current = false; setOlderPending(false); }
+  };
+  const scrollSnapshot = useRef({ height: 0, top: 0, first: '', ids: new Set<string>(), anchor: '', offset: 0, inner: '', innerOffset: 0 });
   const captureAnchor = (el: HTMLDivElement) => {
-    const top = el.getBoundingClientRect().top;
+    const { top, bottom } = el.getBoundingClientRect();
     const node = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]')).find((item) => item.getBoundingClientRect().bottom > top);
-    return { anchor: node?.dataset.messageId || '', offset: node ? node.getBoundingClientRect().top - top : 0 };
+    const visible = node ? Array.from(node.querySelectorAll<HTMLElement>('[data-content-anchor]')).filter(item => {
+      const rect = item.getBoundingClientRect();
+      return rect.height > 0 && rect.bottom > top && rect.top < bottom;
+    }) : [];
+    // Prefer an element starting inside the viewport over a trailing sliver of a
+    // resized tile. If the viewport is inside a large tile/caption, keep that one.
+    const inner = visible.find(item => item.getBoundingClientRect().top >= top) || visible[0];
+    return { anchor: node?.dataset.messageId || '', offset: node ? node.getBoundingClientRect().top - top : 0,
+      inner: inner?.dataset.contentAnchor || '', innerOffset: inner ? inner.getBoundingClientRect().top - top : 0 };
   };
 
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
-  // Group messages by sender and 5-minute interval for cleaner layout
+  const albumRows = useMemo(() => selectAlbumRows(messages, workspaceAccountId || activeConversation?.accountId || ''), [messages, workspaceAccountId, activeConversation?.accountId]);
+  // Sender grouping is cosmetic only; album membership is decided by the selector.
   const groupedMessages = useMemo<MessageGroupItem[]>(() => {
     const list: MessageGroupItem[] = [];
     let lastDate = '';
 
-    for (let i = 0; i < messages.length; i++) {
-      const current = messages[i];
-      const prev = messages[i - 1];
-      const next = messages[i + 1];
+    for (let i = 0; i < albumRows.length; i++) {
+      const current = albumRows[i].messages[0];
+      const previousMessages = albumRows[i - 1]?.messages;
+      const prev = previousMessages?.[previousMessages.length - 1];
+      const next = albumRows[i + 1]?.messages[0];
 
       const currentDateStr = new Date(current.timestamp).toDateString();
       let showDateDivider: string | undefined;
@@ -284,14 +318,14 @@ export function ChatPanel({
       const isSameSenderAsPrev = Boolean(
         prev &&
         prev.direction === current.direction &&
-        (prev.senderId === current.senderId || prev.senderName === current.senderName) &&
+        current.senderId && prev.senderId === current.senderId &&
         Math.abs(Date.parse(current.timestamp) - Date.parse(prev.timestamp)) < 5 * 60 * 1000
       );
 
       const isSameSenderAsNext = Boolean(
         next &&
         next.direction === current.direction &&
-        (next.senderId === current.senderId || next.senderName === current.senderName) &&
+        current.senderId && next.senderId === current.senderId &&
         Math.abs(Date.parse(next.timestamp) - Date.parse(current.timestamp)) < 5 * 60 * 1000
       );
 
@@ -304,33 +338,24 @@ export function ChatPanel({
     }
 
     return list;
-  }, [messages]);
+  }, [albumRows]);
 
-  const lightboxImages = useMemo<LightboxImage[]>(() => {
-    const result: LightboxImage[] = [];
-    for (const msg of messages) {
-      const att = msg.attachments?.[0];
-      const imgUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
-      if (imgUrl && isImageAttachment(msg, att?.fileName, att?.mimeType)) {
-        result.push({ url: imgUrl, senderName: msg.senderName });
-      }
+  const lightboxEntries = useMemo(() => {
+    const result: (LightboxImage & { key: string })[] = [];
+    for (const row of albumRows) {
+      row.media.forEach(({ message: msg, attachment: att, index, key }) => {
+        const url = attachmentSource(msg, att, index);
+        if (url && att.type !== 'sticker' && isImageAttachment({ kind: att.type }, att.fileName, att.mimeType)) {
+          result.push({ key, url, senderName: msg.senderName });
+        }
+      });
     }
     return result;
-  }, [messages]);
+  }, [albumRows]);
+  const lightboxImages: LightboxImage[] = lightboxEntries;
+  const lightboxMsgIdToIndex = useMemo(() => new Map(lightboxEntries.map((entry, index) => [entry.key, index])), [lightboxEntries]);
 
-  const lightboxMsgIdToIndex = useMemo(() => {
-    const map = new Map<string, number>();
-    let idx = 0;
-    for (const msg of messages) {
-      const att = msg.attachments?.[0];
-      const imgUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
-      if (imgUrl && isImageAttachment(msg, att?.fileName, att?.mimeType)) {
-        map.set(msg.id, idx);
-        idx += 1;
-      }
-    }
-    return map;
-  }, [messages]);
+  useEffect(() => { setLightboxOpen(false); }, [viewKey]);
 
   const openLightbox = useCallback((messageId: string) => {
     const idx = lightboxMsgIdToIndex.get(messageId);
@@ -371,7 +396,7 @@ export function ChatPanel({
 
     if (isNewConversation) {
       userInteractedScrollRef.current = false;
-      scrollSnapshot.current = { height: 0, top: 0, first: '', ids: new Set(), anchor: '', offset: 0 };
+      scrollSnapshot.current = { height: 0, top: 0, first: '', ids: new Set(), anchor: '', offset: 0, inner: '', innerOffset: 0 };
       setNewMessageCount(0);
       scrollToBottomInstant();
     }
@@ -386,10 +411,12 @@ export function ChatPanel({
     const added = messages.filter((m) => !old.ids.has(m.localId || m.id));
     const ownSend = added.some((m) => m.delivery === 'queued' || m.delivery === 'sending');
     const prepended = old.first && first !== old.first && messages.some((m) => (m.localId || m.id) === old.first);
-    if (prepended && !ownSend) {
-      const anchor = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]')).find((node) => node.dataset.messageId === old.anchor);
-      if (anchor) el.scrollTop += anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - old.offset;
+    if ((prepended || userInteractedScrollRef.current) && !ownSend) {
+      const inner = old.inner && Array.from(el.querySelectorAll<HTMLElement>('[data-content-anchor]')).find(node => node.dataset.contentAnchor === old.inner);
+      const anchor = inner || Array.from(el.querySelectorAll<HTMLElement>('[data-message-id], [data-album-anchor]')).find((node) => node.dataset.messageId === old.anchor || node.dataset.albumAnchor === old.anchor);
+      if (anchor) el.scrollTop += anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - (inner ? old.innerOffset : old.offset);
       else el.scrollTop = old.top + el.scrollHeight - old.height;
+      if (!prepended && added.length) { setNewMessageCount((count) => count + added.length); setShowScrollBottomButton(true); }
     }
     else if (ownSend || !userInteractedScrollRef.current) scrollToBottomInstant();
     else if (added.length) { setNewMessageCount((count) => count + added.length); setShowScrollBottomButton(true); }
@@ -421,7 +448,7 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[var(--background)] transition-colors">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--background)] transition-colors">
       {!activeConversationId ? (
         <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-sm gap-2">
           <div className="w-14 h-14 rounded-2xl bg-[var(--card)] border border-[var(--border)] shadow-xs flex items-center justify-center text-2xl">💬</div>
@@ -580,7 +607,9 @@ export function ChatPanel({
             >
               {hasMoreHistory && (
                 <div className="mx-auto my-2 px-3 py-1 text-[11px] text-muted-foreground bg-white/5 border border-white/5 rounded-full select-none">
-                  {loadingOlder || syncingHistory ? 'Đang tải thêm tin cũ...' : 'Kéo lên để tải thêm tin cũ'}
+                  {onLoadOlder ? <button type="button" className="p-2 underline disabled:opacity-60" disabled={olderPending || loadingOlder || syncingHistory}
+                    onClick={() => void requestOlder()}>{olderPending || loadingOlder || syncingHistory ? 'Đang tải thêm tin cũ...' : 'Tải thêm tin cũ'}</button>
+                    : loadingOlder || syncingHistory ? 'Đang tải thêm tin cũ...' : 'Kéo lên để tải thêm tin cũ'}
                 </div>
               )}
 
@@ -593,12 +622,14 @@ export function ChatPanel({
                 </div>
               )}
 
-              {groupedMessages.map((item) => {
+              {groupedMessages.map((item, rowIndex) => {
+                const row = albumRows[rowIndex];
                 const senderContact = item.msg.senderId && contacts ? contacts.find((c) => c.userId === item.msg.senderId) : undefined;
                 const resolvedSenderAvatar = item.msg.senderAvatar || senderContact?.avatar;
 
                 return (
-                  <div key={item.msg.localId || item.msg.id} data-message-id={item.msg.localId || item.msg.id} className="flex flex-col">
+                  <div key={row.key} data-message-id={item.msg.localId || item.msg.id} className="relative flex flex-col">
+                    {row.album && row.messages.slice(1).map(message => <span key={message.localId || message.id} data-album-anchor={message.localId || message.id} className="absolute top-0 h-px w-px" />)}
                     {item.showDateDivider && (
                       <div className="flex items-center justify-center my-4 select-none">
                         <span className="text-[11px] font-medium tracking-wide uppercase px-3 py-0.5 rounded-full bg-white/5 border border-white/5 text-[#94a3b8] shadow-sm">
@@ -606,7 +637,9 @@ export function ChatPanel({
                         </span>
                       </div>
                     )}
-                    <MessageBubble
+                    {row.album ? <AlbumMessage row={row} isGroup={isGroupConversation} hasMoreHistory={hasMoreHistory}
+                      onReply={handleReplyMessage} onReact={onReactMessage} onOpenLightbox={openLightbox}
+                      onRetryMessage={onRetryMessage} onQueryMessage={onQueryMessage} onCancelMessage={onCancelMessage} onRestoreDraft={onRestoreDraft} /> : <MessageBubble
                       msg={item.msg}
                       isGroup={isGroupConversation}
                       isFirstInGroup={item.isFirstInGroup}
@@ -619,7 +652,7 @@ export function ChatPanel({
                       onQueryMessage={onQueryMessage}
                       onCancelMessage={onCancelMessage}
                       onRestoreDraft={onRestoreDraft}
-                    />
+                    />}
                   </div>
                 );
               })}
@@ -639,7 +672,12 @@ export function ChatPanel({
           </div>
 
           {/* Composer */}
-          <form className="relative shrink-0 p-3 sm:p-4 border-t border-[var(--border)] flex flex-col gap-2 bg-[var(--card)] transition-colors shadow-lg" onSubmit={onSend}>
+          <form className="relative shrink-0 min-w-0 p-2 sm:p-3 border-t border-border flex flex-col gap-2 bg-card shadow-lg" onSubmit={onSend}
+            onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
+            onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); attachmentInput.add(Array.from(event.dataTransfer.files)); } }}
+            onPaste={event => { const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/')); if (files.length) { event.preventDefault(); attachmentInput.add(files); } }}>
+            <ComposerAttachments scope={composerKey} />
+            {attachmentInput.error && <p role="status" className="text-xs text-amber-600">{attachmentInput.error}</p>}
             {/* Mention Autocomplete Dropdown */}
             {mentionQuery !== null && mentionCandidates.length > 0 && (
               <div className="absolute bottom-full mb-2 left-4 max-h-52 w-72 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl z-50 p-1 flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100">
@@ -683,7 +721,7 @@ export function ChatPanel({
                       Đang trả lời {replyingTo.senderName || (replyingTo.isSelf ? 'chính bạn' : 'tin nhắn')}
                     </div>
                     <div className="text-muted-foreground truncate text-[11px] mt-0.5">
-                      {replyingTo.text || (replyingTo.attachments?.[0]?.fileName ?? `[${replyingTo.kind}]`)}
+                      {messagePreview(replyingTo)}
                     </div>
                   </div>
                 </div>
@@ -705,28 +743,17 @@ export function ChatPanel({
                 <button type="button" aria-label="Bỏ tệp đính kèm" onClick={onClearFile} className="ml-auto text-rose-500 hover:text-rose-400 p-2">✕</button>
               </div>
             )}
-            <div className="flex gap-2 items-end">
+            <div className="flex flex-col gap-2 min-w-0">
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 className="hidden"
                 onChange={(e) => {
-                  if (e.target.files?.[0]) onAttachFile(e.target.files[0]);
+                  if (e.target.files?.length) attachmentInput.add(Array.from(e.target.files));
                   e.target.value = '';
                 }}
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
-                className="h-10 w-10 p-0 rounded-xl text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 cursor-pointer"
-                title="Đính kèm file hoặc ảnh"
-                aria-label="Đính kèm file hoặc ảnh"
-              >
-                📎
-              </Button>
-
               <Textarea
                 ref={textareaRef as any}
                 placeholder={isGroupConversation ? 'Nhập tin nhắn vào nhóm (gõ @ để tag tên)...' : 'Nhập tin nhắn...'}
@@ -740,13 +767,21 @@ export function ChatPanel({
                 className="min-h-[42px] max-h-[140px] resize-none flex-1 rounded-xl bg-[var(--muted)] border-[var(--border)] focus:border-blue-500 text-sm py-2.5 px-3.5 leading-relaxed text-[var(--foreground)] placeholder:text-muted-foreground"
               />
 
+              <div role="group" aria-label="Công cụ soạn tin" className="flex items-center min-w-0">
+              <div className="order-1"><ComposerLocalTools scope={composerKey} textareaRef={textareaRef} disabled={false} /></div>
+              <Button type="button" variant="ghost" size="icon-lg" className="order-2 rounded-xl" aria-label="Đính kèm ảnh" title="Đính kèm ảnh" onClick={() => { if (fileInputRef.current) { fileInputRef.current.accept = 'image/*'; fileInputRef.current.click(); } }}><ImagePlus /></Button>
+              <Button type="button" variant="ghost" size="icon-lg" className="order-3 rounded-xl" aria-label="Đính kèm tệp" title="Đính kèm tệp" onClick={() => { if (fileInputRef.current) { fileInputRef.current.accept = ''; fileInputRef.current.click(); } }}><Paperclip /></Button>
+              <ComposerExtendedTools key={composerKey} scope={composerKey} messages={messages} addFiles={attachmentInput.add} disabled={!canSend} />
+              <div className="order-5"><ComposerLocalTools kind="templates" scope={composerKey} textareaRef={textareaRef} disabled={false} /></div>
               <Button
                 type="submit"
-                disabled={!canSend || isComposing || (!text.trim() && !attachFile) || Boolean(missingFileName && !attachFile)}
-                className="h-10 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold shrink-0 disabled:opacity-40 transition-opacity shadow-md shadow-blue-600/20 cursor-pointer"
+                aria-label="Gửi" title="Gửi"
+                disabled={!canSend || isComposing || (!text.trim() && !attachFile && !attachments.length) || Boolean(missingFileName && !attachFile) || attachments.some(item => item.upload === 'uploading')}
+                className="order-7 ml-auto h-10 w-10 p-0 rounded-xl bg-primary text-primary-foreground shrink-0 disabled:opacity-40"
               >
-                Gửi
+                <Send />
               </Button>
+              </div>
             </div>
           </form>
 

@@ -44,7 +44,7 @@ export function normalizeSend(input: SendInput): NormalizedSend {
     throw new SendRequestError(400, 'INVALID_TARGET', 'conversationId phải có dạng direct:<id> hoặc group:<id>.');
   }
   if (input.text !== undefined && typeof input.text !== 'string') throw new SendRequestError(400, 'INVALID_TEXT', 'Nội dung không hợp lệ.');
-  const text = (input.text as string | undefined)?.trim() ?? '';
+  const text = input.mentions?.length ? (input.text as string | undefined) ?? '' : (input.text as string | undefined)?.trim() ?? '';
   if (text.length > 20000 || (!text && !input.attachment)) throw new SendRequestError(400, 'INVALID_TEXT', 'Nội dung trống hoặc quá dài.');
   if (![undefined, false, true, 'false', 'true'].includes(input.retry as any)) throw new SendRequestError(400, 'INVALID_RETRY', 'retry phải là boolean.');
   const retry = input.retry === true || input.retry === 'true';
@@ -164,7 +164,7 @@ export class SendRequestService {
           result: { message: execution.messages.find((m) => m.kind === 'text')?.providerMessageId
             ? { msgId: execution.messages.find((m) => m.kind === 'text')!.providerMessageId } : null,
           attachment: execution.messages.filter((m) => m.kind !== 'text').map((m) => ({ msgId: m.providerMessageId })) },
-          providerMessageIds: execution.providerMessageIds, acceptedAt: execution.acceptedAt,
+          providerMessageIds: execution.providerMessageIds, acceptedAt: execution.acceptedAt, mediaMirrorComplete: execution.mediaMirrorComplete === true,
           localPersistence: settled ? (execution.localPersistenceFailed ? 'failed' : 'complete') : 'pending' },
         message_refs_json: execution.messages.map(({ rawMessageJson: _raw, ...message }) => ({ ...message, attachments: message.attachments.map(({ localPath: _p, thumbnailLocalPath: _t, ...a }) => a) })),
       });

@@ -196,7 +196,9 @@ export class GoldSender {
     this.state.logger.info('send_provider_completed', { conversationId, clientRequestId: lifecycle?.clientRequestId,
       sdkDurationMs: Date.now() - started, status: execution.status });
     await this.persistAccepted(execution, lifecycle, async () => {
-      for (const message of execution.messages) await this._appendConversationMessage?.(message);
+      for (const message of execution.messages) {
+        if (await this._appendConversationMessage?.(message) !== true) execution.localPersistenceFailed = true;
+      }
     });
     return execution;
   }
@@ -210,6 +212,7 @@ export class GoldSender {
   }
 
   async sendAttachment(conversationId: string, options: {
+    mentions?: import('../types.js').GoldMessageMention[]; quoteMessageId?: string;
     fileBuffer: Buffer;
     fileName: string;
     mimeType: string;
@@ -231,7 +234,20 @@ export class GoldSender {
 
     const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
 
-    const caption = options.caption?.trim() ?? '';
+    const caption = options.mentions?.length ? options.caption ?? '' : options.caption?.trim() ?? '';
+    if ((options.mentions?.length || options.quoteMessageId) && sendMethod !== 'sendMessage') throw new SendFailure('PRE_DISPATCH_FAILED', 'Attachment context requires sendMessage.', false, 400);
+    if (options.mentions?.length && target.type !== 'group') throw new SendFailure('PRE_DISPATCH_FAILED', 'Mentions require a group.', false, 400);
+    let quote: any;
+    if (options.quoteMessageId) {
+      const account = this.state.boundAccountId ?? this._getActiveAccountId?.();
+      const original = account ? await this.state.store.getMessageById(account, options.quoteMessageId) : undefined;
+      if (!original || original.conversationId !== conversationId) throw new SendFailure('PRE_DISPATCH_FAILED', 'Quote not found in this conversation.', false, 400);
+      const parsed = original.rawMessageJson ? JSON.parse(original.rawMessageJson) : {};
+      const raw = parsed.data ?? parsed;
+      if (!raw.msgId || !raw.cliMsgId || !raw.uidFrom || !raw.ts || !raw.msgType || raw.content === undefined || raw.msgType === 'group.poll') throw new SendFailure('PRE_DISPATCH_FAILED', 'Quote metadata unavailable or unsupported.', false, 400);
+      if (!caption) throw new SendFailure('PRE_DISPATCH_FAILED', 'Attachment quote requires a caption.', false, 400);
+      quote = { content: raw.content, msgType: raw.msgType, propertyExt: raw.propertyExt ?? {}, uidFrom: raw.uidFrom, msgId: raw.msgId, cliMsgId: raw.cliMsgId, ts: raw.ts, ttl: raw.ttl ?? 0 };
+    }
     const mimeType = options.mimeType.trim();
     const kind: GoldMessageKind = mimeType.startsWith('image/') ? 'image' : 'file';
 
@@ -258,7 +274,7 @@ export class GoldSender {
       lifecycle?.onDispatch?.();
       if (sendMethod === 'sendMessage') {
         result = await api.sendMessage(
-          { msg: caption, attachments: [tempFilePath] },
+          { msg: caption, attachments: [tempFilePath], ...(options.mentions?.length ? { mentions: options.mentions } : {}), ...(quote ? { quote } : {}) },
           target.threadId,
           target.type === 'group' ? ThreadType.Group : ThreadType.User,
         );
@@ -282,8 +298,12 @@ export class GoldSender {
             message.attachments[0] = { ...message.attachments[0], url: storedMedia.publicUrl,
               localPath: storedMedia.localPath, thumbnailUrl: kind === 'image' ? storedMedia.publicUrl : undefined };
             message.imageUrl = kind === 'image' ? storedMedia.publicUrl : undefined;
+            execution.mediaMirrorComplete = execution.messages.filter(m => m.kind !== 'text')
+              .every(m => m.attachments.length > 0 && m.attachments.every(a => Boolean(a.url)));
           }
-          await this._appendConversationMessage?.(message);
+          // A seen-key/duplicate skip is NOT proof of durable message/media rows.
+          // Continue mirroring the remaining slots, then let receipt repair verify.
+          if (await this._appendConversationMessage?.(message) !== true) execution.localPersistenceFailed = true;
         }
       });
       return execution;

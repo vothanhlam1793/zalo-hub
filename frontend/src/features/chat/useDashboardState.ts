@@ -6,6 +6,7 @@ import { useWebSocket, type WsConversationMuteUpdatedPayload } from '@/useWebSoc
 import { directConversationId, formatConversationSubtitle, formatConversationTitle, getContactDisplayName, groupConversationId } from '@/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import { notificationService } from '@/features/notifications/notification-service';
+import { createMuteUpdateController, patchConversationMute } from '@/features/notifications/mute-update';
 import { toast } from 'sonner';
 import type {
   AccountSummary,
@@ -43,6 +44,7 @@ export function useDashboardState() {
   const selectionTokenRef = useRef(0);
   const loadedAccountRef = useRef('');
   const initialBootstrapDoneRef = useRef(false);
+  const muteController = useRef(createMuteUpdateController());
 
   const workspace = useWorkspaceStore();
   const chat = useChatStore(useShallow(({ byConversation, ...view }) => view));
@@ -74,14 +76,8 @@ export function useDashboardState() {
 
   // Synchronize user notification settings on boot from server
   useEffect(() => {
-    api.getUserSettings()
-      .then((res) => {
-        if (res.ok && res.settings) {
-          notificationService.updateSettings(res.settings);
-        }
-      })
-      .catch(() => {});
-  }, []);
+    void notificationService.loadSettings();
+  }, [user]);
 
   const messageCache = useMessageCache();
   const { loadData, handleSelectAccount } = useAccountManager();
@@ -151,6 +147,7 @@ export function useDashboardState() {
       chat.replaceAccountConversations(accountId, nextConversations);
     },
     onConversationMuteUpdated: ({ accountId, conversationId, isMuted, muteUntil }: WsConversationMuteUpdatedPayload) => {
+      if (!muteController.current.remote(accountId, conversationId, { isMuted, muteUntil })) return;
       const currentConvs = chat.getAccountConversations(accountId);
       const updated = currentConvs.map((c) =>
         c.id === conversationId ? { ...c, isMuted, muteUntil } : c
@@ -161,43 +158,17 @@ export function useDashboardState() {
       chat.updateConversationFromWs(accountId, message);
       messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
 
-      // Realtime Notification & Audio Chime (Single source of truth)
-      if (message.direction === 'incoming') {
-        const convs = chat.getAccountConversations(accountId);
-        const targetConv = convs.find((c) => c.id === message.conversationId);
-
-        // CẤP 1: Khóa Hệ Thống (Conversation Mute)
-        const isMuted = targetConv?.isMuted === true;
-        if (isMuted) return;
-
-        // CẤP 2: Báo Trên Ứng Dụng (User Settings)
-        const isGroup = message.conversationType === 'group' || targetConv?.type === 'group';
-        const settings = notificationService.getSettings();
-
-        // Kiểm tra xem có tắt thông báo tin nhắn nhóm không
-        if (isGroup && !settings.notifyGroupMessages) return;
-
-        // Kiểm tra thông minh: nếu người dùng đang mở đúng hội thoại này và đang focus cửa sổ -> không làm phiền
-        const isActivelyViewing = chat.activeConversationId === message.conversationId && notificationService.isFocused();
-        if (isActivelyViewing) return;
-
-        // Phát chuông chime theo volume cài đặt
-        notificationService.playChime();
-
-        // Hiển thị thông báo ngoài Desktop & nhấp nháy tab
-        const senderTitle = message.senderName || targetConv?.title || 'Tin nhắn mới';
-        const bodyText = message.kind === 'text' ? message.text : `[${message.kind}] ${message.text || ''}`;
-        
-        notificationService.showDesktopNotification(
-          senderTitle,
-          bodyText,
-          targetConv?.avatar || message.senderAvatar,
-          () => {
-            onSelectConversation(message.conversationId);
-          }
-        );
-        notificationService.startTabFlashing(`${senderTitle}: ${bodyText}`);
-      }
+    },
+    onNotification: (event) => {
+      notificationService.notifyMessage(event, {
+        activeAccountId: useWorkspaceStore.getState().selectedAccountId,
+        activeConversationId: useChatStore.getState().activeConversationId,
+        conversation: useChatStore.getState().getAccountConversations(event.accountId).find((c) => c.id === event.conversationId),
+        onClick: () => {
+          // Never interpret a cross-account conversation ID in the selected account.
+          if (useWorkspaceStore.getState().selectedAccountId === event.accountId) onSelectConversation(event.conversationId);
+        },
+      });
     },
     onSyncStatus: ({ accountId, status: syncStatus, requ18Received, historySynced, historyMsgs }) => {
       if (accountId !== resolveWorkspaceId()) return;
@@ -354,10 +325,13 @@ export function useDashboardState() {
     void onSelectConversation(conversationId);
   }, [chat, resolveWorkspaceId, onSelectConversation]);
 
-  const onLoadOlder = useCallback(() => {
+  const olderRequests = useRef(new Set<string>());
+  const onLoadOlder = useCallback(async () => {
     const accountId = resolveWorkspaceId();
-    if (!accountId) return;
-    void loadOlderMessages(
+    const key = JSON.stringify([accountId, chat.activeConversationId]);
+    if (!accountId || chat.loadingOlder || chat.syncingHistory || olderRequests.current.has(key)) return;
+    olderRequests.current.add(key);
+    try { await loadOlderMessages(
       accountId, chat.activeConversationId, chat.messages, chat.hasMoreHistory, chat.loadingOlder,
       chat.setLoadingOlder, chat.setHasMoreHistory, composer.setLoadError,
       (aid, cid, incoming) => {
@@ -368,7 +342,7 @@ export function useDashboardState() {
         (a, c) => refreshConversationMessages(a, c, messageCache.mergeMessagesIntoConversation, chat.setHasMoreHistory, selectionTokenRef, activeConversationIdRef, messagesEndRef),
         chat.setSyncingHistory, composer.setStatusMsg, chat.setHasMoreHistory, chat.replaceAccountConversations, selectionTokenRef, activeConversationIdRef),
       { current: null } as never,
-    );
+    ); } finally { olderRequests.current.delete(key); }
   }, [resolveWorkspaceId, loadOlderMessages, chat.activeConversationId, chat.messages, chat.hasMoreHistory, chat.loadingOlder, messageCache, syncConversationHistory, refreshConversationMessages, chat, composer]);
 
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -495,28 +469,17 @@ export function useDashboardState() {
     const convId = chat.activeConversationId;
     if (!id || !convId) return;
 
-    const isMute = action === 'mute';
-    const prevConvs = chat.getAccountConversations(id);
-
-    // 1. Optimistic update (0ms UI latency)
-    const optimistic = prevConvs.map((c) =>
-      c.id === convId ? { ...c, isMuted: isMute, muteUntil: isMute ? -1 : null } : c
-    );
-    chat.replaceAccountConversations(id, optimistic);
-    toast.success(isMute ? 'Đã tắt thông báo cuộc trò chuyện này (🔕)' : 'Đã bật lại thông báo cuộc trò chuyện (🔔)');
-
-    try {
-      const res = await api.setConversationMute(id, convId, action);
-      const currentConvs = chat.getAccountConversations(id);
-      const updated = currentConvs.map((c) =>
-        c.id === convId ? { ...c, isMuted: res.isMuted, muteUntil: res.muteUntil } : c
-      );
-      chat.replaceAccountConversations(id, updated);
-    } catch (err) {
-      // Rollback on error
-      chat.replaceAccountConversations(id, prevConvs);
-      toast.error(err instanceof Error ? err.message : 'Thay đổi trạng thái thông báo thất bại');
-    }
+    const previous = chat.getAccountConversations(id).find((c) => c.id === convId);
+    await muteController.current.write({
+      accountId: id, conversationId: convId, action,
+      previous: { isMuted: previous?.isMuted, muteUntil: previous?.muteUntil },
+      request: () => api.setConversationMute(id, convId, action),
+      apply: (fields) => {
+        const store = useChatStore.getState();
+        store.replaceAccountConversations(id, patchConversationMute(store.getAccountConversations(id), convId, fields));
+      },
+      onError: (err) => toast.error(err instanceof Error ? err.message : 'Thay đổi trạng thái thông báo thất bại'),
+    });
   }, [resolveWorkspaceId, chat]);
 
   const onAssignTag = useCallback(async (tagId: string) => {
@@ -779,6 +742,34 @@ export function useDashboardState() {
     }
   }, [resolveWorkspaceId, chat, composer]);
 
+  const [syncingContacts, setSyncingContacts] = useState(false);
+  const onSyncContacts = useCallback(async () => {
+    const id = resolveWorkspaceId();
+    if (!id || syncingContacts) return;
+    const session = chatSession.capture();
+    setSyncingContacts(true);
+    try {
+      composer.setStatusMsg('Đang đồng bộ danh bạ & tên gợi nhớ từ Zalo...');
+      const res = await bff.accountSyncContacts(id);
+      if (!chatSession.valid(session)) return;
+      composer.setStatusMsg(res.message || `Đã đồng bộ ${res.count} bạn bè (${res.aliasCount} tên gợi nhớ).`);
+      // Reload contacts & conversations
+      const [freshContacts, freshConvs] = await Promise.all([
+        bff.workspaceLoadMetadata(id, true).catch(() => null),
+        bff.chatGetConversations(id).catch(() => null),
+      ]);
+      if (!chatSession.valid(session)) return;
+      if (freshContacts?.contacts) chat.setContacts(freshContacts.contacts.contacts);
+      if (freshConvs?.conversations) chat.replaceAccountConversations(id, freshConvs.conversations);
+    } catch (err) {
+      if (chatSession.valid(session)) {
+        composer.setLoadError(err instanceof Error ? err.message : 'Đồng bộ danh bạ & alias thất bại');
+      }
+    } finally {
+      if (chatSession.valid(session)) setSyncingContacts(false);
+    }
+  }, [resolveWorkspaceId, syncingContacts, chat, composer]);
+
   const onSyncUnread = useCallback(async () => {
     const id = resolveWorkspaceId();
     if (!id) return;
@@ -876,6 +867,33 @@ export function useDashboardState() {
     setQrLoginOpen(true);
   }, []);
 
+  const [loadingOlderConversations, setLoadingOlderConversations] = useState(false);
+  const [hasMoreConversations, setHasMoreConversations] = useState(true);
+
+  const onLoadOlderConversations = useCallback(async () => {
+    const accountId = resolveWorkspaceId();
+    if (!accountId || loadingOlderConversations || !hasMoreConversations) return;
+    const currentList = chat.getAccountConversations(accountId);
+    const offset = currentList.length;
+    setLoadingOlderConversations(true);
+    const session = chatSession.capture();
+    try {
+      const q = workspace.query.trim() || undefined;
+      const result = await bff.chatGetConversations(accountId, { limit: 100, offset, q });
+      if (!chatSession.valid(session)) return;
+      if (result.conversations && result.conversations.length > 0) {
+        chat.appendAccountConversations(accountId, result.conversations);
+        setHasMoreConversations(Boolean(result.hasMore));
+      } else {
+        setHasMoreConversations(false);
+      }
+    } catch {
+      if (chatSession.valid(session)) setHasMoreConversations(false);
+    } finally {
+      if (chatSession.valid(session)) setLoadingOlderConversations(false);
+    }
+  }, [resolveWorkspaceId, loadingOlderConversations, hasMoreConversations, chat, workspace.query]);
+
   return {
     navigate,
     workspace,
@@ -908,7 +926,13 @@ export function useDashboardState() {
     onSelectConversation,
     onOpenDirectConversation,
     onOpenGroupConversation,
+    onSyncContacts,
+    syncingContacts,
     onMessagesScroll,
+    onLoadOlder,
+    onLoadOlderConversations,
+    loadingOlderConversations,
+    hasMoreConversations,
     onKeyDown,
     onSend,
     onRetryMessage,
@@ -939,6 +963,8 @@ export function useDashboardState() {
     onUpdateRestriction,
     onToggleMute,
     onMoveAccount,
+    onReorderAccounts,
+    accountOrder,
     onMarkAllRead,
     onSyncUnread,
   };

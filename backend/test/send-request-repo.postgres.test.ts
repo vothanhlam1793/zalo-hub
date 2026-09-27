@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import knex from 'knex';
 import { up } from '../db/migrations/20260922000000_create_send_requests.js';
+import { up as composerMigration } from '../db/migrations/20260927150000_create_composer_staging.js';
+import { up as actionsMigration } from '../db/migrations/20260927170000_extended_action_receipts.js';
 import { SendRequestRepo, type SendRequestRow } from '../src/core/store/send-request-repo.js';
 import { execution, input, requestId } from './send-request-fixtures.js';
 
@@ -19,6 +21,7 @@ test('isolated PostgreSQL: concurrent unique claims, retry CAS, monotonic accept
   try {
     await admin.raw('CREATE SCHEMA ??', [schema]);
     await up(db); // This migration touches only the generated isolated schema.
+    await composerMigration(db); await actionsMigration(db);
     const repo = new SendRequestRepo(db);
     const row: SendRequestRow = { account_id: input.accountId, client_request_id: requestId, system_user_id: input.systemUserId,
       conversation_id: input.conversationId, payload_hash: 'a'.repeat(64), status: 'sending', provider_receipt_json: {},

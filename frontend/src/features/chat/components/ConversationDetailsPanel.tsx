@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { messagePreview } from '../model/message-preview';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { GroupAvatar } from '@/components/GroupAvatar';
 import { Button } from '@/components/ui/button';
@@ -390,7 +391,7 @@ export function ConversationDetailsPanel({
           <div className="space-y-2.5">
             <DetailRow label="Loại hội thoại" value={isGroup ? '👥 Nhóm Zalo' : '👤 Cá nhân 1-1'} />
             <DetailRow label={isGroup ? 'Group ID' : 'Zalo User ID'} value={cleanId} />
-            <DetailRow label="Tin nhắn gần nhất" value={conversation.lastMessageText} />
+            <DetailRow label="Tin nhắn gần nhất" value={messagePreview({ kind: conversation.lastMessageKind, text: conversation.lastMessageText })} />
             <DetailRow label="Số tin nhắn local" value={conversation.messageCount} />
           </div>
         </div>

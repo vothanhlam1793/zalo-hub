@@ -584,24 +584,63 @@ export class GoldSync {
       throw new Error('Session hien tai khong ho tro getAllFriends');
     }
 
-    const response = await this.state.session.api.getAllFriends();
+    const [response, aliasResponse] = await Promise.all([
+      this.state.session.api.getAllFriends().catch((err: unknown) => {
+        this.state.logger.warn('getAllFriends_failed', { error: err instanceof Error ? err.message : String(err) });
+        return [];
+      }),
+      typeof this.state.session.api.getAliasList === 'function'
+        ? this.state.session.api.getAliasList(20000, 1).catch((err: unknown) => {
+            this.state.logger.warn('getAliasList_failed', { error: err instanceof Error ? err.message : String(err) });
+            return null;
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const aliasMap = new Map<string, string>();
+    if (aliasResponse && typeof aliasResponse === 'object') {
+      const items = (aliasResponse as { items?: Array<{ userId: string; alias: string }> }).items;
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          if (item.userId && item.alias) {
+            aliasMap.set(String(item.userId), String(item.alias).trim());
+          }
+        }
+      }
+    }
+
     this.state.logger.info('friends_raw_response_received', {
       responseType: Array.isArray(response) ? 'array' : typeof response,
       keys: response && typeof response === 'object' && !Array.isArray(response) ? Object.keys(response as Record<string, unknown>) : [],
+      aliasCount: aliasMap.size,
     });
-    const friends = normalizeFriendList(response).map((friend: any) => ({
-      userId: String(friend.userId),
-      displayName: String(friend.aliasName || friend.alias || friend.displayName || friend.zaloName || friend.username || friend.userId),
-      zaloName: friend.zaloName ? String(friend.zaloName) : friend.displayName ? String(friend.displayName) : undefined,
-      zaloAlias: friend.aliasName ? String(friend.aliasName) : friend.alias ? String(friend.alias) : undefined,
-      avatar: friend.avatar ? String(friend.avatar) : undefined,
-      status: friend.status ? String(friend.status) : undefined,
-      phoneNumber: friend.phoneNumber ? String(friend.phoneNumber) : undefined,
-      lastSyncAt: new Date().toISOString(),
-    }));
+    const friends = normalizeFriendList(response).map((friend: any) => {
+      const uId = String(friend.userId);
+      const explicitAlias = aliasMap.get(uId) || (friend.aliasName ? String(friend.aliasName) : friend.alias ? String(friend.alias) : undefined);
+      const zaloName = friend.zaloName ? String(friend.zaloName) : friend.displayName ? String(friend.displayName) : undefined;
+      const displayName = String(explicitAlias || friend.displayName || zaloName || friend.username || uId);
 
-    this.state.logger.info('friends_normalized', { count: friends.length });
-    return await this.state.store.replaceContactsByAccount(this.state.boundAccountId, friends);
+      return {
+        userId: uId,
+        displayName,
+        zaloName,
+        zaloAlias: explicitAlias,
+        avatar: friend.avatar ? String(friend.avatar) : undefined,
+        status: friend.status ? String(friend.status) : undefined,
+        phoneNumber: friend.phoneNumber ? String(friend.phoneNumber) : undefined,
+        lastSyncAt: new Date().toISOString(),
+      };
+    });
+
+    this.state.logger.info('friends_normalized', { count: friends.length, withAlias: friends.filter(f => Boolean(f.zaloAlias)).length });
+    const savedContacts = await this.state.store.replaceContactsByAccount(this.state.boundAccountId, friends);
+
+    // Also update direct conversation titles in conversations table if they match friends
+    if (this.state.boundAccountId) {
+      await this.state.store.updateDirectConversationTitlesByFriends(this.state.boundAccountId, friends).catch(() => {});
+    }
+
+    return savedContacts;
   }
 
   async listGroups() {

@@ -70,6 +70,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           onSelectAccount={onSelectAccount}
           onOpenAdmin={() => navigate('/admin')}
           onMoveAccount={dashboard.onMoveAccount}
+          onReorderAccounts={dashboard.onReorderAccounts}
         />
         <Sidebar
           sidebarTab={workspace.sidebarTab}
@@ -90,6 +91,8 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           selectedTagId={selectedTagId}
           onSelectTag={setSelectedTagId}
           onSyncTags={onSyncTags}
+          onSyncContacts={dashboard.onSyncContacts}
+          syncingContacts={dashboard.syncingContacts}
           onMarkAllRead={dashboard.onMarkAllRead}
           onSyncUnread={dashboard.onSyncUnread}
           onReconnectAccount={onReconnectAccount}
@@ -97,6 +100,9 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           onSelectConversation={onSelectConversation}
           onOpenDirectConversation={onOpenDirectConversation}
           onOpenGroupConversation={onOpenGroupConversation}
+          onLoadOlderConversations={dashboard.onLoadOlderConversations}
+          loadingOlderConversations={dashboard.loadingOlderConversations}
+          hasMoreConversations={dashboard.hasMoreConversations}
         />
         <div className="flex-1 min-w-0 flex relative">
           <ChatPanel
@@ -130,6 +136,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             typingUsers={[]}
             detailsOpen={detailsOpen}
             onScroll={onMessagesScroll}
+            onLoadOlder={dashboard.onLoadOlder}
             onTextChange={composer.setText}
             onKeyDown={onKeyDown}
             onCompositionStart={dashboard.handleCompositionStart}
@@ -302,12 +309,17 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               selectedTagId={selectedTagId}
               onSelectTag={setSelectedTagId}
               onSyncTags={onSyncTags}
+              onSyncContacts={dashboard.onSyncContacts}
+              syncingContacts={dashboard.syncingContacts}
               onMarkAllRead={dashboard.onMarkAllRead}
               onSyncUnread={dashboard.onSyncUnread}
               onRenameAccount={onRenameAccount}
               onSelectConversation={handleSelectConversation}
               onOpenDirectConversation={handleOpenDirectConversation}
               onOpenGroupConversation={handleOpenGroupConversation}
+              onLoadOlderConversations={dashboard.onLoadOlderConversations}
+              loadingOlderConversations={dashboard.loadingOlderConversations}
+              hasMoreConversations={dashboard.hasMoreConversations}
             />
           </div>
         )}
@@ -348,6 +360,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               typingUsers={[]}
               detailsOpen={detailsOpen}
               onScroll={onMessagesScroll}
+              onLoadOlder={dashboard.onLoadOlder}
               onTextChange={composer.setText}
               onKeyDown={onKeyDown}
               onCompositionStart={dashboard.handleCompositionStart}

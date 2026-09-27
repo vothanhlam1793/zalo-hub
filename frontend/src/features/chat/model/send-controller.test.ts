@@ -4,6 +4,7 @@ import { chatSession, conversationKey } from './chat-session';
 import { useChatStore } from '../../../stores/chat-store';
 import { useComposerStore } from '../../../stores/composer-store';
 import { submitMessage, retryMessage, querySendStatus } from './send-controller';
+import { conversationRecovery } from './conversation-recovery';
 
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
 function setup() {
@@ -11,6 +12,7 @@ function setup() {
   chatSession.setUser('tester');
   const key = conversationKey('tester', 'account-a', 'direct:customer');
   useChatStore.getState().selectKey(key);
+  conversationRecovery.set(key, 'ready'); // Existing transport tests have no IndexedDB.
   useComposerStore.getState().selectKey(key);
   return key;
 }

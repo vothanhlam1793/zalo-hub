@@ -1,5 +1,8 @@
 # Plan
 
+## Extended tools checkpoint — 2026-09-27
+User-authorized scoped extension delivery: see `gold_2_sales_chat/composer_full/extended-plan.md` and `extended-report.md`. Isolated route/service/UI, durable action receipts, SDK-based capability flags and attachment context; preserve dirty upgrades. Batch outbox/unlock remains separately owned. No production writes/deploy/commit.
+
 ## Active Plan — Sales Chat Readiness, 2026-09-22
 
 This section supersedes the historical service-extraction execution plan below for the current initiative.
@@ -76,3 +79,14 @@ Start with the service foundation, then extract Zalo Gateway, Management API, an
 
 ## Approval Needed
 - Approval of `reorg/migration_plan.md` and Phase 1 execution.
+# Rich-message execution update — 2026-09-27
+Current execution follows gold_2_sales_chat/sprint_2/upgrade-plan.md on baseline 2ea9921. Backend projection, frontend presentation and realtime notification integration share the additive presentation contract recorded there. Verify before deployment or historical data mutation.
+# Album/composer roadmap — 2026-09-27
+User approved detailed roadmap. Execute first album presentation checkpoint per gold_2_sales_chat/album_sprint/plan.md, preserving current uncommitted upgrades. Later checkpoints cover staging uploads/durable drafts, batch sending and extended composer actions. No implicit production schema mutation.
+# Album frontend checkpoint — 2026-09-27
+
+Approved scoped plan: `gold_2_sales_chat/album_sprint/plan.md`. Frontend implementation, structural review, selector/SSR tests and local browser checks completed; exact results in `frontend-report.md` alongside the plan. Other roadmap checkpoints remain deferred.
+# Composer blockers — 2026-09-27
+Approved sequential implementation: see `gold_2_sales_chat/composer_full/blockers-plan.md`. Preserve dirty work; no production migrations, deployment, or commit.
+# Approved frontend UI polish — 2026-09-27
+Execute `gold_2_sales_chat/composer_full/ui-polish-plan.md`. Preserve pre-existing dirty code and send safety. Frontend-only bounded changes; no deployment or commit. User approval supplied in the implementation request.
