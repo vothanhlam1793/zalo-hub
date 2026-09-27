@@ -366,13 +366,18 @@ export function createAdminRouter(
     const userId = String((req as any).systemUserId ?? '');
     const accountId = String(req.params.id).trim();
     try {
-      const { rows } = await knex.raw(
-        'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
-        [userId, accountId]
-      );
-      if (rows.length === 0) {
-        res.status(403).json({ error: 'Khong co quyen reconnect tai khoan nay' });
-        return;
+      const { rows: userRows } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [userId]);
+      const user = userRows[0] as { role: string } | undefined;
+
+      if (user?.role !== 'super_admin') {
+        const { rows } = await knex.raw(
+          'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
+          [userId, accountId]
+        );
+        if (rows.length === 0) {
+          res.status(403).json({ error: 'Khong co quyen reconnect tai khoan nay' });
+          return;
+        }
       }
 
       logger.info('playwright_reconnect_start_requested', { accountId, userId });
@@ -408,47 +413,57 @@ export function createAdminRouter(
 
       setImmediate(async () => {
         try {
-          const runtime = accountManager?.getRuntime(accountId) ?? await accountManager?.ensureRuntime(accountId);
-          if (!runtime) throw new Error('Khong khoi tao duoc runtime cho account ' + accountId);
+          const qrHandler = new PlaywrightQrLogin(logger, indexedDbImporter);
+          activeReconnectSessions.set(accountId, { handler: qrHandler, qrCode: null });
 
-          activeReconnectSessions.set(accountId, { handler: runtime, qrCode: null });
+          const qrBase64 = await qrHandler.start();
+          const sess = activeReconnectSessions.get(accountId);
+          if (sess) sess.qrCode = qrBase64;
 
-          let qrReceived = false;
-          await runtime.loginByQr({
-            onQr: (qrBase64: string) => {
-              const sess = activeReconnectSessions.get(accountId);
-              if (sess) sess.qrCode = qrBase64;
-              qrReceived = true;
-              broadcast?.({
-                type: 'ws_sync_progress',
-                accountId,
-                step: 'qr_ready',
-                percent: 25,
-                qrCode: qrBase64,
-                message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
-              });
-            },
+          broadcast?.({
+            type: 'ws_sync_progress',
+            accountId,
+            step: 'qr_ready',
+            percent: 25,
+            qrCode: qrBase64.startsWith('data:') ? qrBase64 : `data:image/png;base64,${qrBase64}`,
+            message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
           });
 
-          // QR Login completed successfully!
+          const loginRes = await qrHandler.waitForLoginAndImport(180_000, (prog) => {
+            broadcast?.({
+              type: 'ws_sync_progress',
+              accountId,
+              ...prog,
+            });
+          }, accountId);
+
+          // Update session in database
+          const cookiesJson = JSON.stringify(loginRes.cookies);
+          await knex('account_sessions')
+            .where({ account_id: accountId })
+            .update({
+              cookie_json: cookiesJson,
+              imei: loginRes.imei,
+              user_agent: loginRes.userAgent,
+              is_active: 1,
+              updated_at: knex.fn.now(),
+            });
+
+          await accountManager?.activatePrimaryAccount(accountId);
+          const runtime = accountManager?.getRuntime(accountId) ?? await accountManager?.ensureRuntime(accountId);
+          if (runtime) {
+            const summaries = await runtime.getConversationSummaries().catch(() => []);
+            broadcast?.({ type: 'conversation_summaries', accountId, conversations: summaries });
+            void accountManager?.syncAccountAfterLogin(accountId);
+          }
+
           broadcast?.({
             type: 'ws_sync_progress',
             accountId,
             step: 'completed',
             percent: 100,
-            message: '🎉 Đăng nhập thành công! Hệ thống đang tự động bắt kịp tin nhắn gần đây...',
+            message: '🎉 Đăng nhập thành công!',
           });
-
-          // Ensure session is marked active in database
-          await knex('account_sessions')
-            .where({ account_id: accountId })
-            .update({ is_active: 1, updated_at: knex.fn.now() })
-            .catch(() => undefined);
-
-          // Broadcast updated summaries and trigger background catchup sync
-          const summaries = await runtime.getConversationSummaries().catch(() => []);
-          broadcast?.({ type: 'conversation_summaries', accountId, conversations: summaries });
-          void accountManager?.syncAccountAfterLogin(accountId);
         } catch (err) {
           logger.error('reconnect_failed', { accountId, error: String(err) });
           broadcast?.({
@@ -459,6 +474,10 @@ export function createAdminRouter(
             message: 'Đăng nhập lại thất bại hoặc hết thời gian quét QR',
           });
         } finally {
+          const sess = activeReconnectSessions.get(accountId);
+          if (sess?.handler && typeof (sess.handler as any).cleanup === 'function') {
+            void (sess.handler as any).cleanup().catch(() => {});
+          }
           activeReconnectSessions.delete(accountId);
         }
       });

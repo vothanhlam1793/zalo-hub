@@ -6,6 +6,8 @@ import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
 import { createAuthMiddleware } from '../helpers/auth-middleware.js';
 import type { GoldStoredCredential } from '../../core/types.js';
+import { PlaywrightQrLogin } from '../../core/playwright-qr.js';
+import { IndexedDbImporter } from '../../core/indexeddb-importer.js';
 
 const { Zalo } = ZaloApi as {
   Zalo: new (options?: Record<string, unknown>) => any;
@@ -30,7 +32,6 @@ export function parseCookieInput(raw: unknown): Array<{ name: string; value: str
       } catch {}
     }
 
-    // Standard Cookie header string: key=val; key2=val2
     return trimmed.split(';').map((pair) => {
       const idx = pair.indexOf('=');
       if (idx === -1) return null;
@@ -61,6 +62,8 @@ export function createAuthRouter(
 ) {
   const router = Router();
   const { requireAuth } = createAuthMiddleware(knex);
+  const indexedDbImporter = new IndexedDbImporter(knex, logger);
+  let globalQrHandler: PlaywrightQrLogin | null = null;
   let currentQrImage: string | null = null;
 
   // POST /api/login/cookie — Direct Cookie / Session Import
@@ -78,11 +81,9 @@ export function createAuthRouter(
 
       logger.info('cookie_login_started', { userId, cookieCount: parsedCookies.length });
 
-      // Generate random imei if not supplied
       const crypto = await import('node:crypto');
       const imei = `${crypto.randomUUID()}-${crypto.createHash('md5').update(userAgent).digest('hex')}`;
 
-      // 1. Verify cookie with Zalo API
       const zalo = new Zalo({ selfListen: false, checkUpdate: false, logging: false } as any);
       let api: any;
       try {
@@ -97,7 +98,6 @@ export function createAuthRouter(
         return;
       }
 
-      // 2. Fetch account info
       let accountId: string | undefined;
       let displayName: string | undefined;
       let avatar: string | undefined;
@@ -118,7 +118,6 @@ export function createAuthRouter(
         return;
       }
 
-      // 3. Save to accounts & account_sessions
       const credential: GoldStoredCredential = {
         cookie: JSON.stringify(parsedCookies),
         imei,
@@ -162,7 +161,6 @@ export function createAuthRouter(
           updated_at: knex.fn.now(),
         });
 
-      // 4. Assign membership (master if new, viewer if existed)
       const { rows: existingMem } = await knex.raw(
         'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
         [userId, accountId]
@@ -175,7 +173,6 @@ export function createAuthRouter(
         logger.info('cookie_login_master_assigned', { userId, accountId });
       }
 
-      // 5. Activate primary account and start runtime
       await accountManager.activatePrimaryAccount(accountId);
       await accountManager.ensureRuntime(accountId).catch((error) => {
         logger.error('cookie_login_runtime_ensure_failed', {
@@ -184,7 +181,6 @@ export function createAuthRouter(
         });
       });
 
-      // 6. Broadcast updates
       broadcast({
         type: 'session_state',
         accountId,
@@ -214,50 +210,77 @@ export function createAuthRouter(
     const userId = (req as any).systemUserId as string;
     let loginPromise = getLoginPromise();
     if (!loginPromise) {
-      logger.info('gold2_native_qr_login_start_requested', { userId });
+      logger.info('playwright_unified_login_start_requested', { userId });
       currentQrImage = null;
 
+      if (globalQrHandler) {
+        void globalQrHandler.cancel().catch(() => {});
+        globalQrHandler = null;
+      }
+
+      const qrHandler = new PlaywrightQrLogin(logger, indexedDbImporter);
+      globalQrHandler = qrHandler;
+
       loginPromise = (async () => {
-        await loginRuntime.loginByQr({
-          onQr(qrCode) {
-            currentQrImage = qrCode;
-            logger.info('gold2_native_qr_ready', { qrLength: qrCode.length });
-            broadcast({
-              type: 'ws_sync_progress',
-              accountId: 'new_login',
-              step: 'qr_ready',
-              percent: 25,
-              qrCode,
-              message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
-            });
-          },
+        const qrBase64 = await qrHandler.start();
+        currentQrImage = qrBase64;
+        logger.info('playwright_unified_qr_ready', { len: qrBase64.length });
+        broadcast({
+          type: 'ws_sync_progress',
+          accountId: 'new_login',
+          step: 'qr_ready',
+          percent: 25,
+          qrCode: qrBase64.startsWith('data:') ? qrBase64 : `data:image/png;base64,${qrBase64}`,
+          message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
         });
 
-        const currentAccount = await loginRuntime.getCurrentAccount();
-        const accountId = currentAccount?.userId;
+        const loginRes = await qrHandler.waitForLoginAndImport(180_000, (prog) => {
+          if (prog.step === 'waiting_phone_confirm' || prog.step === 'receiving_chunks') {
+            currentQrImage = null;
+          }
+          broadcast({
+            type: 'ws_sync_progress',
+            accountId: prog.step === 'waiting_phone_confirm' ? 'new_login' : loginRes?.accountId || 'new_login',
+            ...prog,
+          });
+        });
+
+        const accountId = loginRes.accountId;
         if (accountId && userId) {
           // 1. Assign membership if needed
-          const { rows: existing } = await knex.raw(
-            'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
-            [userId, accountId]
-          );
+          const { rows: existing } = await knex.raw('SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?', [userId, accountId]);
           if (existing.length === 0) {
             const existingAcc = await knex.raw('SELECT 1 FROM accounts WHERE account_id = ?', [accountId]);
             if (existingAcc.rows.length === 0) {
-              await knex.raw(
-                'INSERT INTO zalo_account_memberships (user_id, account_id, role) VALUES (?, ?, ?)',
-                [userId, accountId, 'master']
-              );
+              await knex.raw('INSERT INTO zalo_account_memberships (user_id, account_id, role) VALUES (?, ?, ?)', [userId, accountId, 'master']);
             } else {
-              await knex.raw(
-                'INSERT INTO zalo_account_memberships (user_id, account_id, role) VALUES (?, ?, ?)',
-                [userId, accountId, 'viewer']
-              );
+              await knex.raw('INSERT INTO zalo_account_memberships (user_id, account_id, role) VALUES (?, ?, ?)', [userId, accountId, 'viewer']);
             }
             logger.info('gold2_auto_membership_assigned', { userId, accountId });
           }
 
-          // 2. Activate primary account and ensure dedicated runtime
+          // 2. Save session credentials
+          const cookiesJson = JSON.stringify(loginRes.cookies);
+          await knex('account_sessions')
+            .insert({
+              account_id: accountId,
+              cookie_json: cookiesJson,
+              imei: loginRes.imei,
+              user_agent: loginRes.userAgent,
+              is_active: 1,
+              created_at: knex.fn.now(),
+              updated_at: knex.fn.now(),
+            })
+            .onConflict('account_id')
+            .merge({
+              cookie_json: cookiesJson,
+              imei: loginRes.imei,
+              user_agent: loginRes.userAgent,
+              is_active: 1,
+              updated_at: knex.fn.now(),
+            });
+
+          // 3. Ensure runtime and notify clients
           await accountManager.activatePrimaryAccount(accountId);
           await accountManager.ensureRuntime(accountId).catch((error) => {
             logger.error('gold2_account_runtime_start_failed_after_qr', {
@@ -266,23 +289,12 @@ export function createAuthRouter(
             });
           });
 
-          // 3. Notify completion
-          broadcast({
-            type: 'ws_sync_progress',
-            accountId,
-            step: 'completed',
-            percent: 100,
-            message: '🎉 Đăng nhập thành công!',
-          });
-
-          await loginRuntime.closeMessageListener().catch(() => undefined);
-          loginRuntime.releaseTransientSession();
           void accountManager.syncAccountAfterLogin(accountId);
         }
-        logger.info('gold2_native_login_completed', { accountId });
+        logger.info('playwright_unified_login_completed', { accountId });
       })()
         .catch((error) => {
-          logger.error('gold2_native_login_failed', error);
+          logger.error('playwright_unified_login_failed', error);
           broadcast({
             type: 'ws_sync_progress',
             accountId: 'new_login',
@@ -292,7 +304,9 @@ export function createAuthRouter(
           });
           throw error;
         })
-        .finally(() => {
+        .finally(async () => {
+          await qrHandler.cleanup().catch(() => {});
+          if (globalQrHandler === qrHandler) globalQrHandler = null;
           currentQrImage = null;
           setLoginPromise(undefined);
         });
@@ -300,16 +314,16 @@ export function createAuthRouter(
       setLoginPromise(loginPromise);
     }
 
-    res.json({ started: true, qrCodeAvailable: Boolean(loginRuntime.getCurrentQrCode() || currentQrImage) });
+    res.json({ started: true, qrCodeAvailable: Boolean(currentQrImage) });
   });
 
   router.get('/login/qr', (_req, res) => {
-    const qrCode = loginRuntime.getCurrentQrCode() || currentQrImage;
-    if (!qrCode) {
+    if (!currentQrImage) {
       res.json({ qrCode: null, ready: false });
       return;
     }
-    res.json({ qrCode, ready: true });
+    const dataUrl = currentQrImage.startsWith('data:') ? currentQrImage : `data:image/png;base64,${currentQrImage}`;
+    res.json({ qrCode: dataUrl, ready: true });
   });
 
   router.post('/logout', (_req, res) => {
