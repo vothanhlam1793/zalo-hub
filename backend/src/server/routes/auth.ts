@@ -211,7 +211,9 @@ export function createAuthRouter(
     try {
       currentQrImage = null;
       setLoginPromise(undefined);
-      loginRuntime.releaseTransientSession();
+      try {
+        loginRuntime.releaseTransientSession();
+      } catch {}
       logger.info('login_qr_session_cancelled');
       res.json({ ok: true });
     } catch (err) {
@@ -237,6 +239,11 @@ export function createAuthRouter(
     if (!loginPromise) {
       logger.info('native_login_start_requested', { userId, force });
       currentQrImage = null;
+
+      // Luôn dọn sạch transient session cũ trước khi mở phiên QR mới
+      try {
+        loginRuntime.releaseTransientSession();
+      } catch {}
 
       loginPromise = (async () => {
         await loginRuntime.loginByQr({
@@ -306,6 +313,9 @@ export function createAuthRouter(
         .finally(() => {
           currentQrImage = null;
           setLoginPromise(undefined);
+          try {
+            loginRuntime.releaseTransientSession();
+          } catch {}
         });
 
       setLoginPromise(loginPromise);

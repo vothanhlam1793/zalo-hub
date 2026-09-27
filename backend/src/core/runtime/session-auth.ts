@@ -130,18 +130,24 @@ export class GoldSessionAuth {
       `, [boundId]).catch(() => undefined);
     }
 
-    // Run heavy background tasks asynchronously without blocking login completion
+    // Run background tasks asynchronously without blocking login completion
     setImmediate(async () => {
       try {
         await this.verifySession().catch(() => undefined);
-        this.state.currentAccount = await this.fetchAccountInfo().catch(() => this.mergeCurrentAccountProfile());
-        if (this.state.currentAccount?.userId) {
-          await this.state.store.setActiveAccount({
-            accountId: this.state.currentAccount.userId,
-            displayName: this.state.currentAccount.displayName,
-            phoneNumber: this.state.currentAccount.phoneNumber,
-            avatar: this.state.currentAccount.avatar,
-          });
+        const info = await this.fetchAccountInfo().catch(() => this.mergeCurrentAccountProfile());
+        if (info?.userId) {
+          this.state.currentAccount = info;
+          // Chỉ cập nhật bảng accounts cho đúng userId này, tuyệt đối không dùng setActiveAccount để tránh overwrite nhầm account khác
+          await this.state.store.getKnex()?.raw(`
+            INSERT INTO accounts (account_id, display_name, phone_number, avatar, last_login_at, updated_at)
+            VALUES (?, ?, ?, ?, NOW(), NOW())
+            ON CONFLICT (account_id) DO UPDATE SET
+              display_name = COALESCE(EXCLUDED.display_name, accounts.display_name),
+              phone_number = COALESCE(EXCLUDED.phone_number, accounts.phone_number),
+              avatar = COALESCE(EXCLUDED.avatar, accounts.avatar),
+              last_login_at = NOW(),
+              updated_at = NOW()
+          `, [info.userId, info.displayName || null, info.phoneNumber || null, info.avatar || null]).catch(() => undefined);
         }
       } catch (bgErr) {
         this.state.logger.error('session_bg_init_failed', { error: bgErr instanceof Error ? bgErr.message : String(bgErr) });
