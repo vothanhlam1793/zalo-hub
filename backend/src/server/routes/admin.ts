@@ -413,57 +413,48 @@ export function createAdminRouter(
 
       setImmediate(async () => {
         try {
-          const qrHandler = new PlaywrightQrLogin(logger, indexedDbImporter);
-          activeReconnectSessions.set(accountId, { handler: qrHandler, qrCode: null });
+          const runtime = accountManager?.getRuntime(accountId) ?? await accountManager?.ensureRuntime(accountId);
+          if (!runtime) throw new Error('Khong khoi tao duoc runtime cho account ' + accountId);
 
-          const qrBase64 = await qrHandler.start();
-          const sess = activeReconnectSessions.get(accountId);
-          if (sess) sess.qrCode = qrBase64;
+          activeReconnectSessions.set(accountId, { handler: runtime, qrCode: null });
 
-          broadcast?.({
-            type: 'ws_sync_progress',
-            accountId,
-            step: 'qr_ready',
-            percent: 25,
-            qrCode: qrBase64.startsWith('data:') ? qrBase64 : `data:image/png;base64,${qrBase64}`,
-            message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
+          let qrReceived = false;
+          await runtime.loginByQr({
+            onQr: (qrBase64: string) => {
+              const sess = activeReconnectSessions.get(accountId);
+              if (sess) sess.qrCode = qrBase64;
+              qrReceived = true;
+              broadcast?.({
+                type: 'ws_sync_progress',
+                accountId,
+                step: 'qr_ready',
+                percent: 25,
+                qrCode: qrBase64.startsWith('data:') ? qrBase64 : `data:image/png;base64,${qrBase64}`,
+                message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
+              });
+            },
           });
 
-          const loginRes = await qrHandler.waitForLoginAndImport(180_000, (prog) => {
-            broadcast?.({
-              type: 'ws_sync_progress',
-              accountId,
-              ...prog,
-            });
-          }, accountId);
-
-          // Update session in database
-          const cookiesJson = JSON.stringify(loginRes.cookies);
-          await knex('account_sessions')
-            .where({ account_id: accountId })
-            .update({
-              cookie_json: cookiesJson,
-              imei: loginRes.imei,
-              user_agent: loginRes.userAgent,
-              is_active: 1,
-              updated_at: knex.fn.now(),
-            });
-
-          await accountManager?.activatePrimaryAccount(accountId);
-          const runtime = accountManager?.getRuntime(accountId) ?? await accountManager?.ensureRuntime(accountId);
-          if (runtime) {
-            const summaries = await runtime.getConversationSummaries().catch(() => []);
-            broadcast?.({ type: 'conversation_summaries', accountId, conversations: summaries });
-            void accountManager?.syncAccountAfterLogin(accountId);
-          }
-
+          // QR Login completed successfully!
           broadcast?.({
             type: 'ws_sync_progress',
             accountId,
             step: 'completed',
             percent: 100,
-            message: '🎉 Đăng nhập thành công!',
+            message: '🎉 Đăng nhập thành công! Hệ thống đang tự động bắt kịp tin nhắn gần đây...',
           });
+
+          // Ensure session is marked active in database
+          await knex('account_sessions')
+            .where({ account_id: accountId })
+            .update({ is_active: 1, updated_at: knex.fn.now() })
+            .catch(() => undefined);
+
+          // Broadcast updated summaries and trigger background catchup sync
+          await accountManager?.activatePrimaryAccount(accountId);
+          const summaries = await runtime.getConversationSummaries().catch(() => []);
+          broadcast?.({ type: 'conversation_summaries', accountId, conversations: summaries });
+          void accountManager?.syncAccountAfterLogin(accountId);
         } catch (err) {
           logger.error('reconnect_failed', { accountId, error: String(err) });
           broadcast?.({
@@ -474,10 +465,6 @@ export function createAdminRouter(
             message: 'Đăng nhập lại thất bại hoặc hết thời gian quét QR',
           });
         } finally {
-          const sess = activeReconnectSessions.get(accountId);
-          if (sess?.handler && typeof (sess.handler as any).cleanup === 'function') {
-            void (sess.handler as any).cleanup().catch(() => {});
-          }
           activeReconnectSessions.delete(accountId);
         }
       });

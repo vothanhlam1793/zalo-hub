@@ -175,7 +175,8 @@ export class GoldSessionAuth {
 
       void loginQR(ctx, { userAgent, language: 'vi' }, (event: any) => {
         if (event?.type === 0 && event?.data?.image) {
-          lastQr = String(event.data.image);
+          const raw = String(event.data.image);
+          lastQr = raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`;
           this.state.currentQrCode = lastQr;
           this.state.logger.info('qr_ready', { qrLength: lastQr.length });
           options.onQr?.(lastQr);

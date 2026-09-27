@@ -210,42 +210,27 @@ export function createAuthRouter(
     const userId = (req as any).systemUserId as string;
     let loginPromise = getLoginPromise();
     if (!loginPromise) {
-      logger.info('playwright_unified_login_start_requested', { userId });
+      logger.info('native_login_start_requested', { userId });
       currentQrImage = null;
 
-      if (globalQrHandler) {
-        void globalQrHandler.cancel().catch(() => {});
-        globalQrHandler = null;
-      }
-
-      const qrHandler = new PlaywrightQrLogin(logger, indexedDbImporter);
-      globalQrHandler = qrHandler;
-
       loginPromise = (async () => {
-        const qrBase64 = await qrHandler.start();
-        currentQrImage = qrBase64;
-        logger.info('playwright_unified_qr_ready', { len: qrBase64.length });
-        broadcast({
-          type: 'ws_sync_progress',
-          accountId: 'new_login',
-          step: 'qr_ready',
-          percent: 25,
-          qrCode: qrBase64.startsWith('data:') ? qrBase64 : `data:image/png;base64,${qrBase64}`,
-          message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
+        await loginRuntime.loginByQr({
+          onQr: (qrBase64: string) => {
+            currentQrImage = qrBase64;
+            logger.info('native_qr_ready', { qrLength: qrBase64.length });
+            broadcast({
+              type: 'ws_sync_progress',
+              accountId: 'new_login',
+              step: 'qr_ready',
+              percent: 25,
+              qrCode: qrBase64.startsWith('data:') ? qrBase64 : `data:image/png;base64,${qrBase64}`,
+              message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
+            });
+          },
         });
 
-        const loginRes = await qrHandler.waitForLoginAndImport(180_000, (prog) => {
-          if (prog.step === 'waiting_phone_confirm' || prog.step === 'receiving_chunks') {
-            currentQrImage = null;
-          }
-          broadcast({
-            type: 'ws_sync_progress',
-            accountId: prog.step === 'waiting_phone_confirm' ? 'new_login' : loginRes?.accountId || 'new_login',
-            ...prog,
-          });
-        });
-
-        const accountId = loginRes.accountId;
+        const currentAccount = await loginRuntime.getCurrentAccount();
+        const accountId = currentAccount?.userId;
         if (accountId && userId) {
           // 1. Assign membership if needed
           const { rows: existing } = await knex.raw('SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?', [userId, accountId]);
@@ -259,28 +244,7 @@ export function createAuthRouter(
             logger.info('gold2_auto_membership_assigned', { userId, accountId });
           }
 
-          // 2. Save session credentials
-          const cookiesJson = JSON.stringify(loginRes.cookies);
-          await knex('account_sessions')
-            .insert({
-              account_id: accountId,
-              cookie_json: cookiesJson,
-              imei: loginRes.imei,
-              user_agent: loginRes.userAgent,
-              is_active: 1,
-              created_at: knex.fn.now(),
-              updated_at: knex.fn.now(),
-            })
-            .onConflict('account_id')
-            .merge({
-              cookie_json: cookiesJson,
-              imei: loginRes.imei,
-              user_agent: loginRes.userAgent,
-              is_active: 1,
-              updated_at: knex.fn.now(),
-            });
-
-          // 3. Ensure runtime and notify clients
+          // 2. Ensure runtime and notify clients
           await accountManager.activatePrimaryAccount(accountId);
           await accountManager.ensureRuntime(accountId).catch((error) => {
             logger.error('gold2_account_runtime_start_failed_after_qr', {
@@ -289,12 +253,22 @@ export function createAuthRouter(
             });
           });
 
+          await loginRuntime.closeMessageListener().catch(() => undefined);
+          loginRuntime.releaseTransientSession();
           void accountManager.syncAccountAfterLogin(accountId);
+
+          broadcast({
+            type: 'ws_sync_progress',
+            accountId,
+            step: 'completed',
+            percent: 100,
+            message: '🎉 Đăng nhập thành công!',
+          });
         }
-        logger.info('playwright_unified_login_completed', { accountId });
+        logger.info('native_login_completed', { accountId });
       })()
         .catch((error) => {
-          logger.error('playwright_unified_login_failed', error);
+          logger.error('native_login_failed', error);
           broadcast({
             type: 'ws_sync_progress',
             accountId: 'new_login',
@@ -304,9 +278,7 @@ export function createAuthRouter(
           });
           throw error;
         })
-        .finally(async () => {
-          await qrHandler.cleanup().catch(() => {});
-          if (globalQrHandler === qrHandler) globalQrHandler = null;
+        .finally(() => {
           currentQrImage = null;
           setLoginPromise(undefined);
         });
@@ -314,7 +286,7 @@ export function createAuthRouter(
       setLoginPromise(loginPromise);
     }
 
-    res.json({ started: true, qrCodeAvailable: Boolean(currentQrImage) });
+    res.json({ started: true, qrCodeAvailable: Boolean(loginRuntime.getCurrentQrCode() || currentQrImage) });
   });
 
   router.get('/login/qr', (_req, res) => {
