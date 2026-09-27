@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import type { Knex } from 'knex';
 import * as ZaloApi from 'zalo-api-final';
-import type { GoldRuntime } from '../../core/runtime.js';
+import { GoldRuntime } from '../../core/runtime.js';
+import { GoldStore } from '../../core/store/index.js';
 import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
 import { createAuthMiddleware } from '../helpers/auth-middleware.js';
@@ -240,13 +241,11 @@ export function createAuthRouter(
       logger.info('native_login_start_requested', { userId, force });
       currentQrImage = null;
 
-      // Luôn dọn sạch transient session cũ trước khi mở phiên QR mới
-      try {
-        loginRuntime.releaseTransientSession();
-      } catch {}
+      const ephemeralStore = new GoldStore(knex);
+      const ephemeralRuntime = new GoldRuntime(ephemeralStore, logger);
 
       loginPromise = (async () => {
-        await loginRuntime.loginByQr({
+        await ephemeralRuntime.loginByQr({
           onQr: (qrBase64: string) => {
             currentQrImage = qrBase64;
             logger.info('native_qr_ready', { qrLength: qrBase64.length });
@@ -261,7 +260,7 @@ export function createAuthRouter(
           },
         });
 
-        const currentAccount = await loginRuntime.getCurrentAccount();
+        const currentAccount = await ephemeralRuntime.getCurrentAccount();
         const accountId = currentAccount?.userId;
         if (accountId && userId) {
           // 1. Assign membership if needed - Super Admin luôn nhận quyền master khi thêm tài khoản
@@ -282,8 +281,8 @@ export function createAuthRouter(
             });
           });
 
-          await loginRuntime.closeMessageListener().catch(() => undefined);
-          loginRuntime.releaseTransientSession();
+          await ephemeralRuntime.closeMessageListener().catch(() => undefined);
+          ephemeralRuntime.releaseTransientSession();
           void accountManager.syncAccountAfterLogin(accountId);
 
           broadcast({
@@ -311,7 +310,7 @@ export function createAuthRouter(
           currentQrImage = null;
           setLoginPromise(undefined);
           try {
-            loginRuntime.releaseTransientSession();
+            ephemeralRuntime.releaseTransientSession();
           } catch {}
         });
 
