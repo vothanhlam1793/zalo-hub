@@ -134,7 +134,7 @@ async function main() {
   const mediaClient = new MinioClient({
     endPoint: process.env.MINIO_ENDPOINT || '127.0.0.1',
     port: Number(process.env.MINIO_PORT || 9000),
-    useSSL: false,
+    useSSL: process.env.MINIO_USE_SSL === 'true',
     accessKey: process.env.MINIO_ACCESS_KEY || process.env.MINIO_USER || 'zalohub',
     secretKey: process.env.MINIO_SECRET_KEY || process.env.MINIO_PASSWORD || 'zalohub-minio-secret',
   });
@@ -246,7 +246,7 @@ async function main() {
   app.use('/api', systemAuth.router);
   app.use('/api/accounts', createAccountsRouter(logger, accountManager, broadcast, upload, knex, systemAuth.requireAuth, systemAuth.requireAccountAccess, sendRequestService));
   app.use('/api/accounts', createMonitorRouter(logger, loginStore, accountManager, systemAuth.requireAuth, systemAuth.requireAccountAccess));
-  app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload));
+  app.use('/api', createLegacyRouter(logger, accountManager, broadcast, upload, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api/tags', createTagsRouter(loginStore, accountManager, broadcast, systemAuth.requireAuth, systemAuth.requireAccountAccess));
   app.use('/api', createAdminRouter(logger, loginStore, knex, systemAuth.requireAuth, systemAuth.requireSystemRole, systemAuth.requireAccountAccess, systemAuth.requireAccountMaster, accountManager, broadcast));
   app.use('/api', createStorageRouter(logger, storageRepo, mediaOffloaderService, backupImporterService, systemAuth.requireAuth, systemAuth.requireSystemRole));

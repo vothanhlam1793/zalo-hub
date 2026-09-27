@@ -1,5 +1,4 @@
-import socket from 'node:socket';
-import os from 'node:os';
+import net from 'node:net';
 import crypto from 'node:crypto';
 import http from 'node:http';
 
@@ -45,7 +44,7 @@ export async function extractSessionUin(host = '127.0.0.1', port = 9222): Promis
 
   // 2. Connect raw WebSocket client
   return new Promise((resolve, reject) => {
-    const s = new (require('net').Socket)();
+    const s = new net.Socket();
     s.connect(port, host, () => {
       const key = crypto.randomBytes(16).toString('base64');
       const req = `GET ${wsUrl.pathname} HTTP/1.1\r\n` +

@@ -55,7 +55,7 @@ export function createAuthMiddleware(knex?: Knex) {
         return;
       }
 
-      const accountId = String(req.params.accountId ?? '').trim();
+      const accountId = String(req.params.accountId ?? req.body?.accountId ?? '').trim();
       if (!accountId) {
         next();
         return;

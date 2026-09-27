@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
@@ -10,11 +10,32 @@ export function createLegacyRouter(
   accountManager: AccountRuntimeManager,
   broadcast: (payload: Record<string, unknown>) => void,
   upload: multer.Multer,
+  requireAuth?: (req: Request, res: Response, next: NextFunction) => void,
+  requireAccountAccess?: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
 ) {
 
   const router = Router();
+  const auth = requireAuth ? [requireAuth] : [];
+  const editAuth = (req: Request, res: Response, next: NextFunction) => {
+    if (!requireAuth) return next();
+    requireAuth(req, res, () => {
+      const primaryId = accountManager.getPrimaryAccountId();
+      if (!primaryId || !requireAccountAccess) return next();
+      req.params.accountId = primaryId;
+      requireAccountAccess('editor')(req, res, next);
+    });
+  };
+  const viewAuth = (req: Request, res: Response, next: NextFunction) => {
+    if (!requireAuth) return next();
+    requireAuth(req, res, () => {
+      const primaryId = accountManager.getPrimaryAccountId();
+      if (!primaryId || !requireAccountAccess) return next();
+      req.params.accountId = primaryId;
+      requireAccountAccess('viewer')(req, res, next);
+    });
+  };
 
-  router.get('/friends', (req, res) => {
+  router.get('/friends', viewAuth, (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/contacts');
       if (!context) return;
@@ -36,7 +57,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.get('/contacts', (req, res) => {
+  router.get('/contacts', viewAuth, (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/contacts');
       if (!context) return;
@@ -53,7 +74,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.get('/groups', (req, res) => {
+  router.get('/groups', viewAuth, (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/groups');
       if (!context) return;
@@ -70,7 +91,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.get('/conversations/:conversationId/messages', (req, res) => {
+  router.get('/conversations/:conversationId/messages', viewAuth, (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/conversations/:conversationId/messages');
       if (!context) return;
@@ -93,7 +114,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.post('/conversations/:conversationId/sync-metadata', (req, res) => {
+  router.post('/conversations/:conversationId/sync-metadata', editAuth, (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/conversations/:conversationId/sync-metadata');
       if (!context) return;
@@ -113,7 +134,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.post('/conversations/sync-history', (req, res) => {
+  router.post('/conversations/sync-history', editAuth, (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/conversations/sync-history');
       if (!context) return;
@@ -135,7 +156,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.get('/conversations', (_req, res) => {
+  router.get('/conversations', viewAuth, (_req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/conversations');
       if (!context) return;
@@ -148,7 +169,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.post('/send', (req, res) => {
+  router.post('/send', editAuth, (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/send');
       if (!context) return;
@@ -191,7 +212,7 @@ export function createLegacyRouter(
     })();
   });
 
-  router.post('/send-attachment', upload.single('file'), (req, res) => {
+  router.post('/send-attachment', editAuth, upload.single('file'), (req, res) => {
     void (async () => {
       const context = await getLegacyPrimaryContextOrRespond(res, accountManager, '/api/accounts/:accountId/send-attachment');
       if (!context) return;

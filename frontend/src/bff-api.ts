@@ -13,7 +13,7 @@ export const bff = {
   },
 
   authLogout: async () => {
-    const logout = api.logout().catch(() => {});
+    const logout = api.authLogout().catch(() => {});
     localStorage.removeItem('auth_token');
     await logout;
     return { ok: true };
