@@ -141,6 +141,7 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onReactMessage={onReactMessage}
             onUpdateRestriction={dashboard.onUpdateRestriction}
+            onToggleMute={dashboard.onToggleMute}
           />
         <ConversationDetailsPanel
           open={detailsOpen}
@@ -357,6 +358,7 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
               onToggleDetails={() => setDetailsOpen((open) => !open)}
               onReactMessage={onReactMessage}
+              onToggleMute={dashboard.onToggleMute}
               showDisconnectBanner={status ? !status.sessionActive && !status.loginInProgress && !!workspace.selectedAccountId : false}
             />
             {detailsOpen && (

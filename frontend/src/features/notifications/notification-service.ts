@@ -8,15 +8,37 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   showMessagePreview: true,
 };
 
+const STORAGE_KEY = 'zalohub_user_settings';
+
+function loadStoredSettings(): UserSettings {
+  if (typeof window === 'undefined') return { ...DEFAULT_USER_SETTINGS };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_USER_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return {
+      desktopNotification: parsed.desktopNotification !== undefined ? Boolean(parsed.desktopNotification) : DEFAULT_USER_SETTINGS.desktopNotification,
+      soundEnabled: parsed.soundEnabled !== undefined ? Boolean(parsed.soundEnabled) : DEFAULT_USER_SETTINGS.soundEnabled,
+      soundVolume: typeof parsed.soundVolume === 'number' ? Math.max(0, Math.min(100, parsed.soundVolume)) : DEFAULT_USER_SETTINGS.soundVolume,
+      notifyGroupMessages: parsed.notifyGroupMessages !== undefined ? Boolean(parsed.notifyGroupMessages) : DEFAULT_USER_SETTINGS.notifyGroupMessages,
+      showMessagePreview: parsed.showMessagePreview !== undefined ? Boolean(parsed.showMessagePreview) : DEFAULT_USER_SETTINGS.showMessagePreview,
+    };
+  } catch {
+    return { ...DEFAULT_USER_SETTINGS };
+  }
+}
+
 class NotificationService {
   private audioCtx: AudioContext | null = null;
-  private settings: UserSettings = { ...DEFAULT_USER_SETTINGS };
-  private originalTitle = document.title || 'ZaloHub';
+  private settings: UserSettings = loadStoredSettings();
+  private originalTitle = typeof document !== 'undefined' ? (document.title || 'ZaloHub') : 'ZaloHub';
   private flashInterval: any = null;
   private isWindowFocused = true;
+  private listeners = new Set<(settings: UserSettings) => void>();
 
   constructor() {
     if (typeof window !== 'undefined') {
+      this.isWindowFocused = document.hasFocus();
       window.addEventListener('focus', () => {
         this.isWindowFocused = true;
         this.stopTabFlashing();
@@ -27,8 +49,40 @@ class NotificationService {
     }
   }
 
-  public updateSettings(newSettings: Partial<UserSettings>) {
+  public subscribe(listener: (settings: UserSettings) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notifyListeners() {
+    for (const listener of this.listeners) {
+      try {
+        listener(this.getSettings());
+      } catch {}
+    }
+  }
+
+  public isFocused(): boolean {
+    if (typeof document === 'undefined') return true;
+    return this.isWindowFocused && document.hasFocus();
+  }
+
+  public updateSettings(newSettings: Partial<UserSettings>, saveToStorage = true) {
     this.settings = { ...this.settings, ...newSettings };
+    if (saveToStorage && typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.settings));
+      } catch {}
+    }
+    this.notifyListeners();
+  }
+
+  public toggleSound(): boolean {
+    const nextState = !this.settings.soundEnabled;
+    this.updateSettings({ soundEnabled: nextState });
+    return nextState;
   }
 
   public getSettings(): UserSettings {

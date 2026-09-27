@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { bff, type AccountStatusSummary } from '@/bff-api';
 import { api } from '@/api';
-import { useWebSocket } from '@/useWebSocket';
+import { useWebSocket, type WsConversationMuteUpdatedPayload } from '@/useWebSocket';
 import { directConversationId, formatConversationSubtitle, formatConversationTitle, getContactDisplayName, groupConversationId } from '@/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import { notificationService } from '@/features/notifications/notification-service';
+import { toast } from 'sonner';
 import type {
   AccountSummary,
   Contact,
@@ -70,6 +71,17 @@ export function useDashboardState() {
   useEffect(() => {
     activeConversationIdRef.current = chat.activeConversationId;
   }, [chat.activeConversationId]);
+
+  // Synchronize user notification settings on boot from server
+  useEffect(() => {
+    api.getUserSettings()
+      .then((res) => {
+        if (res.ok && res.settings) {
+          notificationService.updateSettings(res.settings);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const messageCache = useMessageCache();
   const { loadData, handleSelectAccount } = useAccountManager();
@@ -136,77 +148,55 @@ export function useDashboardState() {
     },
     onConversations: ({ accountId, conversations: nextConversations }: WsConversationSummariesPayload) => {
       if (!accountId) return;
-      const prevConvs = chat.getAccountConversations(accountId);
-
-      // Detect incoming messages for background (non-active) conversations
-      if (prevConvs && prevConvs.length > 0 && initialBootstrapDoneRef.current) {
-        const activeConvId = activeConversationIdRef.current;
-        for (const next of nextConversations) {
-          // If active conversation, onMessage already handles notification & sound
-          if (next.id === activeConvId) continue;
-          if (next.lastDirection !== 'incoming') continue;
-
-          const prev = prevConvs.find((c) => c.id === next.id);
-          const isNewer = !prev || (next.lastMessageTimestamp && (!prev.lastMessageTimestamp || next.lastMessageTimestamp > prev.lastMessageTimestamp));
-          const unreadIncreased = (next.unreadCount ?? 0) > (prev?.unreadCount ?? 0);
-
-          if (isNewer || unreadIncreased) {
-            const isMuted = next.isMuted === true;
-            const isGroup = next.type === 'group';
-            const settings = notificationService.getSettings();
-
-            if (!isMuted && (!isGroup || settings.notifyGroupMessages)) {
-              notificationService.playChime();
-              const senderTitle = next.lastMessageSenderName || next.title || 'Tin nhắn mới';
-              const bodyText = next.lastMessageKind === 'text' ? next.lastMessageText : `[${next.lastMessageKind}] ${next.lastMessageText || ''}`;
-
-              notificationService.showDesktopNotification(
-                senderTitle,
-                bodyText,
-                next.avatar,
-                () => {
-                  onSelectConversation(next.id);
-                }
-              );
-              notificationService.startTabFlashing(`${senderTitle}: ${bodyText}`);
-            }
-          }
-        }
-      }
-
       chat.replaceAccountConversations(accountId, nextConversations);
+    },
+    onConversationMuteUpdated: ({ accountId, conversationId, isMuted, muteUntil }: WsConversationMuteUpdatedPayload) => {
+      const currentConvs = chat.getAccountConversations(accountId);
+      const updated = currentConvs.map((c) =>
+        c.id === conversationId ? { ...c, isMuted, muteUntil } : c
+      );
+      chat.replaceAccountConversations(accountId, updated);
     },
     onMessage: ({ accountId, message }: WsConversationMessagePayload) => {
       chat.updateConversationFromWs(accountId, message);
       messageCache.mergeMessagesIntoConversation(accountId, message.conversationId, [message], 'append');
 
-      // Realtime Notification & Audio Chime
+      // Realtime Notification & Audio Chime (Single source of truth)
       if (message.direction === 'incoming') {
         const convs = chat.getAccountConversations(accountId);
         const targetConv = convs.find((c) => c.id === message.conversationId);
+
+        // CẤP 1: Khóa Hệ Thống (Conversation Mute)
         const isMuted = targetConv?.isMuted === true;
+        if (isMuted) return;
+
+        // CẤP 2: Báo Trên Ứng Dụng (User Settings)
         const isGroup = message.conversationType === 'group' || targetConv?.type === 'group';
         const settings = notificationService.getSettings();
 
-        // Check if muted or if group notifications are disabled
-        if (!isMuted && (!isGroup || settings.notifyGroupMessages)) {
-          // Play chime sound
-          notificationService.playChime();
+        // Kiểm tra xem có tắt thông báo tin nhắn nhóm không
+        if (isGroup && !settings.notifyGroupMessages) return;
 
-          // Show desktop notification and flash tab
-          const senderTitle = message.senderName || targetConv?.title || 'Tin nhắn mới';
-          const bodyText = message.kind === 'text' ? message.text : `[${message.kind}] ${message.text || ''}`;
-          
-          notificationService.showDesktopNotification(
-            senderTitle,
-            bodyText,
-            targetConv?.avatar || message.senderAvatar,
-            () => {
-              onSelectConversation(message.conversationId);
-            }
-          );
-          notificationService.startTabFlashing(`${senderTitle}: ${bodyText}`);
-        }
+        // Kiểm tra thông minh: nếu người dùng đang mở đúng hội thoại này và đang focus cửa sổ -> không làm phiền
+        const isActivelyViewing = chat.activeConversationId === message.conversationId && notificationService.isFocused();
+        if (isActivelyViewing) return;
+
+        // Phát chuông chime theo volume cài đặt
+        notificationService.playChime();
+
+        // Hiển thị thông báo ngoài Desktop & nhấp nháy tab
+        const senderTitle = message.senderName || targetConv?.title || 'Tin nhắn mới';
+        const bodyText = message.kind === 'text' ? message.text : `[${message.kind}] ${message.text || ''}`;
+        
+        notificationService.showDesktopNotification(
+          senderTitle,
+          bodyText,
+          targetConv?.avatar || message.senderAvatar,
+          () => {
+            onSelectConversation(message.conversationId);
+          }
+        );
+        notificationService.startTabFlashing(`${senderTitle}: ${bodyText}`);
       }
     },
     onSyncStatus: ({ accountId, status: syncStatus, requ18Received, historySynced, historyMsgs }) => {
@@ -504,25 +494,30 @@ export function useDashboardState() {
     const id = resolveWorkspaceId();
     const convId = chat.activeConversationId;
     if (!id || !convId) return;
-    const session = chatSession.capture();
-    const key = useChatStore.getState().activeKey;
+
+    const isMute = action === 'mute';
+    const prevConvs = chat.getAccountConversations(id);
+
+    // 1. Optimistic update (0ms UI latency)
+    const optimistic = prevConvs.map((c) =>
+      c.id === convId ? { ...c, isMuted: isMute, muteUntil: isMute ? -1 : null } : c
+    );
+    chat.replaceAccountConversations(id, optimistic);
+    toast.success(isMute ? 'Đã tắt thông báo cuộc trò chuyện này (🔕)' : 'Đã bật lại thông báo cuộc trò chuyện (🔔)');
+
     try {
       const res = await api.setConversationMute(id, convId, action);
-      if (!chatSession.valid(session)) return;
       const currentConvs = chat.getAccountConversations(id);
       const updated = currentConvs.map((c) =>
         c.id === convId ? { ...c, isMuted: res.isMuted, muteUntil: res.muteUntil } : c
       );
       chat.replaceAccountConversations(id, updated);
-      if (useChatStore.getState().activeKey === key) {
-        composer.setStatusMsg(action === 'mute' ? 'Đã tắt thông báo cuộc trò chuyện này.' : 'Đã bật lại thông báo.');
-      }
     } catch (err) {
-      if (chatSession.valid(session) && useChatStore.getState().activeKey === key) {
-        composer.setLoadError(err instanceof Error ? err.message : 'Thay đổi trạng thái thông báo thất bại');
-      }
+      // Rollback on error
+      chat.replaceAccountConversations(id, prevConvs);
+      toast.error(err instanceof Error ? err.message : 'Thay đổi trạng thái thông báo thất bại');
     }
-  }, [resolveWorkspaceId, chat, composer]);
+  }, [resolveWorkspaceId, chat]);
 
   const onAssignTag = useCallback(async (tagId: string) => {
     const id = resolveWorkspaceId();

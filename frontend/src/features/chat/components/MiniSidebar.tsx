@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -7,6 +7,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { getAccountDisplayName, getInitial } from '@/utils';
 import { UserSettingsModal } from './UserSettingsModal';
 import { MobileSyncModal } from './MobileSyncModal';
+import { notificationService } from '@/features/notifications/notification-service';
 import type { AccountSummary, ConversationSummary } from '@/types';
 
 interface MiniSidebarProps {
@@ -22,6 +23,16 @@ interface MiniSidebarProps {
 export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, conversations, onSelectAccount, onOpenAdmin, onMoveAccount }: MiniSidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [userSettings, setUserSettings] = useState(() => notificationService.getSettings());
+
+  useEffect(() => {
+    return notificationService.subscribe((settings) => {
+      setUserSettings(settings);
+    });
+  }, []);
+
+  const isMuted = !userSettings.soundEnabled && !userSettings.desktopNotification;
+  const isSoundOff = !userSettings.soundEnabled;
   const visibleAccounts = accounts.filter(a => a.visible !== false);
 
   // Tính tổng unread per account
@@ -125,12 +136,28 @@ export function MiniSidebar({ accounts, selectedAccountId, currentAccountId, con
               variant="ghost"
               size="icon"
               onClick={() => setSettingsOpen(true)}
-              className="w-9 h-9 rounded-xl border border-[var(--border)] text-muted-foreground hover:text-foreground hover:bg-[var(--accent)]"
+              className={cn(
+                "relative w-9 h-9 rounded-xl border transition-all",
+                isMuted
+                  ? "border-amber-500/50 bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+                  : isSoundOff
+                    ? "border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20"
+                    : "border-[var(--border)] text-muted-foreground hover:text-foreground hover:bg-[var(--accent)]"
+              )}
             >
-              🔔
+              {isMuted || isSoundOff ? '🔕' : '🔔'}
+              {(isMuted || isSoundOff) && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-[var(--card)]" />
+              )}
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="right">Cài đặt thông báo</TooltipContent>
+          <TooltipContent side="right">
+            {isMuted
+              ? 'Chế độ họp: Đang tắt toàn bộ thông báo (Bấm để mở cài đặt)'
+              : isSoundOff
+                ? 'Đang tắt chuông âm thanh (Bấm để mở cài đặt)'
+                : 'Cài đặt thông báo & âm thanh'}
+          </TooltipContent>
         </Tooltip>
 
         <ThemeToggle />

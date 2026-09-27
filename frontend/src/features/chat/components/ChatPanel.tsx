@@ -49,6 +49,7 @@ interface ChatPanelProps extends DeliveryActions {
   onToggleDetails: () => void;
   onReactMessage: (message: Message, reaction: MessageReactionOption) => void;
   onUpdateRestriction?: (isRestricted: boolean) => Promise<void>;
+  onToggleMute?: (action: 'mute' | 'unmute') => Promise<void>;
 }
 
 function formatDateDivider(dateStr: string): string {
@@ -100,6 +101,7 @@ export function ChatPanel({
   onToggleDetails,
   onReactMessage,
   onUpdateRestriction,
+  onToggleMute,
   loadState, onRetryLoad, isComposing, canSend = true,
   onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
 }: ChatPanelProps) {
@@ -507,6 +509,22 @@ export function ChatPanel({
                 title={activeConversation?.isRestricted ? 'Nhấn để mở công khai cho nhân viên' : 'Nhấn để khóa (chỉ Quản lý xem được)'}
               >
                 <span>{activeConversation?.isRestricted ? '🔒 Đã khóa' : '🔓 Khóa'}</span>
+              </Button>
+            )}
+            {onToggleMute && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => onToggleMute(activeConversation?.isMuted ? 'unmute' : 'mute')}
+                className={`text-xs shrink-0 h-8 px-2.5 rounded-lg border transition-all ${
+                  activeConversation?.isMuted
+                    ? 'bg-amber-500/15 text-amber-500 border-amber-500/40 hover:bg-amber-500/25'
+                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-[var(--accent)]'
+                }`}
+                title={activeConversation?.isMuted ? 'Đang tắt thông báo (Bấm để bật lại)' : 'Tắt thông báo cuộc trò chuyện này (🔕)'}
+              >
+                <span>{activeConversation?.isMuted ? '🔕 Đang tắt chuông' : '🔔 Chuông'}</span>
               </Button>
             )}
             <Button

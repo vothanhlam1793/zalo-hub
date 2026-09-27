@@ -6,10 +6,19 @@ import type {
   WsSessionStatusPayload,
 } from '@/types';
 
+export type WsConversationMuteUpdatedPayload = {
+  type: 'conversation_mute_updated';
+  accountId: string;
+  conversationId: string;
+  isMuted: boolean;
+  muteUntil: number | null;
+};
+
 interface WsHandlers {
   onStatus?: (payload: WsSessionStatusPayload) => void;
   onConversations?: (payload: WsConversationSummariesPayload) => void;
   onMessage?: (payload: WsConversationMessagePayload) => void;
+  onConversationMuteUpdated?: (payload: WsConversationMuteUpdatedPayload) => void;
   onSyncStatus?: (payload: { accountId: string; status: string; requ18Received?: number; historySynced?: number; historyMsgs?: number; error?: string }) => void;
   onSyncProgress?: (payload: import('@/types').SyncProgressPayload) => void;
   /** Additive escape hatch: preserve unknown scoped events and all extra fields. */
@@ -198,6 +207,7 @@ export function useWebSocket(handlers: WsHandlers) {
           if (payload.type === 'session_state') current.onStatus?.(payload as unknown as WsSessionStatusPayload);
           if (payload.type === 'conversation_summaries') current.onConversations?.(payload as unknown as WsConversationSummariesPayload);
           if (payload.type === 'conversation_message') current.onMessage?.(payload as unknown as WsConversationMessagePayload);
+          if (payload.type === 'conversation_mute_updated') current.onConversationMuteUpdated?.(payload as unknown as WsConversationMuteUpdatedPayload);
           if (payload.type === 'ws_sync_status') current.onSyncStatus?.(payload as unknown as Parameters<NonNullable<WsHandlers['onSyncStatus']>>[0]);
           if (payload.type === 'ws_sync_progress') current.onSyncProgress?.(payload as unknown as import('@/types').SyncProgressPayload);
         }

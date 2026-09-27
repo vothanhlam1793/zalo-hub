@@ -899,17 +899,6 @@ export function createAccountsRouter(
           muteUntil,
         });
 
-        // Broadcast updated summaries so sidebar icon updates immediately
-        setImmediate(async () => {
-          try {
-            broadcast({
-              type: 'conversation_summaries',
-              accountId,
-              conversations: await targetRuntime.getConversationSummaries(),
-            });
-          } catch {}
-        });
-
         res.json({ ok: true, conversationId, isMuted, muteUntil });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat trang thai mute that bai' });
