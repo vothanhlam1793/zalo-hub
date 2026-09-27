@@ -264,16 +264,13 @@ export function createAuthRouter(
         const currentAccount = await loginRuntime.getCurrentAccount();
         const accountId = currentAccount?.userId;
         if (accountId && userId) {
-          // 1. Assign membership if needed
+          // 1. Assign membership if needed - Super Admin luôn nhận quyền master khi thêm tài khoản
           const { rows: existing } = await knex.raw('SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?', [userId, accountId]);
           if (existing.length === 0) {
-            const existingAcc = await knex.raw('SELECT 1 FROM accounts WHERE account_id = ?', [accountId]);
-            if (existingAcc.rows.length === 0) {
-              await knex.raw('INSERT INTO zalo_account_memberships (user_id, account_id, role) VALUES (?, ?, ?)', [userId, accountId, 'master']);
-            } else {
-              await knex.raw('INSERT INTO zalo_account_memberships (user_id, account_id, role) VALUES (?, ?, ?)', [userId, accountId, 'viewer']);
-            }
-            logger.info('gold2_auto_membership_assigned', { userId, accountId });
+            await knex.raw('INSERT INTO zalo_account_memberships (user_id, account_id, role, visible) VALUES (?, ?, ?, 1)', [userId, accountId, 'master']);
+            logger.info('gold2_auto_membership_assigned_master', { userId, accountId });
+          } else if (existing[0]?.role !== 'master') {
+            await knex.raw('UPDATE zalo_account_memberships SET role = ?, visible = 1 WHERE user_id = ? AND account_id = ?', ['master', userId, accountId]);
           }
 
           // 2. Ensure runtime and notify clients
