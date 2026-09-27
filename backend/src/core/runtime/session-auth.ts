@@ -203,6 +203,28 @@ export class GoldSessionAuth {
             cookieCount: Array.isArray(result?.cookies) ? result.cookies.length : 0,
           });
           await this.loginWithCredential(credential);
+          const targetUserId = String(
+            result?.userInfo?.userId ||
+            result?.userInfo?.uid ||
+            this.state.session?.api?.userId ||
+            this.state.currentAccount?.userId ||
+            ''
+          ).trim();
+
+          if (targetUserId) {
+            this.state.currentAccount = {
+              userId: targetUserId,
+              displayName: result?.userInfo?.displayName || result?.userInfo?.name || this.state.currentAccount?.displayName,
+              avatar: result?.userInfo?.avatar || this.state.currentAccount?.avatar,
+              phoneNumber: result?.userInfo?.phoneNumber || result?.userInfo?.phone || this.state.currentAccount?.phoneNumber,
+            };
+          }
+
+          if (!this.state.currentAccount?.userId) {
+            // Thử fetch trực tiếp nếu vẫn chưa có
+            await this.fetchAccountInfo().catch(() => undefined);
+          }
+
           if (!this.state.currentAccount?.userId) {
             throw new Error('Khong xac dinh duoc account sau khi login QR');
           }
@@ -227,6 +249,25 @@ export class GoldSessionAuth {
                 originalError: error instanceof Error ? error.message : String(error),
               });
               await this.loginWithCredential(credential);
+              const targetUserId = String(
+                this.state.session?.api?.userId ||
+                this.state.currentAccount?.userId ||
+                ''
+              ).trim();
+
+              if (targetUserId) {
+                this.state.currentAccount = {
+                  userId: targetUserId,
+                  displayName: this.state.currentAccount?.displayName,
+                  avatar: this.state.currentAccount?.avatar,
+                  phoneNumber: this.state.currentAccount?.phoneNumber,
+                };
+              }
+
+              if (!this.state.currentAccount?.userId) {
+                await this.fetchAccountInfo().catch(() => undefined);
+              }
+
               if (!this.state.currentAccount?.userId) {
                 throw new Error('Khong xac dinh duoc account sau khi recover login QR');
               }

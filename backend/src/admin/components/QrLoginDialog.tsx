@@ -40,8 +40,14 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
             setRefreshing(false);
             setStatus("Quét mã QR bằng Zalo để đăng nhập");
           }
-          const st = await api.status();
-          if ((st as any).status?.loggedIn) {
+          const st = (await api.status()) as any;
+          const isLoggedIn = Boolean(
+            st?.loggedIn ||
+            st?.sessionActive ||
+            st?.account?.userId ||
+            st?.status?.loggedIn
+          );
+          if (isLoggedIn) {
             if (timerRef.current) clearInterval(timerRef.current);
             setStatus("Đăng nhập thành công!");
             setTimeout(() => { onSuccess(); onOpenChange(false); }, 1000);
