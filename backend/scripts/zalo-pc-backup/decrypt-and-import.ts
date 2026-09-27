@@ -134,7 +134,7 @@ export async function runImport(options: ImportOptions) {
           const conversationId = isGroup ? `group:${threadId}` : `direct:${threadId}`;
 
           const lastTs = Number(obj.infoCheckSearch?.lastMessageTime || Date.now());
-          const lastDate = new Date(isNaN(lastTs) ? Date.now() : lastTs);
+          const lastDate = new Date(isNaN(lastTs) ? Date.now() : lastTs).toISOString();
 
           const convRecord = {
             id: conversationId,
@@ -150,7 +150,7 @@ export async function runImport(options: ImportOptions) {
             message_count: obj.numMsg || 0,
             unread_count: 0,
             created_at: lastDate,
-            updated_at: new Date(),
+            updated_at: new Date().toISOString(),
           };
 
           if (!dryRun) {
@@ -163,30 +163,36 @@ export async function runImport(options: ImportOptions) {
         }
 
         // 2. Check if message entry
-        if (obj.msgId && (obj.toUid || obj.fromUid)) {
+        const rawFrom = String(obj.fromUid || obj.uidFrom || '');
+        const rawTo = String(obj.toUid || obj.idTo || '');
+        if (obj.msgId && (rawTo || rawFrom)) {
           totalMessages++;
 
           const rawMsgId = String(obj.msgId);
-          const fromUid = String(obj.fromUid || '');
-          const toUid = String(obj.toUid || '');
+          const fromUid = rawFrom;
+          const toUid = rawTo;
 
           const isGroup = toUid.startsWith('g');
           let threadId = '';
           let conversationId = '';
 
+          const isSelf = fromUid === targetAccountId || fromUid === '0';
+          const direction = isSelf ? 'outgoing' : 'incoming';
+
           if (isGroup) {
             threadId = toUid.startsWith('g') ? toUid.slice(1) : toUid;
             conversationId = `group:${threadId}`;
           } else {
-            threadId = fromUid === targetAccountId ? toUid : fromUid;
+            threadId = isSelf ? toUid : fromUid;
             conversationId = `direct:${threadId}`;
+          }
+
+          if (!threadId || threadId === '0') {
+            continue;
           }
 
           // Composite unique primary key id in ZaloHub format: <account_id>::<conversation_id>::<msg_id>
           const uniqueId = `${targetAccountId}::${conversationId}::${rawMsgId}`;
-
-          const isSelf = fromUid === targetAccountId;
-          const direction = isSelf ? 'outgoing' : 'incoming';
 
           let content = '';
           if (typeof obj.message === 'string') {
@@ -197,8 +203,9 @@ export async function runImport(options: ImportOptions) {
             content = obj.content;
           }
 
-          const rawTs = Number(obj.sendDttm || obj.serverTime || obj.localDttm || Date.now());
+          const rawTs = Number(obj.sendDttm || obj.serverTime || obj.localDttm || obj.ts || Date.now());
           const createdAt = new Date(isNaN(rawTs) ? Date.now() : rawTs);
+          const isoTimestamp = createdAt.toISOString();
 
           let msgType = 'text';
           if (obj.msgType === 2) msgType = 'image';
@@ -216,17 +223,17 @@ export async function runImport(options: ImportOptions) {
             conversation_type: isGroup ? 'group' : 'direct',
             friend_id: isGroup ? conversationId : threadId,
             provider_message_id: rawMsgId,
-            sender_id: fromUid,
+            sender_id: isSelf ? targetAccountId : fromUid,
             sender_name: obj.dName || undefined,
             direction: direction,
             kind: msgType,
             text: content || '',
             image_url: null,
             is_self: isSelf ? 1 : 0,
-            timestamp: createdAt,
+            timestamp: isoTimestamp,
             raw_summary_json: null,
             raw_message_json: line,
-            created_at: createdAt,
+            created_at: isoTimestamp,
           };
 
           if (dryRun) {

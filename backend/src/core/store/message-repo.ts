@@ -27,7 +27,12 @@ function deduplicateMessagesByPreferredPayload(messages: GoldConversationMessage
       seen.set(key, msg);
     }
   }
-  return [...seen.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return [...seen.values()].sort((a, b) => {
+    const tA = Date.parse(a.timestamp);
+    const tB = Date.parse(b.timestamp);
+    if (!Number.isNaN(tA) && !Number.isNaN(tB) && tA !== tB) return tA - tB;
+    return a.timestamp.localeCompare(b.timestamp);
+  });
 }
 
 function scoreMessage(msg: GoldConversationMessage): number {
@@ -287,7 +292,12 @@ export class GoldMessageRepo {
         conversationType: canonicalType,
         conversationId: `${canonicalType}:${message.threadId || parsedConversation.threadId}`,
       }))
-      .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+      .sort((left, right) => {
+        const tA = Date.parse(left.timestamp);
+        const tB = Date.parse(right.timestamp);
+        if (!Number.isNaN(tA) && !Number.isNaN(tB) && tA !== tB) return tA - tB;
+        return left.timestamp.localeCompare(right.timestamp);
+      });
 
     const dedupedMessages = deduplicateMessagesByPreferredPayload(sortedMessages);
     // Sort ascending by ID to guarantee consistent lock ordering in PostgreSQL and prevent deadlocks

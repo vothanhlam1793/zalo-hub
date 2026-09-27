@@ -97,7 +97,14 @@ export function mergeMessages(base: Message[], incoming: Message[], accountId: s
     next = next.filter((old) => !removed.has(old));
     next.push(merged);
   }
-  return next.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || (a.localId || a.id).localeCompare(b.localId || b.id));
+  return next.sort((a, b) => {
+    const tA = Date.parse(a.timestamp);
+    const tB = Date.parse(b.timestamp);
+    if (!Number.isNaN(tA) && !Number.isNaN(tB) && tA !== tB) {
+      return tA - tB;
+    }
+    return a.timestamp.localeCompare(b.timestamp) || (a.localId || a.id).localeCompare(b.localId || b.id);
+  });
 }
 
 /** Only the row that inherited this preview's stable local key can release it. */
