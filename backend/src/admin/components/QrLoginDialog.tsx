@@ -46,7 +46,7 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
             setTimeout(() => { onSuccess(); onOpenChange(false); }, 1000);
           }
         } catch { /* polling */ }
-      }, 2000);
+      }, 1000);
     }).catch(() => setStatus("Lỗi tạo QR"));
 
     return () => { if (timerRef.current) clearInterval(timerRef.current); };

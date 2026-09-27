@@ -23,14 +23,17 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
     onSyncProgress: (payload) => {
       if (!accountId || payload.accountId === accountId || payload.accountId === 'new_login') {
         setProgress(payload);
-        if (payload.step === 'completed') {
-          setStatus('✅ Đăng nhập & đồng bộ 14 ngày hoàn tất 100%!');
+        if (payload.step === 'qr_ready' && payload.qrCode) {
+          setQrCode(payload.qrCode);
+          setStatus(isReconnect ? 'Quét QR bằng Zalo trên điện thoại để kết nối' : 'Quét QR bằng Zalo để thêm tài khoản');
+        } else if (payload.step === 'completed') {
+          setStatus('✅ Đăng nhập hoàn tất!');
           setTimeout(() => {
             onSuccess();
             onOpenChange(false);
           }, 1500);
         } else if (payload.step === 'error') {
-          setStatus(payload.message || 'Đồng bộ thất bại');
+          setStatus(payload.message || 'Đăng nhập thất bại');
         }
       }
     },
