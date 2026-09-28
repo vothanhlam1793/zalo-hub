@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { normalizeMessageText, normalizeMessageKind, normalizeAttachments, normalizeImageUrl, normalizeMessageTimestamp, summarizeListenerData, getConversationTypeFromThreadId, getConversationId, normalizeMessageQuote, normalizeMessageReactions, mapReactionIconToEmoji, normalizeReactionEvent } from './normalizer.js';
+import { projectRichMessage } from '../message-projection.js';
+import { normalizeMessageText, normalizeMessageKind, normalizeAttachments, normalizeImageUrl, normalizeMessageTimestamp, summarizeListenerData, getConversationTypeFromThreadId, getConversationId, normalizeMessageQuote, normalizeMessageMentions, normalizeMessageReactions, mapReactionIconToEmoji, normalizeReactionEvent } from './normalizer.js';
 import type { GoldConversationMessage, GoldConversationType, GoldAttachment, GoldMessageKind, GoldMessageReactionItem } from '../types.js';
 import type { SharedState, ListenerMessage, ListenerLike, HistorySyncResult } from './types.js';
 
@@ -7,9 +8,11 @@ const ThreadType = { User: 0, Group: 1 };
 
 export class GoldListener {
   private readonly state: SharedState;
+  private _knownGroupIdsCache = new Set<string>();
+  private _knownGroupIdsCachedAt = 0;
   private _resolveGroupSenderName?: (groupId: string, senderId?: string) => Promise<string | undefined>;
   private _ensureGroupMetadata?: (groupId: string) => Promise<void>;
-  private _appendConversationMessage?: (message: GoldConversationMessage) => Promise<boolean>;
+  private _appendConversationMessage?: (message: GoldConversationMessage, notifyNew?: boolean) => Promise<boolean>;
   private _persistMessageAttachmentsLocally?: (message: GoldConversationMessage) => Promise<GoldConversationMessage>;
   private _handleReactionUpdate?: (conversationId: string, targetGlobalMsgId: string, emoji: string, count: number, userIds: string[]) => Promise<boolean>;
 
@@ -20,7 +23,7 @@ export class GoldListener {
   init(deps: {
     resolveGroupSenderName: (groupId: string, senderId?: string) => Promise<string | undefined>;
     ensureGroupMetadata: (groupId: string) => Promise<void>;
-    appendConversationMessage: (message: GoldConversationMessage) => Promise<boolean>;
+    appendConversationMessage: (message: GoldConversationMessage, notifyNew?: boolean) => Promise<boolean>;
     persistMessageAttachmentsLocally: (message: GoldConversationMessage) => Promise<GoldConversationMessage>;
     handleReactionUpdate: (conversationId: string, targetGlobalMsgId: string, emoji: string, count: number, userIds: string[]) => Promise<boolean>;
   }) {
@@ -205,10 +208,20 @@ export class GoldListener {
     }
   }
 
+  private async getKnownGroupIds(): Promise<Set<string>> {
+    const now = Date.now();
+    if (this._knownGroupIdsCache.size > 0 && now - this._knownGroupIdsCachedAt < 60_000) {
+      return this._knownGroupIdsCache;
+    }
+    const groups = await this.state.store.listGroupsByAccount(this.state.boundAccountId);
+    this._knownGroupIdsCache = new Set(groups.map((group) => group.groupId));
+    this._knownGroupIdsCachedAt = now;
+    return this._knownGroupIdsCache;
+  }
+
   private async normalizeListenerMessage(message: ListenerMessage, forcedType?: GoldConversationType): Promise<GoldConversationMessage | undefined> {
     const threadId = String(message.threadId ?? '').trim();
-    const groups = await this.state.store.listGroupsByAccount(this.state.boundAccountId);
-    const knownGroupIds = new Set(groups.map((group) => group.groupId));
+    const knownGroupIds = await this.getKnownGroupIds();
     const conversationType = forcedType
       ?? (message.type === ThreadType.Group ? 'group' : undefined)
       ?? getConversationTypeFromThreadId(threadId, knownGroupIds);
@@ -242,55 +255,74 @@ export class GoldListener {
           ?? (typeof data.dName === 'string' && data.dName.trim() ? data.dName.trim() : undefined)
         : undefined,
       quote: normalizeMessageQuote(data),
+      mentions: normalizeMessageMentions(data),
       reactions: normalizeMessageReactions(data),
       timestamp: normalizeMessageTimestamp(data),
       rawMessageJson: JSON.stringify(data),
     };
 
-    return normalized;
+    return projectRichMessage(normalized);
   }
 
   private async handleOldMessages(messages: ListenerMessage[], threadType: number) {
-    const sync = this.state.historySyncState;
-    if (!sync) {
-      this.state.logger.info('history_sync_old_messages_ignored', { reason: 'no_pending_sync', count: messages.length, threadType });
-      return;
-    }
-
     const forcedType = threadType === ThreadType.Group ? 'group' : 'direct';
     const normalizedCandidates = await Promise.all(messages.map((message) => this.normalizeListenerMessage(message, forcedType)));
-    const normalized = normalizedCandidates
-      .filter((message): message is GoldConversationMessage => message !== undefined)
-      .filter((message) => message.threadId === sync.threadId && message.conversationType === sync.type)
-      .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    const allNormalized = normalizedCandidates.filter((message): message is GoldConversationMessage => message !== undefined);
 
+    // ALWAYS persist all received old messages into database, even if pending sync already timed out
     let insertedCount = 0;
     let dedupedCount = 0;
-    for (const message of normalized) {
+    for (const message of allNormalized) {
       const persisted = await this._persistMessageAttachmentsLocally?.(message) ?? message;
-      if (await this._appendConversationMessage?.(persisted)) {
+      if (await this._appendConversationMessage?.(persisted, false)) {
         insertedCount += 1;
       } else {
         dedupedCount += 1;
       }
     }
 
-    const oldestMessage = normalized[0];
+    this.state.logger.info('history_sync_old_messages_persisted', {
+      count: messages.length,
+      normalized: allNormalized.length,
+      insertedCount,
+      dedupedCount,
+      threadType,
+    });
+
+    if (this.state.historySyncStates.size === 0) {
+      return;
+    }
+
+    // Identify target threadId from candidate messages or fallback to single pending sync
+    const firstThreadId = allNormalized[0]?.threadId ?? String(messages[0]?.threadId ?? '').trim();
+    let sync = firstThreadId ? this.state.historySyncStates.get(firstThreadId) : undefined;
+    if (!sync && this.state.historySyncStates.size === 1) {
+      sync = this.state.historySyncStates.values().next().value;
+    }
+
+    if (!sync) {
+      return;
+    }
+
+    const oldestMessage = allNormalized
+      .filter((message) => message.threadId === sync!.threadId && message.conversationType === sync!.type)
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp))[0];
+
     const result: HistorySyncResult = {
       conversationId: sync.conversationId,
       threadId: sync.threadId,
       type: sync.type,
       requestedBeforeMessageId: sync.beforeMessageId,
-      remoteCount: normalized.length,
+      remoteCount: allNormalized.length,
       insertedCount,
       dedupedCount,
       oldestTimestamp: oldestMessage?.timestamp,
       oldestProviderMessageId: oldestMessage?.providerMessageId,
-      hasMore: normalized.length > 0,
+      hasMore: allNormalized.length > 0,
     };
 
     clearTimeout(sync.timer);
-    this.state.historySyncState = undefined;
+    this.state.historySyncStates.delete(sync.threadId);
     this.state.logger.info('history_sync_completed', result);
     sync.resolve(result);
   }
@@ -311,12 +343,13 @@ export class GoldListener {
     const imageUrl = normalizeImageUrl(data);
 
     if (message.type === ThreadType.Group && threadId) {
-      await this._ensureGroupMetadata?.(threadId);
+      // Refresh group metadata in background so incoming message stream is never blocked
+      void this._ensureGroupMetadata?.(threadId).catch(() => {});
     }
 
     const normalizedMessage = await this.normalizeListenerMessage(message);
 
-      this.state.logger.info('conversation_listener_message_received', {
+    this.state.logger.info('conversation_listener_message_received', {
       threadId,
       isSelf: Boolean(message.isSelf),
       textLength: text.length,
@@ -350,15 +383,36 @@ export class GoldListener {
       return;
     }
 
-    const persistedMessage = await this._persistMessageAttachmentsLocally?.(normalizedMessage) ?? normalizedMessage;
-
-    if (await this._appendConversationMessage?.(persistedMessage)) {
-        this.state.logger.info('conversation_message_captured', {
+    // Fast-path: append and broadcast the message immediately with remote source URL
+    if (await this._appendConversationMessage?.(normalizedMessage)) {
+      this.state.logger.info('conversation_message_captured', {
         conversationId: normalizedMessage.conversationId,
-        direction: persistedMessage.direction,
+        direction: normalizedMessage.direction,
         kind,
         textLength: text.length,
       });
+
+      // Background persist/mirror attachments without blocking message delivery
+      if (normalizedMessage.attachments.length > 0 && this._persistMessageAttachmentsLocally) {
+        const persistAttachments = this._persistMessageAttachmentsLocally;
+        setImmediate(async () => {
+          try {
+            const updated = await persistAttachments(normalizedMessage);
+            if (updated) {
+              for (const listener of this.state.conversationListeners) {
+                try {
+                  listener(updated);
+                } catch {}
+              }
+            }
+          } catch (error) {
+            this.state.logger.warn('background_attachment_persist_failed', {
+              messageId: normalizedMessage.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        });
+      }
       return;
     }
 
@@ -370,7 +424,7 @@ export class GoldListener {
     });
   }
 
-  onConversationMessage(listener: (message: GoldConversationMessage) => void) {
+  onConversationMessage(listener: (message: GoldConversationMessage, event?: 'new') => void) {
     this.state.conversationListeners.add(listener);
     return () => {
       this.state.conversationListeners.delete(listener);

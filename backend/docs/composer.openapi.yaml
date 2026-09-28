@@ -1,0 +1,142 @@
+openapi: 3.1.0
+info:
+  title: Scoped Composer API
+  version: 1.0.0
+  description: >-
+    Account editor and conversation access required. Resources are private to the creating user.
+    Every request requires conversationId query. No automatic retries of unknown/accepted sends.
+    One batch executes at a time; queued children resume only on explicit same-payload POST.
+servers:
+  - url: /api/accounts/{accountId}/composer
+    variables:
+      accountId: {default: account-id}
+security:
+  - bearerAuth: []
+paths:
+  /capabilities:
+    get:
+      operationId: getComposerCapabilities
+      parameters: [{$ref: '#/components/parameters/conversation'}]
+      responses:
+        '200': {description: Limits and truthful feature flags}
+  /staging:
+    get:
+      operationId: listComposerStaging
+      parameters: [{$ref: '#/components/parameters/conversation'}]
+      responses:
+        '200': {description: Latest 100 owned stage metadata records}
+    post:
+      operationId: uploadComposerStage
+      parameters: [{$ref: '#/components/parameters/conversation'}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file: {type: string, format: binary, description: One file; maximum 52428800 bytes}
+      responses:
+        '201': {description: Uploaded stage metadata}
+        '413': {$ref: '#/components/responses/error'}
+        '429': {$ref: '#/components/responses/error'}
+        '503': {$ref: '#/components/responses/error'}
+  /staging/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/conversation'}
+      - {$ref: '#/components/parameters/id'}
+    get:
+      operationId: getComposerStage
+      responses:
+        '200': {description: Owned stage metadata without public URL or object key}
+        '404': {$ref: '#/components/responses/error'}
+    delete:
+      operationId: deleteComposerStage
+      responses:
+        '200': {description: Deleted or already deleted}
+        '409': {description: Referenced by a batch or still uploading}
+  /staging/{id}/abandon:
+    post:
+      operationId: abandonFailedComposerStage
+      description: Permanently disable retries of definite failed references and release bytes. Never abandon unknown, sending or queued references. FK metadata is retained.
+      parameters:
+        - {$ref: '#/components/parameters/conversation'}
+        - {$ref: '#/components/parameters/id'}
+      responses:
+        '200': {description: Abandoned and deleted or already deleted}
+        '409': {description: Unresolved reference or active execution gate}
+        '503': {$ref: '#/components/responses/error'}
+  /cleanup:
+    post:
+      operationId: cleanupComposerStages
+      parameters: [{$ref: '#/components/parameters/conversation'}]
+      responses:
+        '200': {description: Number of expired unreferenced or verified mirrored terminal referenced objects deleted; at most 100. Metadata retained. Unknown and sending never deleted.}
+  /batches:
+    post:
+      operationId: submitComposerBatch
+      parameters: [{$ref: '#/components/parameters/conversation'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientBatchId, items]
+              properties:
+                clientBatchId: {type: string, format: uuid}
+                retry: {type: boolean, default: false}
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [stagingId, clientRequestId]
+                    properties:
+                      stagingId: {type: string, format: uuid}
+                      clientRequestId: {type: string, format: uuid}
+                      caption: {type: string, maxLength: 20000}
+      responses:
+        '202':
+          description: Durable batch; poll status. Explicit resume may be required for queued children.
+          headers:
+            Retry-After: {schema: {type: integer}, description: Recommended initial poll delay in seconds}
+        '409': {$ref: '#/components/responses/error'}
+        '503': {$ref: '#/components/responses/error'}
+  /batches/{id}:
+    get:
+      operationId: getComposerBatch
+      parameters:
+        - {$ref: '#/components/parameters/conversation'}
+        - {$ref: '#/components/parameters/id'}
+      responses:
+        '200': {description: Ordered child states, providerMessageIds and existing SendReceipt; never dispatches}
+        '404': {$ref: '#/components/responses/error'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    conversation:
+      in: query
+      name: conversationId
+      required: true
+      schema: {type: string, maxLength: 255, pattern: '^(direct|group):[^\s:]+$'}
+    id:
+      in: path
+      name: id
+      required: true
+      schema: {type: string, format: uuid}
+  responses:
+    error:
+      description: Standard composer error. Query status using original IDs before retrying dependency failures.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, error]
+            properties:
+              code: {type: string}
+              error: {type: string}

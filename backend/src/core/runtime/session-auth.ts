@@ -120,23 +120,40 @@ export class GoldSessionAuth {
     this.state.listenerStarted = false;
     this.state.listenerAttached = false;
     await this.mergeCurrentAccountProfile();
-    await this.verifySession();
     this._ensureMessageListener?.();
-    this.state.currentAccount = await this.fetchAccountInfo().catch(() => this.mergeCurrentAccountProfile());
-    if (this.state.boundAccountId && this.state.currentAccount?.userId && this.state.currentAccount.userId !== this.state.boundAccountId) {
-      throw new Error(`Credential dang tro toi account ${this.state.currentAccount.userId}, khong khop runtime da bind ${this.state.boundAccountId}`);
+
+    // Lightweight instant activation
+    if (this.state.boundAccountId) {
+      const boundId = this.state.boundAccountId;
+      await this.state.store.getKnex()?.raw(`
+        UPDATE account_sessions SET is_active = 1, updated_at = NOW() WHERE account_id = ?
+      `, [boundId]).catch(() => undefined);
     }
-    if (this.state.currentAccount?.userId) {
-      await this.state.store.setActiveAccount({
-        accountId: this.state.currentAccount.userId,
-        displayName: this.state.currentAccount.displayName,
-        phoneNumber: this.state.currentAccount.phoneNumber,
-        avatar: this.state.currentAccount.avatar,
-      });
-      await this.state.store.canonicalizeConversationDataForAccount(this.state.boundAccountId);
-      await this._hydrate?.();
-      void this._backfill?.();
-    }
+
+    // Run background tasks asynchronously without blocking login completion
+    setImmediate(async () => {
+      try {
+        await this.verifySession().catch(() => undefined);
+        const info = await this.fetchAccountInfo().catch(() => this.mergeCurrentAccountProfile());
+        if (info?.userId) {
+          this.state.currentAccount = info;
+          // Chỉ cập nhật bảng accounts cho đúng userId này, tuyệt đối không dùng setActiveAccount để tránh overwrite nhầm account khác
+          await this.state.store.getKnex()?.raw(`
+            INSERT INTO accounts (account_id, display_name, phone_number, avatar, last_login_at, updated_at)
+            VALUES (?, ?, ?, ?, NOW(), NOW())
+            ON CONFLICT (account_id) DO UPDATE SET
+              display_name = COALESCE(EXCLUDED.display_name, accounts.display_name),
+              phone_number = COALESCE(EXCLUDED.phone_number, accounts.phone_number),
+              avatar = COALESCE(EXCLUDED.avatar, accounts.avatar),
+              last_login_at = NOW(),
+              updated_at = NOW()
+          `, [info.userId, info.displayName || null, info.phoneNumber || null, info.avatar || null]).catch(() => undefined);
+        }
+      } catch (bgErr) {
+        this.state.logger.error('session_bg_init_failed', { error: bgErr instanceof Error ? bgErr.message : String(bgErr) });
+      }
+    });
+
     this.state.logger.info('login_with_credential_succeeded');
     return this.state.session;
   }
@@ -164,7 +181,8 @@ export class GoldSessionAuth {
 
       void loginQR(ctx, { userAgent, language: 'vi' }, (event: any) => {
         if (event?.type === 0 && event?.data?.image) {
-          lastQr = String(event.data.image);
+          const raw = String(event.data.image);
+          lastQr = raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`;
           this.state.currentQrCode = lastQr;
           this.state.logger.info('qr_ready', { qrLength: lastQr.length });
           options.onQr?.(lastQr);
@@ -191,6 +209,28 @@ export class GoldSessionAuth {
             cookieCount: Array.isArray(result?.cookies) ? result.cookies.length : 0,
           });
           await this.loginWithCredential(credential);
+          const targetUserId = String(
+            result?.userInfo?.userId ||
+            result?.userInfo?.uid ||
+            this.state.session?.api?.userId ||
+            this.state.currentAccount?.userId ||
+            ''
+          ).trim();
+
+          if (targetUserId) {
+            this.state.currentAccount = {
+              userId: targetUserId,
+              displayName: result?.userInfo?.displayName || result?.userInfo?.name || this.state.currentAccount?.displayName,
+              avatar: result?.userInfo?.avatar || this.state.currentAccount?.avatar,
+              phoneNumber: result?.userInfo?.phoneNumber || result?.userInfo?.phone || this.state.currentAccount?.phoneNumber,
+            };
+          }
+
+          if (!this.state.currentAccount?.userId) {
+            // Thử fetch trực tiếp nếu vẫn chưa có
+            await this.fetchAccountInfo().catch(() => undefined);
+          }
+
           if (!this.state.currentAccount?.userId) {
             throw new Error('Khong xac dinh duoc account sau khi login QR');
           }
@@ -215,6 +255,25 @@ export class GoldSessionAuth {
                 originalError: error instanceof Error ? error.message : String(error),
               });
               await this.loginWithCredential(credential);
+              const targetUserId = String(
+                this.state.session?.api?.userId ||
+                this.state.currentAccount?.userId ||
+                ''
+              ).trim();
+
+              if (targetUserId) {
+                this.state.currentAccount = {
+                  userId: targetUserId,
+                  displayName: this.state.currentAccount?.displayName,
+                  avatar: this.state.currentAccount?.avatar,
+                  phoneNumber: this.state.currentAccount?.phoneNumber,
+                };
+              }
+
+              if (!this.state.currentAccount?.userId) {
+                await this.fetchAccountInfo().catch(() => undefined);
+              }
+
               if (!this.state.currentAccount?.userId) {
                 throw new Error('Khong xac dinh duoc account sau khi recover login QR');
               }

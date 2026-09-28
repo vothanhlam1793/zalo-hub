@@ -5,6 +5,17 @@ import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
 import { getStatusForRuntime } from '../helpers/status.js';
 import { getRuntimeForAccount } from '../helpers/context.js';
+import { SendRequestRepo } from '../../core/store/send-request-repo.js';
+import { SendRequestError, SendRequestService, type NormalizedSend } from '../services/send-request-service.js';
+import { SendFailure, type SendLifecycle } from '../../core/runtime/send-contract.js';
+import { canUserAccessConversation, filterConversationsForUser } from '../helpers/conversation-access.js';
+import { IndexedDbImporter } from '../../core/indexeddb-importer.js';
+import { PlaywrightSyncWorker } from '../../core/playwright-sync-worker.js';
+import { PlaywrightQrLogin } from '../../core/playwright-qr.js';
+import { createComposerRouter } from './composer.js';
+import { ComposerService } from '../services/composer-service.js';
+import { ComposerObjectStore } from '../services/composer-object-store.js';
+import { createExtendedToolsRouter } from './extended-tools.js';
 
 export function createAccountsRouter(
   logger: GoldLogger,
@@ -14,7 +25,11 @@ export function createAccountsRouter(
   knex: Knex,
   requireAuth?: (req: Request, res: Response, next: NextFunction) => void,
   requireAccountAccess?: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
+  sendRequestService?: SendRequestService,
 ) {
+  const indexedDbImporter = new IndexedDbImporter(knex, logger);
+  const playwrightSyncWorker = new PlaywrightSyncWorker(indexedDbImporter, logger);
+  const activeQrSessions = new Map<string, PlaywrightQrLogin>();
 
   const router = Router();
   const needsViewer = requireAccountAccess?.('viewer');
@@ -23,6 +38,67 @@ export function createAccountsRouter(
   const auth = requireAuth ? [requireAuth] : [];
   const viewAny = requireAuth && needsViewer ? [requireAuth, needsViewer] : [];
   const editAny = requireAuth && needsEditor ? [requireAuth, needsEditor] : [];
+  const sendRepo = new SendRequestRepo(knex);
+  const sends = sendRequestService ?? new SendRequestService(sendRepo, logger);
+  const metadataInFlight = new Set<string>();
+  router.use('/:accountId/composer/tools', ...editAny, createExtendedToolsRouter(knex,
+    account => accountManager.getRuntime(account)?.getExtendedToolsApi()));
+  const sendError = (res: Response, error: unknown) => {
+    if (error instanceof SendRequestError || error instanceof SendFailure) {
+      res.status(error instanceof SendRequestError ? error.status : error.httpStatus).json({ error: error.message, code: error.code });
+    } else {
+      logger.error('send_request_route_failed', { code: 'SEND_REQUEST_UNAVAILABLE' });
+      res.status(503).json({ error: 'Không thể xử lý yêu cầu gửi. Kiểm tra trạng thái bằng cùng clientRequestId.', code: 'SEND_REQUEST_UNAVAILABLE' });
+    }
+  };
+  const dispatch = async (input: NormalizedSend, lifecycle: SendLifecycle) => {
+    logger.info('dispatch_starting', { accountId: input.accountId, conversationId: input.conversationId, clientRequestId: lifecycle.clientRequestId });
+    const targetRuntime = await getRuntimeForAccount(input.accountId, accountManager);
+    if (!targetRuntime.isSessionActive()) throw new SendFailure('SESSION_UNAVAILABLE', 'Phiên Zalo chưa sẵn sàng.', true, 409);
+    let result;
+    try {
+      result = input.attachment
+        ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text, mentions: input.mentions, quoteMessageId: input.quoteMessageId }, lifecycle)
+        : await targetRuntime.sendText(input.conversationId, input.text, {
+            mentions: input.mentions,
+            quoteMessageId: input.quoteMessageId,
+          }, lifecycle);
+      logger.info('dispatch_succeeded', { accountId: input.accountId, conversationId: input.conversationId, clientRequestId: lifecycle.clientRequestId });
+    } catch (err: any) {
+      logger.error('dispatch_failed', {
+        accountId: input.accountId,
+        conversationId: input.conversationId,
+        clientRequestId: lifecycle.clientRequestId,
+        error: err?.message || String(err),
+        stack: err?.stack,
+        code: err?.code,
+        name: err?.name
+      });
+      throw err;
+    }
+    
+    // Background async broadcast — does not block or add latency to HTTP Send response
+    setImmediate(() => {
+      void (async () => {
+        broadcast({ type: 'conversation_summaries', accountId: input.accountId, conversations: await targetRuntime.getConversationSummaries() });
+        broadcast({ type: 'session_state', accountId: input.accountId, status: await getStatusForRuntime(targetRuntime) });
+      })().catch(() => logger.error('send_summary_refresh_failed', { accountId: input.accountId }));
+    });
+
+    return result;
+  };
+
+  router.use('/:accountId/composer', ...editAny, createComposerRouter(knex,
+    new ComposerService(knex, new ComposerObjectStore(), sends, async (input, lifecycle) => {
+      // Recheck permissions at each child dispatch, not only when the batch was submitted.
+      const user = await knex('system_users').where({ id: input.systemUserId }).first();
+      const membership = await knex('zalo_account_memberships').where({ user_id: input.systemUserId, account_id: input.accountId }).first();
+      if ((user?.role !== 'super_admin' && !['editor', 'admin', 'master'].includes(membership?.role))
+        || !await canUserAccessConversation(knex, input.systemUserId, input.accountId, input.conversationId)) {
+        throw new SendFailure('PRE_DISPATCH_FAILED', 'Conversation access revoked.', false, 403);
+      }
+      return dispatch(input, lifecycle);
+    }, logger), logger));
 
   router.get('/', ...auth, (_req, res) => {
     void (async () => {
@@ -41,9 +117,22 @@ export function createAccountsRouter(
         return;
       }
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session. Hay dang nhap lai bang QR.' });
+        let targetRuntime = accountManager.getRuntime(accountId);
+        if (!targetRuntime) {
+          try {
+            targetRuntime = await accountManager.ensureRuntime(accountId);
+          } catch (startErr) {
+            // If ensureRuntime failed (e.g. cookie expired or kicked)
+            logger.error('account_activate_ensure_failed', { accountId, error: startErr instanceof Error ? startErr.message : String(startErr) });
+          }
+        }
+        if (!targetRuntime || !targetRuntime.isSessionActive()) {
+          res.status(200).json({
+            ok: false,
+            needsRelogin: true,
+            accountId,
+            error: 'Tài khoản chưa active session hoặc cookie đã hết hạn. Hãy quét lại mã QR.',
+          });
           return;
         }
         await accountManager.activatePrimaryAccount(accountId);
@@ -51,7 +140,11 @@ export function createAccountsRouter(
         broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
         res.json({ ok: true, accountId, status: await getStatusForRuntime(targetRuntime) });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Kich hoat account that bai' });
+        res.status(200).json({
+          ok: false,
+          needsRelogin: true,
+          error: error instanceof Error ? error.message : 'Kich hoat account that bai',
+        });
       }
     })();
   });
@@ -124,19 +217,54 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
+        const refresh = req.query.refresh === '1';
+
+        if (targetRuntime && targetRuntime.isSessionActive()) {
+          const contactCache = await targetRuntime.getContactCache();
+          const contacts = refresh || contactCache.length === 0
+            ? await targetRuntime.listFriends().catch(() => contactCache)
+            : contactCache;
+          res.json({ contacts, count: contacts.length });
           return;
         }
-        const refresh = req.query.refresh === '1';
-        const contactCache = await targetRuntime.getContactCache();
-        const contacts = refresh || contactCache.length === 0
-          ? await targetRuntime.listFriends()
-          : contactCache;
-        res.json({ contacts, count: contacts.length });
+
+        // Offline / Inactive session fallback to DB store
+        const offlineContacts = await accountManager.getRegistryStore().listContactsByAccount(accountId).catch(() => []);
+        res.json({ contacts: offlineContacts, count: offlineContacts.length, offline: true });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Tai contacts that bai' });
+        logger.warn('account_contacts_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
+        const offlineContacts = await accountManager.getRegistryStore().listContactsByAccount(accountId).catch(() => []);
+        res.json({ contacts: offlineContacts, count: offlineContacts.length, offline: true });
+      }
+    })();
+  });
+
+  // POST /api/accounts/:accountId/sync-contacts — sync friends and aliases from Zalo
+  router.post('/:accountId/sync-contacts', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        if (!targetRuntime.isSessionActive()) {
+          res.status(400).json({ ok: false, error: 'Phiên Zalo của tài khoản hiện không hoạt động' });
+          return;
+        }
+
+        const contacts = await targetRuntime.listFriends();
+        const summaries = await targetRuntime.getConversationSummaries().catch(() => []);
+        broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+
+        const withAlias = contacts.filter((c: any) => Boolean(c.zaloAlias)).length;
+        res.json({
+          ok: true,
+          count: contacts.length,
+          aliasCount: withAlias,
+          message: `Đã đồng bộ ${contacts.length} bạn bè và ${withAlias} tên gợi nhớ.`,
+        });
+      } catch (error) {
+        logger.error('sync_contacts_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Đồng bộ danh bạ thất bại' });
       }
     })();
   });
@@ -146,10 +274,22 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
-        await accountManager.restartRuntime(accountId);
-        res.json({ ok: true, message: 'Account restarted, Dify executor reattached' });
+        const result = await accountManager.restartRuntime(accountId);
+        if (!result.ok) {
+          res.status(200).json({
+            ok: false,
+            needsRelogin: result.needsRelogin ?? false,
+            error: result.error || 'Khong the khoi dong lai account Zalo. Vui long quet lai QR neu can.',
+          });
+          return;
+        }
+        res.json({ ok: true, message: 'Tai khoan da ket noi lai thanh cong.' });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Restart failed' });
+        res.status(200).json({
+          ok: false,
+          needsRelogin: true,
+          error: error instanceof Error ? error.message : 'Restart that bai',
+        });
       }
     })();
   });
@@ -158,27 +298,41 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
+        const refresh = req.query.refresh === '1';
+
+        if (targetRuntime && targetRuntime.isSessionActive()) {
+          const groupCache = await targetRuntime.getGroupCache();
+          if (groupCache.length > 0 && !refresh) {
+            res.json({ groups: groupCache, count: groupCache.length });
+            return;
+          }
+
+          // Fetch from Zalo with timeout protection
+          const groups = await Promise.race([
+            targetRuntime.listGroups(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Fetch groups timeout')), 7000)),
+          ]).catch(async (error) => {
+            logger.error('account_groups_refresh_failed', {
+              accountId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            const fallbackGroups = await targetRuntime.getGroupCache();
+            if (fallbackGroups.length > 0) return fallbackGroups;
+            return [];
+          });
+
+          res.json({ groups, count: groups.length });
           return;
         }
-        const refresh = req.query.refresh === '1';
-        const groupCache = await targetRuntime.getGroupCache();
-        const groups = refresh || groupCache.length === 0
-          ? await targetRuntime.listGroups().catch(async (error) => {
-              logger.error('account_groups_refresh_failed', {
-                accountId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              const fallbackGroups = await targetRuntime.getGroupCache();
-              if (fallbackGroups.length > 0) return fallbackGroups;
-              throw error;
-            })
-          : groupCache;
-        res.json({ groups, count: groups.length });
+
+        // Offline / Inactive session fallback to DB store
+        const offlineGroups = await accountManager.getRegistryStore().listGroupsByAccount(accountId).catch(() => []);
+        res.json({ groups: offlineGroups, count: offlineGroups.length, offline: true });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Tai groups that bai' });
+        logger.warn('account_groups_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
+        const offlineGroups = await accountManager.getRegistryStore().listGroupsByAccount(accountId).catch(() => []);
+        res.json({ groups: offlineGroups, count: offlineGroups.length, offline: true });
       }
     })();
   });
@@ -186,16 +340,46 @@ export function createAccountsRouter(
   router.get('/:accountId/conversations', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
+      const userId = (req as any).systemUserId as string;
+      const limit = req.query.limit ? Number(req.query.limit) : 150;
+      const offset = req.query.offset ? Number(req.query.offset) : 0;
+      const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
-          return;
+        let conversations: any[] = [];
+        // If offset > 0 or q is present, always query store with pagination
+        if (offset === 0 && !q) {
+          const targetRuntime = await getRuntimeForAccount(accountId, accountManager).catch(() => undefined);
+          if (targetRuntime && targetRuntime.isSessionActive()) {
+            conversations = await targetRuntime.getConversationSummaries().catch(() => []);
+          }
         }
-        const conversations = await targetRuntime.getConversationSummaries();
-        res.json({ conversations, count: conversations.length });
+
+        if (conversations.length === 0) {
+          // Query DB directly with pagination and search
+          conversations = await accountManager
+            .getRegistryStore()
+            .listConversationSummariesByAccount(accountId, { limit, offset, q })
+            .catch(() => []);
+        }
+
+        if (userId) {
+          conversations = await filterConversationsForUser(knex, userId, accountId, conversations);
+        }
+
+        const hasMore = conversations.length >= limit;
+        res.json({ conversations, count: conversations.length, hasMore, offset, limit });
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversations that bai' });
+        logger.warn('account_conversations_fallback', { accountId, error: error instanceof Error ? error.message : String(error) });
+        let offlineConversations = await accountManager
+          .getRegistryStore()
+          .listConversationSummariesByAccount(accountId, { limit, offset, q })
+          .catch(() => []);
+        if (userId) {
+          offlineConversations = await filterConversationsForUser(knex, userId, accountId, offlineConversations);
+        }
+        const hasMore = offlineConversations.length >= limit;
+        res.json({ conversations: offlineConversations, count: offlineConversations.length, hasMore, offset, limit, offline: true });
       }
     })();
   });
@@ -204,6 +388,7 @@ export function createAccountsRouter(
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
       const conversationId = String(req.params.conversationId ?? '').trim();
+      const userId = (req as any).systemUserId as string;
       const since = typeof req.query.since === 'string' ? req.query.since : undefined;
       const before = typeof req.query.before === 'string' ? req.query.before : undefined;
       const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
@@ -212,16 +397,43 @@ export function createAccountsRouter(
         return;
       }
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
+        if (userId) {
+          const allowed = await canUserAccessConversation(knex, userId, accountId, conversationId);
+          if (!allowed) {
+            res.status(403).json({ error: 'Bạn không có quyền truy cập cuộc trò chuyện này' });
+            return;
+          }
+        }
+
+        if ((limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 1000))
+          || (since && !Number.isFinite(Date.parse(since))) || (before && !Number.isFinite(Date.parse(before)))) {
+          res.status(400).json({ error: 'Tham số phân trang không hợp lệ.' });
           return;
         }
-        const rawMessages = await targetRuntime.getConversationMessages(conversationId, { since, before, limit });
-        const messages = await targetRuntime.resolveGroupSenderNames(conversationId, rawMessages);
+        // Registry store is already available; never ensureRuntime/login on a history read.
+        const rawMessages = await accountManager.getRegistryStore().listConversationMessagesByAccount(accountId, conversationId, { before, limit });
+        const filtered = since ? rawMessages.filter((message) => message.timestamp > since) : rawMessages;
+        const messages = await sendRepo.correlate(accountId, conversationId, filtered);
         const oldestTimestamp = messages[0]?.timestamp;
         const hasMore = Boolean(before ? messages.length === (limit ?? 40) : oldestTimestamp);
         res.json({ conversationId, messages, count: messages.length, oldestTimestamp, hasMore });
+        // Bounded DB metadata enrichment is off-path and remains useful while Zalo is offline.
+        const key = JSON.stringify([accountId, conversationId]);
+        if (conversationId.startsWith('group:') && !metadataInFlight.has(key)) {
+          metadataInFlight.add(key);
+          const candidates = rawMessages.slice(-200);
+          void accountManager.getRegistryStore().resolveGroupSenderNamesByAccount(accountId, conversationId, candidates)
+            .then(async (enriched) => {
+              const previous = new Map(candidates.map((m) => [m.id, m.senderName]));
+              const changed = enriched.filter((m) => m.senderName && m.senderName !== previous.get(m.id));
+              if (!changed.length) return;
+              await knex.raw(`UPDATE messages AS m SET sender_name = names.sender_name
+                FROM (VALUES ${changed.map(() => '(?::text, ?::text)').join(',')}) AS names(id, sender_name)
+                WHERE m.account_id = ? AND m.id = names.id`, [...changed.flatMap((m) => [m.id, m.senderName!]), accountId]);
+            })
+            .catch(() => logger.error('history_metadata_refresh_failed', { accountId, conversationId }))
+            .finally(() => metadataInFlight.delete(key));
+        }
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Tai conversation that bai' });
       }
@@ -325,6 +537,92 @@ export function createAccountsRouter(
     })();
   });
 
+  router.post('/:accountId/re-sync-qr', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        logger.info('resync_qr_start_requested', { accountId });
+        const existing = activeQrSessions.get(accountId);
+        if (existing) {
+          await existing.cancel().catch(() => {});
+          activeQrSessions.delete(accountId);
+        }
+
+        const qrHandler = new PlaywrightQrLogin(logger, indexedDbImporter);
+        activeQrSessions.set(accountId, qrHandler);
+
+        const qrBase64 = await qrHandler.start();
+
+        // Background monitor for scan & import
+        setImmediate(async () => {
+          try {
+            const loginRes = await qrHandler.waitForLoginAndImport(120_000, (prog) => {
+              broadcast({
+                type: 'ws_sync_progress',
+                accountId,
+                ...prog,
+              });
+            });
+
+            // Update session in database
+            if (loginRes.cookies.length > 0) {
+              const cookiesJson = JSON.stringify(loginRes.cookies);
+              await knex('account_sessions')
+                .where({ account_id: accountId })
+                .update({
+                  cookie_json: cookiesJson,
+                  is_active: 1,
+                  updated_at: knex.fn.now(),
+                })
+                .catch(() => undefined);
+
+              // Restart account runtime with new credentials
+              await accountManager.restartRuntime(accountId).catch(() => undefined);
+              const targetRuntime = accountManager.getRuntime(accountId);
+              if (targetRuntime) {
+                const summaries = await targetRuntime.getConversationSummaries();
+                broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+              }
+            }
+          } catch (bgErr) {
+            logger.warn('resync_qr_background_err', { accountId, error: String(bgErr) });
+            broadcast({
+              type: 'ws_sync_progress',
+              accountId,
+              step: 'error',
+              percent: 0,
+              message: 'Hết thời gian quét QR hoặc lỗi phiên đồng bộ',
+            });
+          } finally {
+            await qrHandler.cleanup().catch(() => {});
+            activeQrSessions.delete(accountId);
+          }
+        });
+
+        res.json({
+          ok: true,
+          qrCode: `data:image/png;base64,${qrBase64}`,
+          message: 'Quét mã QR bằng Zalo trên điện thoại và chọn Đồng bộ ngay',
+        });
+      } catch (err: any) {
+        logger.error('resync_qr_start_failed', { accountId, error: err?.message || String(err) });
+        res.status(500).json({ error: err?.message || 'Không thể tạo mã QR đồng bộ' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/re-sync-cancel', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const existing = activeQrSessions.get(accountId);
+      if (existing) {
+        await existing.cancel().catch(() => {});
+        activeQrSessions.delete(accountId);
+      }
+      res.json({ ok: true });
+    })();
+  });
+
   router.post('/:accountId/sync-all', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
@@ -334,97 +632,137 @@ export function createAccountsRouter(
           res.status(401).json({ error: 'Account chua active session' });
           return;
         }
-        const result = await targetRuntime.syncAllAccountConversations();
-        broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-        broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
-        res.json(result);
+
+        const credential = await accountManager.getRegistryStore().getCredentialForAccount(accountId);
+        if (!credential) {
+          res.status(400).json({ error: 'Chua co credential cho account nay de dong bo' });
+          return;
+        }
+
+        // Báo trạng thái bắt đầu qua WebSocket
+        broadcast({
+          type: 'ws_sync_progress',
+          accountId,
+          step: 'connecting',
+          percent: 5,
+          message: 'Đang khởi động phiên đồng bộ Zalo Web...',
+        });
+
+        // Chạy Worker Playwright Sync ngầm trong nền
+        setImmediate(async () => {
+          try {
+            await playwrightSyncWorker.runSync(accountId, credential, (update) => {
+              broadcast({
+                type: 'ws_sync_progress',
+                accountId,
+                ...update,
+              });
+            });
+
+            // Sau khi Playwright nạp xong, reload danh sách hội thoại
+            const summaries = await targetRuntime.getConversationSummaries();
+            broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+            broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
+          } catch (bgErr) {
+            logger.warn('playwright_sync_background_fallback', { accountId, error: String(bgErr) });
+            // Fallback sang recent catchup nếu Playwright gặp lỗi môi trường
+            const catchupResult = await targetRuntime.catchupRecentConversations({
+              limitConversations: 25,
+              perBatchTimeoutMs: 5000,
+            }).catch(() => ({ totalChecked: 0, totalInserted: 0 }));
+
+            const summaries = await targetRuntime.getConversationSummaries();
+            broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+            broadcast({
+              type: 'ws_sync_progress',
+              accountId,
+              step: 'completed',
+              percent: 100,
+              current: catchupResult.totalInserted,
+              message: `Đã bù đắp ${catchupResult.totalInserted} tin nhắn gần đây qua Cloud Catchup.`,
+            });
+          }
+        });
+
+        res.json({ started: true, message: 'Đã kích hoạt quy trình đồng bộ 14 ngày trong nền' });
       } catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Sync all that bai' });
       }
     })();
   });
 
-  router.post('/:accountId/send', ...editAny, (req, res) => {
+  router.get('/:accountId/send-requests/:clientRequestId', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
-      const conversationId = String(req.body?.conversationId ?? '').trim();
-      const text = String(req.body?.text ?? '').trim();
-      const imageBase64 = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.trim() : '';
-      const imageFileName = typeof req.body?.imageFileName === 'string' ? req.body.imageFileName.trim() : '';
-      const imageMimeType = typeof req.body?.imageMimeType === 'string' ? req.body.imageMimeType.trim() : '';
-      if (!conversationId) {
-        res.status(400).json({ error: 'conversationId la bat buoc' });
-        return;
-      }
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
-          return;
+        const userId = (req as Request & { systemUserId?: string }).systemUserId;
+        if (!userId) throw new SendRequestError(401, 'UNAUTHENTICATED', 'Yêu cầu xác thực.');
+        const user = await knex('system_users').where('id', userId).select('role').first();
+        const membership = await knex('zalo_account_memberships').where({ user_id: userId, account_id: accountId }).select('role').first();
+        if (user?.role !== 'super_admin' && !['editor', 'admin', 'master'].includes(membership?.role)) {
+          throw new SendRequestError(403, 'FORBIDDEN', 'Cần quyền editor để xem trạng thái gửi.');
         }
-        let result;
-        if (imageBase64) {
-          if (!imageFileName || !imageMimeType) {
-            res.status(400).json({ error: 'imageFileName va imageMimeType la bat buoc khi gui anh' });
-            return;
-          }
-          result = await targetRuntime.sendImage(conversationId, {
-            imageBuffer: Buffer.from(imageBase64, 'base64'),
-            fileName: imageFileName,
-            mimeType: imageMimeType,
-            caption: text || undefined,
-          });
-        } else {
-          if (!text) {
-            res.status(400).json({ error: 'Can co text hoac image de gui' });
-            return;
-          }
-          result = await targetRuntime.sendText(conversationId, text);
-        }
-        res.json(result);
-        void (async () => {
-          broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-          broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
-        })();
-      } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Gui tin that bai' });
-      }
+        const privileged = user?.role === 'super_admin' || ['admin', 'master'].includes(membership?.role);
+        const receipt = await sends.get(accountId, req.params.clientRequestId, userId, privileged);
+        const unresolved = receipt.status === 'sending' || receipt.status === 'unknown';
+        if (unresolved) res.setHeader('Retry-After', '2');
+        res.status(unresolved ? 202 : 200).json({ receipt });
+      } catch (error) { sendError(res, error); }
     })();
   });
 
-  router.post('/:accountId/send-attachment', upload.single('file'), ...editAny, (req, res) => {
+  router.post('/:accountId/send', ...editAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
-      const conversationId = String(req.body?.conversationId ?? '').trim();
-      const caption = String(req.body?.caption ?? '').trim();
-      if (!conversationId) {
-        res.status(400).json({ error: 'conversationId la bat buoc' });
-        return;
-      }
-      if (!req.file) {
-        res.status(400).json({ error: 'File la bat buoc' });
-        return;
-      }
+      const userId = (req as any).systemUserId as string;
       try {
-        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
-        if (!targetRuntime.isSessionActive()) {
-          res.status(401).json({ error: 'Account chua active session' });
-          return;
+        const body = req.body ?? {};
+        if (userId && body.conversationId) {
+          const allowed = await canUserAccessConversation(knex, userId, accountId, body.conversationId);
+          if (!allowed) {
+            res.status(403).json({ error: 'Bạn không có quyền gửi tin nhắn vào cuộc trò chuyện này' });
+            return;
+          }
         }
-        const result = await targetRuntime.sendAttachment(conversationId, {
-          fileBuffer: req.file.buffer,
-          fileName: req.file.originalname,
-          mimeType: req.file.mimetype,
-          caption: caption || undefined,
-        });
-        res.json(result);
-        void (async () => {
-          broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
-          broadcast({ type: 'session_state', accountId, status: await getStatusForRuntime(targetRuntime) });
-        })();
-      } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : 'Gui file that bai' });
-      }
+
+        let attachment;
+        if (body.imageBase64) {
+          if (typeof body.imageBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.imageBase64)
+            || typeof body.imageFileName !== 'string' || typeof body.imageMimeType !== 'string') {
+            throw new SendRequestError(400, 'INVALID_ATTACHMENT', 'Dữ liệu ảnh base64 không hợp lệ.');
+          }
+          attachment = { fileBuffer: Buffer.from(body.imageBase64, 'base64'), fileName: body.imageFileName, mimeType: body.imageMimeType };
+        }
+        const result = await sends.send({ accountId, systemUserId: (req as any).systemUserId,
+          conversationId: body.conversationId, text: body.text, attachment,
+          mentions: Array.isArray(body.mentions) ? body.mentions : undefined,
+          quoteMessageId: body.quoteMessageId ? String(body.quoteMessageId).trim() : undefined,
+          clientRequestId: body.clientRequestId, retry: body.retry }, dispatch);
+        if (result.status === 202) res.setHeader('Retry-After', '2');
+        res.status(result.status).json(result.body);
+      } catch (error) { sendError(res, error); }
+    })();
+  });
+
+  // Authorization deliberately precedes multipart allocation/parsing.
+  router.post('/:accountId/send-attachment', ...editAny, (req, res, next) => {
+    upload.single('file')(req, res, (error: unknown) => {
+      if (error) {
+        const tooLarge = (error as { code?: string }).code === 'LIMIT_FILE_SIZE';
+        res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? 'File vượt quá 50 MB.' : 'Dữ liệu multipart không hợp lệ.', code: 'INVALID_ATTACHMENT' });
+      } else next();
+    });
+  }, (req, res) => {
+    void (async () => {
+      try {
+        if (!req.file) throw new SendRequestError(400, 'INVALID_ATTACHMENT', 'File là bắt buộc.');
+        const result = await sends.send({ accountId: String(req.params.accountId ?? '').trim(),
+          systemUserId: (req as any).systemUserId, conversationId: req.body?.conversationId, text: req.body?.caption,
+          clientRequestId: req.body?.clientRequestId, retry: req.body?.retry,
+          attachment: { fileBuffer: req.file.buffer, fileName: req.file.originalname, mimeType: req.file.mimetype } }, dispatch);
+        if (result.status === 202) res.setHeader('Retry-After', '2');
+        res.status(result.status).json(result.body);
+      } catch (error) { sendError(res, error); }
     })();
   });
 
@@ -480,6 +818,161 @@ export function createAccountsRouter(
     })();
   });
 
+  router.put('/:accountId/conversations/:conversationId/notes', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const notes = typeof req.body?.notes === 'string' ? req.body.notes : null;
+      const updatedBy = (req as any).user?.username || (req as any).user?.email || 'sales';
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const updated = await targetRuntime.getStore().conversationRepo.updateConversationNotes(
+          accountId,
+          conversationId,
+          notes,
+          updatedBy,
+        );
+
+        broadcast({
+          type: 'conversation_notes_updated',
+          accountId,
+          conversationId,
+          notes: updated?.notes ?? null,
+          notesUpdatedBy: updated?.notesUpdatedBy ?? null,
+          notesUpdatedAt: updated?.notesUpdatedAt ?? null,
+        });
+
+        // Also broadcast updated conversation summaries so sidebar/list is fresh
+        broadcast({
+          type: 'conversation_summaries',
+          accountId,
+          conversations: await targetRuntime.getConversationSummaries(),
+        });
+
+        res.json({
+          ok: true,
+          conversationId,
+          notes: updated?.notes ?? null,
+          notesUpdatedBy: updated?.notesUpdatedBy ?? null,
+          notesUpdatedAt: updated?.notesUpdatedAt ?? null,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat ghi chu that bai' });
+      }
+    })();
+  });
+
+  router.put('/:accountId/conversations/:conversationId/restriction', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const userId = (req as any).systemUserId as string;
+      const isRestricted = Boolean(req.body?.isRestricted);
+
+      try {
+        // Only Master / Admin / Super Admin can toggle restriction
+        const { rows: userRows } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [userId]);
+        const systemRole = userRows[0]?.role;
+        const { rows: memberRows } = await knex.raw(
+          'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
+          [userId, accountId],
+        );
+        const accountRole = memberRows[0]?.role;
+
+        const isAllowed =
+          systemRole === 'super_admin' ||
+          systemRole === 'admin' ||
+          accountRole === 'master' ||
+          accountRole === 'admin';
+
+        if (!isAllowed) {
+          res.status(403).json({ error: 'Chỉ Quản lý (Master/Admin) mới có quyền khóa/mở hội thoại' });
+          return;
+        }
+
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const updated = await targetRuntime.getStore().setConversationRestriction(
+          accountId,
+          conversationId,
+          isRestricted,
+          userId,
+        );
+
+        broadcast({
+          type: 'conversation_restriction_updated',
+          accountId,
+          conversationId,
+          isRestricted: updated?.isRestricted ?? isRestricted,
+          restrictedBy: updated?.restrictedBy,
+          restrictedAt: updated?.restrictedAt,
+        });
+
+        broadcast({
+          type: 'conversation_summaries',
+          accountId,
+          conversations: await targetRuntime.getConversationSummaries(),
+        });
+
+        res.json({
+          ok: true,
+          conversationId,
+          isRestricted: updated?.isRestricted ?? isRestricted,
+          restrictedBy: updated?.restrictedBy,
+          restrictedAt: updated?.restrictedAt,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Cập nhật trạng thái khóa thất bại' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/:conversationId/mute', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      const conversationId = String(req.params.conversationId ?? '').trim();
+      const action = req.body?.action === 'unmute' ? 'unmute' : 'mute';
+      const duration = typeof req.body?.duration === 'number' ? req.body.duration : -1; // -1 = forever
+
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        const { type, threadId } = targetRuntime.resolveConversationTarget(conversationId);
+        const api = (targetRuntime as any).state?.session?.api;
+
+        if (api && typeof api.setMute === 'function') {
+          try {
+            await api.setMute({
+              duration: action === 'unmute' ? -1 : duration,
+              action: action === 'unmute' ? 3 : 1, // 1=MUTE, 3=UNMUTE
+            }, threadId, type === 'group' ? 1 : 0);
+          } catch (zaloErr) {
+            // ignore or log
+          }
+        }
+
+        const isMuted = action === 'mute';
+        const muteUntil = isMuted && duration !== -1 ? Date.now() + duration * 1000 : null;
+        await targetRuntime.getStore().conversationRepo.setConversationMuteState(
+          accountId,
+          conversationId,
+          isMuted,
+          muteUntil,
+        );
+
+        broadcast({
+          type: 'conversation_mute_updated',
+          accountId,
+          conversationId,
+          isMuted,
+          muteUntil,
+        });
+
+        res.json({ ok: true, conversationId, isMuted, muteUntil });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat trang thai mute that bai' });
+      }
+    })();
+  });
+
   router.post('/:accountId/conversations/:conversationId/read-state', ...viewAny, (req, res) => {
     void (async () => {
       const accountId = String(req.params.accountId ?? '').trim();
@@ -507,6 +1000,14 @@ export function createAccountsRouter(
           rowCount: typeof updateResult?.rowCount === 'number' ? updateResult.rowCount : undefined,
         });
 
+        // 2-way sync: Remove unread mark on Zalo server
+        setImmediate(async () => {
+          try {
+            const { type, threadId } = targetRuntime.resolveConversationTarget(conversationId);
+            await targetRuntime.markConversationRead(threadId, type === 'group').catch(() => undefined);
+          } catch { /* ignore */ }
+        });
+
         broadcast({ type: 'conversation_summaries', accountId, conversations: await targetRuntime.getConversationSummaries() });
 
         res.json({ ok: true, readAt });
@@ -517,6 +1018,54 @@ export function createAccountsRouter(
           error: error instanceof Error ? error.message : String(error),
         });
         res.status(500).json({ error: error instanceof Error ? error.message : 'Cap nhat read state that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/mark-all-read', ...editAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        await targetRuntime.getStore().conversationRepo.markAllAsRead(accountId);
+
+        // 2-way sync: Remove all unread marks on Zalo server
+        setImmediate(async () => {
+          try {
+            const unreads = await targetRuntime.getUnreadMark().catch(() => ({ direct: [], group: [] }));
+            for (const d of unreads.direct) {
+              await targetRuntime.markConversationRead(d.threadId, false).catch(() => undefined);
+            }
+            for (const g of unreads.group) {
+              await targetRuntime.markConversationRead(g.threadId, true).catch(() => undefined);
+            }
+          } catch { /* ignore */ }
+        });
+
+        const summaries = await targetRuntime.getConversationSummaries();
+        broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+
+        res.json({ ok: true, count: summaries.length });
+      } catch (error) {
+        logger.error('mark_all_read_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Danh dau tat ca da doc that bai' });
+      }
+    })();
+  });
+
+  router.post('/:accountId/conversations/sync-unread', ...viewAny, (req, res) => {
+    void (async () => {
+      const accountId = String(req.params.accountId ?? '').trim();
+      try {
+        const targetRuntime = await getRuntimeForAccount(accountId, accountManager);
+        await targetRuntime.syncUnreadMarks();
+        const summaries = await targetRuntime.getConversationSummaries();
+        broadcast({ type: 'conversation_summaries', accountId, conversations: summaries });
+
+        res.json({ ok: true, count: summaries.length });
+      } catch (error) {
+        logger.error('sync_unread_failed', { accountId, error: error instanceof Error ? error.message : String(error) });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Dong bo unread that bai' });
       }
     })();
   });

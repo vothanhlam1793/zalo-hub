@@ -53,7 +53,7 @@ export type ListenerState = {
   needsRelogin: boolean;
 };
 
-export type ConversationListener = (message: GoldConversationMessage) => void;
+export type ConversationListener = (message: GoldConversationMessage, event?: 'new') => void;
 
 export type HistorySyncState = {
   conversationId: string;
@@ -95,7 +95,7 @@ export interface SharedState {
   listenerStarted: boolean;
   listenerAttached: boolean;
   listenerState: ListenerState;
-  historySyncState: HistorySyncState | undefined;
+  historySyncStates: Map<string, HistorySyncState>;
   pendingHistorySyncs: Map<string, Promise<HistorySyncResult>>;
   cipherKey: string | undefined;
 }

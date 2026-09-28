@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { QrLoginDialog } from "./QrLoginDialog";
+import { CookieLoginDialog } from "./CookieLoginDialog";
 import { api } from "../api";
 
 interface MyAccount {
@@ -33,6 +34,7 @@ export function MyAccountsTab({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [qrOpen, setQrOpen] = useState(false);
+  const [cookieOpen, setCookieOpen] = useState(false);
   const [reconnectId, setReconnectId] = useState<string | null>(null);
 
   const [selectedAccount, setSelectedAccount] = useState<MyAccount | null>(null);
@@ -143,9 +145,14 @@ export function MyAccountsTab({ isSuperAdmin }: { isSuperAdmin: boolean }) {
 
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-bold text-[#eee]">Tài khoản Zalo của tôi</h2>
-        <Button size="sm" className="text-[11px] h-7" onClick={() => setQrOpen(true)}>
-          + Thêm tài khoản (QR)
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" className="text-[11px] h-7 border-blue-500/30 text-blue-400 hover:text-blue-300" onClick={() => setCookieOpen(true)}>
+            🍪 Thêm bằng Cookie
+          </Button>
+          <Button size="sm" className="text-[11px] h-7" onClick={() => setQrOpen(true)}>
+            + Thêm tài khoản (QR)
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -234,6 +241,12 @@ export function MyAccountsTab({ isSuperAdmin }: { isSuperAdmin: boolean }) {
         open={qrOpen}
         onOpenChange={setQrOpen}
         onSuccess={() => { setQrOpen(false); loadAccounts(); }}
+      />
+
+      <CookieLoginDialog
+        open={cookieOpen}
+        onOpenChange={setCookieOpen}
+        onSuccess={() => { setCookieOpen(false); loadAccounts(); }}
       />
 
       {reconnectId && (

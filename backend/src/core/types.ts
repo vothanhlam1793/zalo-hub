@@ -14,7 +14,28 @@ export interface GoldAccountRecord {
 }
 
 export type GoldConversationType = 'direct' | 'group';
-export type GoldMessageKind = 'text' | 'image' | 'file' | 'video' | 'sticker' | 'reaction' | 'poll' | 'voice' | 'gif';
+export type GoldMessageKind = 'text' | 'image' | 'file' | 'video' | 'sticker' | 'reaction' | 'poll' | 'voice' | 'gif' | 'call' | 'system' | 'location' | 'link' | 'card' | 'unknown';
+
+export interface GoldMessagePresentation {
+  version: 1;
+  durationSeconds?: number;
+  url?: string;
+  thumbnailUrl?: string;
+  latitude?: number;
+  longitude?: number;
+  albumId?: string;
+  albumIndex?: number;
+  albumTotal?: number;
+  unavailable?: boolean;
+  stickerId?: number;
+}
+
+export interface GoldMessageMention {
+  pos: number;
+  len: number;
+  uid: string;
+  type?: number;
+}
 
 export interface GoldMessageQuote {
   messageId?: string;
@@ -90,12 +111,28 @@ export interface GoldConversationMessage {
   timestamp: string;
   senderId?: string;
   senderName?: string;
+  senderAvatar?: string;
   providerMessageId?: string;
   imageUrl?: string;
+  presentation?: GoldMessagePresentation;
   quote?: GoldMessageQuote;
+  mentions?: GoldMessageMention[];
   reactions?: GoldMessageReactionItem[];
   rawMessageJson?: string;
   cliMsgId?: string;
+  clientRequestId?: string;
+}
+
+/** sent means provider acceptance, not recipient delivery/read. */
+export interface SendReceipt {
+  clientRequestId: string;
+  accountId: string;
+  conversationId: string;
+  status: 'sending' | 'sent' | 'failed' | 'unknown';
+  messages: GoldConversationMessage[];
+  providerMessageIds: string[];
+  acceptedAt?: string;
+  error?: { code: string; message: string; retryable: boolean };
 }
 
 export interface GoldConversationSummary {
@@ -109,9 +146,46 @@ export interface GoldConversationSummary {
   lastMessageKind: GoldMessageKind;
   lastMessageTimestamp: string;
   lastDirection: 'incoming' | 'outgoing';
+  lastMessageSenderName?: string;
+  memberAvatars?: string[];
   messageCount: number;
   unreadCount: number;
   lastReadAt?: string;
+  labels?: GoldTagItem[];
+  isMuted?: boolean;
+  muteUntil?: number | string | null;
+  isPinned?: boolean;
+  isRestricted?: boolean;
+  restrictedBy?: string;
+  restrictedAt?: string;
+  notes?: string;
+  notesUpdatedBy?: string;
+  notesUpdatedAt?: string;
+}
+
+export interface UserNotificationSettings {
+  id?: string;
+  userId: string;
+  desktopNotification: boolean;
+  soundEnabled: boolean;
+  soundVolume: number;
+  notifyGroupMessages: boolean;
+  showMessagePreview: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type GoldTagSource = 'zalo' | 'system' | 'ai';
+
+export interface GoldTagItem {
+  id: string;
+  name: string;
+  color: string;
+  emoji?: string;
+  source: GoldTagSource;
+  zaloLabelId?: number;
+  accountId?: string;
+  usageCount?: number;
 }
 
 export interface GoldState {

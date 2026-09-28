@@ -1,4 +1,5 @@
 import type { AccountSummary, Contact, Message } from './types';
+import { isLocalMediaPreview } from './features/chat/model/local-media-preview';
 
 export function formatTime(ts: string) {
   try {
@@ -22,9 +23,9 @@ export function getInitial(name: string) {
 export function getContactDisplayName(contact: Pick<Contact, 'displayName' | 'hubAlias' | 'zaloAlias' | 'zaloName' | 'phoneNumber' | 'userId'>) {
   return contact.hubAlias?.trim()
     || contact.zaloAlias?.trim()
+    || contact.displayName?.trim()
     || contact.zaloName?.trim()
     || contact.phoneNumber?.trim()
-    || contact.displayName?.trim()
     || contact.userId;
 }
 
@@ -43,6 +44,49 @@ export function groupConversationId(groupId: string) {
   return `group:${groupId}`;
 }
 
+export function cleanTechnicalId(id?: string) {
+  if (!id) return '';
+  return id.replace(/^(direct:|group:)/, '');
+}
+
+export function formatConversationTitle(title?: string, type?: 'direct' | 'group', threadId?: string) {
+  const raw = (title || threadId || '').trim();
+  const cleaned = cleanTechnicalId(raw);
+  
+  // If title is a real name (not just direct:xxx, group:xxx or purely numeric ID)
+  if (raw && !raw.startsWith('direct:') && !raw.startsWith('group:') && !/^\d{10,}$/.test(raw)) {
+    return raw;
+  }
+
+  // Purely numeric or direct/group ID
+  const shortId = cleaned.length > 4 ? `..${cleaned.slice(-4)}` : cleaned;
+  if (type === 'group' || raw.startsWith('group:')) {
+    return `Nhóm Zalo (${shortId})`;
+  }
+  return `Khách Zalo (${shortId})`;
+}
+
+export function formatConversationSubtitle(params: {
+  status?: string;
+  phoneNumber?: string;
+  memberCount?: number;
+  type?: 'direct' | 'group';
+  threadId?: string;
+  conversationId?: string;
+}) {
+  const { status, phoneNumber, memberCount, type, threadId, conversationId } = params;
+  if (phoneNumber?.trim()) return `📞 ${phoneNumber.trim()}`;
+  if (status?.trim()) return status.trim();
+  if (type === 'group' || conversationId?.startsWith('group:')) {
+    return memberCount ? `👥 ${memberCount} thành viên` : '👥 Nhóm Zalo';
+  }
+  const clean = cleanTechnicalId(threadId || conversationId);
+  if (clean && /^\d+$/.test(clean)) {
+    return `👤 Khách Zalo (${clean.slice(-4)})`;
+  }
+  return '👤 Khách hàng cá nhân';
+}
+
 export function getFileIcon(msg: Message, fileName?: string, mimeType?: string) {
   const lowerName = (fileName ?? '').toLowerCase();
   const lowerMime = (mimeType ?? '').toLowerCase();
@@ -56,14 +100,30 @@ export function getFileIcon(msg: Message, fileName?: string, mimeType?: string) 
   return '📎';
 }
 
-export function isVideoAttachment(msg: Message, fileName?: string, mimeType?: string) {
+export function isVideoAttachment(msg: Pick<Message, 'kind'>, fileName?: string, mimeType?: string) {
   const lowerName = (fileName ?? '').toLowerCase();
   const lowerMime = (mimeType ?? '').toLowerCase();
   return msg.kind === 'video' || lowerMime.startsWith('video/') || lowerName.endsWith('.mp4') || lowerName.endsWith('.mov') || lowerName.endsWith('.webm');
 }
 
-export function isImageAttachment(msg: Message, fileName?: string, mimeType?: string) {
+export function isImageAttachment(msg: Pick<Message, 'kind'>, fileName?: string, mimeType?: string) {
   const lowerName = (fileName ?? '').toLowerCase();
   const lowerMime = (mimeType ?? '').toLowerCase();
-  return msg.kind === 'image' || lowerMime.startsWith('image/') || lowerName.endsWith('.png') || lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg') || lowerName.endsWith('.gif') || lowerName.endsWith('.webp');
+  if (isVideoAttachment(msg, fileName, mimeType)) return false;
+  return ['image', 'sticker', 'gif'].includes(msg.kind) || lowerMime.startsWith('image/') || lowerName.endsWith('.png') || lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg') || lowerName.endsWith('.gif') || lowerName.endsWith('.webp');
+}
+
+/** External navigation is HTTP(S) only; media may also use same-origin mirrored paths. */
+export function safeHttpUrl(value?: string): string | undefined {
+  if (!value || /[\u0000-\u0020\u007f]/.test(value)) return undefined;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : undefined;
+  } catch { return undefined; }
+}
+
+export function safeMediaUrl(value?: string, source: 'provider' | 'local-preview' = 'provider'): string | undefined {
+  if (value && source === 'local-preview' && isLocalMediaPreview(value)) return value;
+  if (value && /^\/(?!\/)/.test(value) && !/[\\\u0000-\u0020\u007f]/.test(value)) return value;
+  return safeHttpUrl(value);
 }

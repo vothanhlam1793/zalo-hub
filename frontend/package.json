@@ -1,13 +1,17 @@
 {
   "name": "zalohub-frontend",
-  "version": "1.0.0",
+  "version": "5.3.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "react-router dev",
-    "build": "react-router build",
-    "start": "react-router-serve ./build/server/index.js",
-    "preview": "react-router build && node app/start.js"
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "test:composer:browser": "node tests/composer-browser.mjs",
+    "test:albums": "../backend/node_modules/.bin/tsx --tsconfig tsconfig.app.json --test src/features/chat/model/album-selector.test.ts",
+    "test:albums:browser": "node tests/album-browser.mjs",
+    "test:sales-chat": "../backend/node_modules/.bin/tsx --tsconfig tsconfig.app.json --test src/features/chat/model/message-reconciliation.test.ts src/features/chat/model/send-controller.test.ts tests/realtime.test.ts",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@react-router/node": "^7.18.0",

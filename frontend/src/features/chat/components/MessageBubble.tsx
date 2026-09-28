@@ -1,192 +1,105 @@
-import { formatSize, formatTime, getFileIcon, isImageAttachment, isVideoAttachment } from '@/utils';
-import type { Message, MessageReactionOption } from '@/types';
+import React, { memo, useState } from 'react';
+import { formatTime, getInitial } from '@/utils';
+import type { Message, MessageMention, MessageReactionOption } from '@/types';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { MessageDeliveryStatus, type DeliveryActions } from './messages/MessageDeliveryStatus';
+import { MessageMedia } from './messages/MessageMedia';
+import { RichMessageContent } from './messages/RichMessageContent';
+import { messageCaption, messagePreview } from '../model/message-preview';
 
 const REACTION_OPTIONS: MessageReactionOption[] = [
-  { emoji: '❤️', icon: '/-heart' },
-  { emoji: '👍', icon: '/-strong' },
-  { emoji: '😆', icon: ':>' },
-  { emoji: '😮', icon: ':o' },
-  { emoji: '😢', icon: ':-((' },
-  { emoji: '😡', icon: ':-h' },
+  { emoji: '❤️', icon: '/-heart' }, { emoji: '👍', icon: '/-strong' },
+  { emoji: '😆', icon: ':>' }, { emoji: '😮', icon: ':o' },
+  { emoji: '😢', icon: ':-((' }, { emoji: '😡', icon: ':-h' },
 ];
 
-export function MessageBubble({ msg, isGroup, onReact, onOpenLightbox }: { msg: Message; isGroup: boolean; onReact?: (message: Message, reaction: MessageReactionOption) => void; onOpenLightbox?: (messageId: string) => void }) {
-  const dir = msg.direction;
-  const att = msg.attachments?.[0];
-  const imageUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
-  const fallbackFileLabel = att?.fileName ?? msg.text ?? (msg.kind === 'video' ? 'Video' : 'File');
-  const fileIcon = getFileIcon(msg, att?.fileName, att?.mimeType);
-  const hasAttachmentUrl = Boolean(att?.url);
-  const shouldRenderImage = Boolean(imageUrl && isImageAttachment(msg, att?.fileName, att?.mimeType));
-  const shouldRenderVideo = Boolean(att?.url && isVideoAttachment(msg, att?.fileName, att?.mimeType));
-  const shouldRenderFile = Boolean(att && !shouldRenderImage && !shouldRenderVideo);
-  const isSticker = msg.kind === 'sticker';
-  const quoteLabel = msg.quote?.senderName ?? msg.quote?.senderId ?? 'Tin nhắn gốc';
-  const quoteText = msg.quote?.text?.trim() || (msg.quote?.kind ? `[${msg.quote.kind}]` : 'Tin nhắn đã trả lời');
-  const canReact = Boolean(onReact && msg.providerMessageId && msg.kind !== 'reaction');
-  const defaultReaction = REACTION_OPTIONS[1];
-  const reactionDock = canReact ? (
-    <div className={`pointer-events-none absolute top-full z-10 mt-0.5 flex items-center opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${dir === 'outgoing' ? 'right-0 justify-end' : 'left-0 justify-start'}`}>
-      <div className="group/reaction relative flex items-center">
-        <button
-          type="button"
-          className="h-6 w-6 rounded-full text-[13px] text-[rgba(255,255,255,0.20)] transition hover:text-[rgba(255,255,255,0.55)] hover:bg-white/5 focus-visible:text-[rgba(255,255,255,0.55)] focus-visible:outline-none"
-          onClick={() => onReact?.(msg, defaultReaction)}
-          title="Thả thích"
-        >
-          👍
-        </button>
-        <div className={`pointer-events-none absolute top-1/2 -translate-y-1/2 opacity-0 transition-all duration-150 group-hover/reaction:pointer-events-auto group-hover/reaction:opacity-100 group-focus-within/reaction:pointer-events-auto group-focus-within/reaction:opacity-100 ${dir === 'outgoing' ? 'right-full mr-0.5' : 'left-full ml-0.5'}`}>
-          <div className="flex items-center gap-1 rounded-full border border-white/10 bg-[rgba(8,12,18,0.92)] px-1.5 py-1 shadow-lg backdrop-blur-sm">
-            {REACTION_OPTIONS.map((reaction) => (
-              <button
-                key={reaction.emoji}
-                type="button"
-                className="h-7 w-7 rounded-full text-sm hover:bg-white/10"
-                onClick={() => onReact?.(msg, reaction)}
-                title={`Thả cảm xúc ${reaction.emoji}`}
-              >
-                {reaction.emoji}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  ) : null;
-
-  const showText = msg.text && msg.text !== '[image]' && msg.text !== '[file]' && msg.text !== '[video]' && !isSticker;
-
-  if (isSticker) {
-    const stickerUrl = imageUrl || att?.url || '';
-    return (
-      <div className={`flex flex-col ${dir === 'outgoing' ? 'items-end' : 'items-start'}`}>
-        <div className="group relative max-w-[160px]">
-          {isGroup && dir === 'incoming' && msg.senderName && (
-            <div className="text-xs text-[#667085] font-semibold mb-1">{msg.senderName}</div>
-          )}
-          <img src={stickerUrl} alt="Sticker" className="w-full h-auto block" />
-          <div className="text-[10px] text-[rgba(255,255,255,0.25)] mt-0.5 text-right">{formatTime(msg.timestamp)}</div>
-          {reactionDock}
-        </div>
-      </div>
-    );
-  }
-
-  if (msg.kind === 'poll') {
-    return (
-      <div className={`flex flex-col ${dir === 'outgoing' ? 'items-end' : 'items-start'}`}>
-        <div className="max-w-[72%] max-w-[480px]">
-          <div className="group relative px-[14px] py-[10px] rounded-2xl text-sm leading-relaxed bg-[rgba(255,255,255,0.07)] border border-[rgba(255,255,255,0.1)] text-[#ddd] rounded-bl">
-          {isGroup && dir === 'incoming' && msg.senderName && (
-            <div className="text-xs text-[#667085] font-semibold mb-1">{msg.senderName}</div>
-          )}
-          <div className="font-semibold text-[#eee] mb-2">📊 {msg.text}</div>
-          <div className="flex flex-col gap-1.5">
-            {(msg.attachments || []).slice(0, 1).map((a, i) => (
-              <div key={i} className="text-xs text-muted-foreground">
-                {a.fileName ? `Tùy chọn: ${a.fileName}` : 'Xem chi tiết poll trên Zalo'}
-              </div>
-            ))}
-          </div>
-          <div className="text-[11px] text-[rgba(255,255,255,0.35)] mt-2 text-right">{formatTime(msg.timestamp)}</div>
-          {reactionDock}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (msg.kind === 'reaction') {
-    return (
-      <div className="flex justify-center">
-        <span className="text-sm px-2 py-0.5 rounded-full bg-white/5 text-[#ccc]">{msg.text}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`flex flex-col ${dir === 'outgoing' ? 'items-end' : 'items-start'}`}>
-      <div className="max-w-[72%] max-w-[480px]">
-        <div className={`group relative px-[14px] py-[10px] rounded-2xl text-sm leading-relaxed break-words ${
-        dir === 'outgoing'
-          ? 'bg-[rgba(79,122,255,0.22)] border border-[rgba(79,122,255,0.35)] text-[#dde8ff] rounded-br'
-          : 'bg-[rgba(255,255,255,0.07)] border border-[rgba(255,255,255,0.1)] text-[#ddd] rounded-bl'
-      }`}>
-        {isGroup && dir === 'incoming' && msg.senderName && (
-          <div className="text-xs text-[#667085] font-semibold mb-1">{msg.senderName}</div>
-        )}
-        {msg.quote && (
-          <div className={`mb-2 rounded-xl border px-3 py-2 text-xs ${
-            dir === 'outgoing'
-              ? 'border-[rgba(159,192,255,0.25)] bg-[rgba(7,16,34,0.16)] text-[#d7e4ff]'
-              : 'border-white/8 bg-black/15 text-[#d7dbe5]'
-          }`}>
-            <div className="font-semibold truncate">{quoteLabel}</div>
-            <div className="mt-0.5 truncate opacity-80">{quoteText}</div>
-          </div>
-        )}
-        {shouldRenderImage ? (
-          <button type="button" className="cursor-pointer block w-full text-left" onClick={() => onOpenLightbox?.(msg.id)} title="Xem ảnh lớn">
-            <img src={imageUrl} alt={msg.text || 'Hình ảnh'} className="max-w-[240px] rounded-[10px] block" />
-          </button>
-        ) : shouldRenderVideo && att?.url ? (
-          <div className="flex flex-col gap-2">
-            <video className="max-w-[320px] w-full rounded-xl bg-black" controls preload="metadata">
-              <source src={att.url} type={att.mimeType ?? 'video/mp4'} />
-            </video>
-            <div className="flex gap-3 flex-wrap mt-1.5">
-              <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-[#9fc0ff] no-underline hover:underline">Mở video</a>
-              <a href={att.url} download={att.fileName ?? 'video'} className="text-xs text-[#9fc0ff] no-underline hover:underline">Tải xuống</a>
-            </div>
-          </div>
-        ) : shouldRenderFile && att ? (
-          <div className="flex items-start gap-2.5 p-2 bg-white/5 rounded-[10px] border border-white/8">
-            <span className="text-[28px] leading-none">{fileIcon}</span>
-            <div>
-              <div className="text-[13px] text-[#ddd] font-medium">
-                {hasAttachmentUrl ? (
-                  <a href={att.url} target="_blank" rel="noreferrer" className="text-inherit no-underline hover:underline">
-                    {fallbackFileLabel}
-                  </a>
-                ) : (
-                  fallbackFileLabel
-                )}
-              </div>
-              <div className="flex items-center gap-2 mt-1">
-                {att.mimeType && (
-                  <span className="text-[10px] font-bold text-[#8cb1ff] bg-[rgba(79,122,255,0.15)] border border-[rgba(79,122,255,0.22)] rounded-full px-1.5 py-0.5">
-                    {att.mimeType.split('/').pop()?.toUpperCase()}
-                  </span>
-                )}
-                {att.size && <div className="text-[11px] text-[#666]">{formatSize(att.size)}</div>}
-              </div>
-              {hasAttachmentUrl && (
-                <div className="flex gap-3 flex-wrap mt-1.5">
-                  <a href={att.url} target="_blank" rel="noreferrer" className="text-xs text-[#9fc0ff] no-underline hover:underline">Xem file</a>
-                  <a href={att.url} download={att.fileName ?? 'download'} className="text-xs text-[#9fc0ff] no-underline hover:underline">Tải xuống</a>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : null}
-        {showText && (
-          <div className={att ? 'mt-1.5' : ''}>{msg.text}</div>
-        )}
-        {msg.reactions && msg.reactions.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {msg.reactions.map((reaction) => (
-              <span key={`${reaction.emoji}-${reaction.count}`} className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/15 px-2 py-0.5 text-xs text-[#eef2ff]">
-                <span>{reaction.emoji}</span>
-                <span className="text-[11px] opacity-80">{reaction.count}</span>
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="text-[11px] text-[rgba(255,255,255,0.35)] mt-1 text-right">{formatTime(msg.timestamp)}</div>
-        {reactionDock}
-        </div>
-      </div>
-    </div>
-  );
+export interface MessageGroupItem {
+  msg: Message;
+  isFirstInGroup: boolean;
+  isLastInGroup: boolean;
+  showDateDivider?: string;
 }
+
+interface MessageBubbleProps extends DeliveryActions {
+  msg: Message;
+  isGroup: boolean;
+  isFirstInGroup?: boolean;
+  isLastInGroup?: boolean;
+  senderAvatar?: string;
+  onReact?: (message: Message, reaction: MessageReactionOption) => void;
+  onReply?: (message: Message) => void;
+  onOpenLightbox?: (attachmentKey: string) => void;
+}
+
+export function renderMessageText(text: string, mentions?: MessageMention[]) {
+  if (!mentions?.length) return text;
+  const result: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const mention of [...mentions].sort((a, b) => a.pos - b.pos)) {
+    if (!Number.isInteger(mention.pos) || !Number.isInteger(mention.len) || mention.pos < cursor || mention.len <= 0 || mention.pos + mention.len > text.length) continue;
+    result.push(text.slice(cursor, mention.pos));
+    result.push(<span key={`${mention.pos}:${mention.uid}`} className="font-semibold text-blue-500 bg-blue-500/10 rounded px-1">{text.slice(mention.pos, mention.pos + mention.len)}</span>);
+    cursor = mention.pos + mention.len;
+  }
+  result.push(text.slice(cursor));
+  return result;
+}
+
+export const MessageBubble = memo(function MessageBubble({
+  msg, isGroup, isFirstInGroup = true, isLastInGroup = true, senderAvatar,
+  onReact, onReply, onOpenLightbox, onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
+}: MessageBubbleProps) {
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const receivedReactions = (msg.reactions ?? []).filter(reaction => Number.isFinite(reaction.count) && reaction.count > 0);
+  const isOutgoing = msg.direction === 'outgoing' || msg.isSelf;
+  const compact = msg.kind === 'system' || msg.kind === 'reaction';
+  const rich = ['call', 'system', 'reaction', 'poll', 'unknown', 'location', 'link', 'card'].includes(msg.kind);
+  const caption = messageCaption(msg);
+  const canReact = Boolean(onReact && msg.providerMessageId && (!msg.delivery || msg.delivery === 'sent') && msg.kind !== 'reaction');
+  const avatarUrl = senderAvatar || msg.senderAvatar;
+  const roundedClass = isOutgoing
+    ? `rounded-2xl ${isFirstInGroup ? 'rounded-tr-2xl' : 'rounded-tr-md'} ${isLastInGroup ? 'rounded-br-sm' : 'rounded-br-md'}`
+    : `rounded-2xl ${isFirstInGroup ? 'rounded-tl-2xl' : 'rounded-tl-md'} ${isLastInGroup ? 'rounded-bl-sm' : 'rounded-bl-md'}`;
+
+  return <div className={`flex items-start gap-2 ${compact ? 'justify-center' : isOutgoing ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-2.5' : 'mt-0.5'}`}>
+    {!compact && isGroup && !isOutgoing && <div className="w-8 shrink-0 pt-0.5">
+      {isFirstInGroup && <Avatar className="h-7 w-7 text-[11px]">
+        {avatarUrl && <img src={avatarUrl} alt={msg.senderName || 'Thành viên'} className="h-full w-full rounded-full object-cover" />}
+        <AvatarFallback>{getInitial(msg.senderName || 'Thành viên')}</AvatarFallback>
+      </Avatar>}
+    </div>}
+    <div className="min-w-0 max-w-[85%] sm:max-w-[500px] flex flex-col items-start">
+      {!compact && isGroup && !isOutgoing && isFirstInGroup && msg.senderName && <div className="mb-1 pl-1 text-[11px] font-semibold text-blue-500">{msg.senderName}</div>}
+      <div className={`group relative hover:z-20 focus-within:z-20 min-w-0 max-w-full break-words ${compact ? 'rounded-xl bg-[var(--muted)] px-3 py-1.5' : `px-3.5 py-2.5 text-sm leading-relaxed shadow-xs ${roundedClass} ${isOutgoing
+        ? 'bg-[var(--bubble-out-bg)] border border-[var(--bubble-out-border)] text-[var(--bubble-out-text)]'
+        : 'bg-[var(--bubble-in-bg)] border border-[var(--bubble-in-border)] text-[var(--bubble-in-text)]'}`}`}>
+        {msg.quote && <div className="mb-2 rounded-xl border border-current/20 bg-black/5 px-3 py-2 text-xs">
+          <div className="truncate font-bold">{msg.quote.senderName ?? msg.quote.senderId ?? 'Tin nhắn gốc'}</div>
+          <div className="mt-0.5 truncate opacity-85">{messagePreview({ kind: msg.quote.kind ?? 'text', text: msg.quote.text ?? '' })}</div>
+        </div>}
+        {rich && <RichMessageContent message={msg} />}
+        <MessageMedia message={msg} onOpenLightbox={onOpenLightbox} />
+        {!rich && caption && <div className={`whitespace-pre-wrap select-text ${msg.kind !== 'text' || msg.attachments.length ? 'mt-2' : ''}`}>{renderMessageText(caption, msg.mentions)}</div>}
+        {receivedReactions.length > 0 && <div aria-label="Cảm xúc đã nhận" title={receivedReactions.map(reaction => `${reaction.emoji}: ${reaction.count}`).join(' · ')} className="absolute -bottom-1.5 left-1 z-10 flex max-w-[calc(100vw-6rem)] flex-nowrap items-center gap-1 overflow-hidden whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--card)] px-1.5 py-px text-[11px] leading-4 text-[var(--foreground)] shadow-sm">
+          {receivedReactions.slice(0, 3).map((reaction, index) =>
+            <span key={`${reaction.emoji}:${index}`} aria-label={`${reaction.emoji}: ${reaction.count}`} className="shrink-0">{reaction.emoji} {reaction.count}</span>)}
+          {receivedReactions.length > 3 && <span className="shrink-0">+{receivedReactions.length - 3}</span>}
+        </div>}
+        <div className="mt-1 flex items-center justify-end gap-1.5">
+          <span className="text-[10px] opacity-60">{formatTime(msg.timestamp)}</span>
+          {isOutgoing && <MessageDeliveryStatus message={msg} onRetryMessage={onRetryMessage} onQueryMessage={onQueryMessage} onCancelMessage={onCancelMessage} onRestoreDraft={onRestoreDraft} />}
+        </div>
+        {(canReact || onReply) && <div className={`absolute bottom-0 z-30 ${isOutgoing ? 'right-0' : 'left-0'}`}>
+          <button type="button" aria-label="Thao tác tin nhắn" aria-expanded={actionsOpen} onClick={() => setActionsOpen(open => !open)} className={`absolute bottom-6 flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--card)] text-xs text-[var(--foreground)] shadow-sm sm:hidden ${isOutgoing ? 'right-0' : 'left-0'}`}>⋯</button>
+          <div className={`absolute top-0 w-max max-w-[calc(100vw-5rem)] pt-1 ${actionsOpen ? 'visible pointer-events-auto opacity-100' : 'invisible pointer-events-none opacity-0'} sm:invisible sm:pointer-events-none sm:opacity-0 sm:transition-opacity sm:group-hover:visible sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-within:visible sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100 ${isOutgoing ? 'right-0' : 'left-0'}`}>
+          <div className="flex flex-wrap items-center justify-end gap-0.5 rounded-xl border border-[var(--border)] bg-[var(--card)] p-1 text-[var(--foreground)] shadow-lg">
+          {onReply && <button type="button" className="rounded px-2 py-1 text-xs hover:bg-black/10 focus-visible:outline-2" onClick={() => { setActionsOpen(false); onReply(msg); }} title="Trả lời tin nhắn này">↩ Trả lời</button>}
+          {canReact && REACTION_OPTIONS.map(reaction => <button key={reaction.emoji} type="button" className="rounded px-1.5 py-1 text-sm hover:bg-black/10 focus-visible:outline-2"
+            onClick={() => { setActionsOpen(false); onReact?.(msg, reaction); }} title={`Thả cảm xúc ${reaction.emoji}`} aria-label={`Thả cảm xúc ${reaction.emoji}`}>{reaction.emoji}</button>)}
+          </div>
+          </div>
+        </div>}
+      </div>
+    </div>
+  </div>;
+});

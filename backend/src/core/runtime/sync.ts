@@ -131,7 +131,7 @@ export class GoldSync {
     };
   }
 
-  async syncConversationHistory(conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number; maxTotalTimeMs?: number } = {}) {
+  async syncConversationHistory(conversationId: string, options: { beforeMessageId?: string; timeoutMs?: number; maxTotalTimeMs?: number; maxBatches?: number } = {}) {
     if (!this.state.session) {
       await this._loginWithStoredCredential?.();
     }
@@ -149,14 +149,12 @@ export class GoldSync {
     const target = this._resolveConversationTarget?.(conversationId) ?? { threadId: conversationId, type: 'direct' as const };
     const perBatchTimeout = Math.max(5_000, Math.min(options.timeoutMs ?? 45_000, 45_000));
     const maxTotalTimeMs = options.maxTotalTimeMs ?? 240_000;
+    const maxBatches = options.maxBatches ?? 50;
     const startTime = Date.now();
 
-    let beforeMessageId: string | null | undefined = options.beforeMessageId?.trim();
-    if (!beforeMessageId) {
-      const oldestMessages = await this.state.store.listConversationMessagesByAccount(this.state.boundAccountId, conversationId, { limit: 1 });
-      const oldestLocal = oldestMessages[0];
-      beforeMessageId = oldestLocal?.providerMessageId ?? null;
-    }
+    // Target specific beforeMessageId if given. If none given:
+    // If catchup mode (default), start from null to request the latest batch and catch missing messages
+    let beforeMessageId: string | null | undefined = options.beforeMessageId?.trim() || null;
 
     let totalRemote = 0;
     let totalInserted = 0;
@@ -170,7 +168,7 @@ export class GoldSync {
     const promise = (async () => {
       while (true) {
         const elapsed = Date.now() - startTime;
-        if (elapsed >= maxTotalTimeMs) break;
+        if (elapsed >= maxTotalTimeMs || batchCount >= maxBatches) break;
 
         const batchTimeout = Math.min(perBatchTimeout, maxTotalTimeMs - elapsed);
         const result = await this._requestHistoryBatch(conversationId, target, listener, beforeMessageId, batchTimeout);
@@ -268,11 +266,12 @@ export class GoldSync {
   ): Promise<HistorySyncResult> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (this.state.historySyncState?.conversationId !== conversationId) {
+        const sync = this.state.historySyncStates.get(target.threadId);
+        if (sync?.conversationId !== conversationId) {
           return;
         }
 
-        this.state.historySyncState = undefined;
+        this.state.historySyncStates.delete(target.threadId);
         this.state.pendingHistorySyncs.delete(conversationId);
         const result: HistorySyncResult = {
           conversationId,
@@ -288,7 +287,7 @@ export class GoldSync {
         resolve(result);
       }, timeoutMs);
 
-      this.state.historySyncState = {
+      this.state.historySyncStates.set(target.threadId, {
         conversationId,
         threadId: target.threadId,
         type: target.type as HistorySyncResult['type'],
@@ -297,7 +296,7 @@ export class GoldSync {
         resolve,
         reject,
         timer,
-      };
+      });
 
       listener.requestOldMessages?.(
         target.type === 'group' ? ThreadType.Group : ThreadType.User,
@@ -458,6 +457,56 @@ export class GoldSync {
     };
   }
 
+  async catchupRecentConversations(options: {
+    limitConversations?: number;
+    sinceTimestamp?: string;
+    perBatchTimeoutMs?: number;
+  } = {}): Promise<{ totalChecked: number; totalInserted: number }> {
+    const limit = Math.max(1, Math.min(options.limitConversations ?? 20, 50));
+    const summaries = await this.state.store.listConversationSummariesByAccount(this.state.boundAccountId);
+    
+    // Sắp xếp các hội thoại có tin nhắn mới nhất
+    const recentSummaries = summaries
+      .filter((s) => Boolean(s.lastMessageTimestamp))
+      .sort((a, b) => String(b.lastMessageTimestamp || '').localeCompare(String(a.lastMessageTimestamp || '')))
+      .slice(0, limit);
+
+    this.state.logger.info('catchup_recent_start', {
+      accountId: this.state.boundAccountId,
+      checkedCount: recentSummaries.length,
+      sinceTimestamp: options.sinceTimestamp,
+    });
+
+    let totalInserted = 0;
+    const perBatchTimeoutMs = options.perBatchTimeoutMs ?? 15_000;
+
+    for (const summary of recentSummaries) {
+      try {
+        const result = await this.syncConversationHistory(summary.id, {
+          timeoutMs: perBatchTimeoutMs,
+          maxTotalTimeMs: 8_000,
+          maxBatches: 2,
+        });
+        totalInserted += result.insertedCount;
+        // Giãn cách 200ms giữa các request để bảo vệ WebSocket và tránh sập listener
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) {
+        this.state.logger.warn('catchup_recent_conversation_failed', {
+          conversationId: summary.id,
+          error: String(err),
+        });
+      }
+    }
+
+    this.state.logger.info('catchup_recent_completed', {
+      accountId: this.state.boundAccountId,
+      totalChecked: recentSummaries.length,
+      totalInserted,
+    });
+
+    return { totalChecked: recentSummaries.length, totalInserted };
+  }
+
   async syncAllAccountConversations(options: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number } = {}): Promise<{ synced: number; failed: number; results: HistorySyncResult[] }> {
     const summaries = await this.state.store.listConversationSummariesByAccount(this.state.boundAccountId);
     const results: HistorySyncResult[] = [];
@@ -535,24 +584,63 @@ export class GoldSync {
       throw new Error('Session hien tai khong ho tro getAllFriends');
     }
 
-    const response = await this.state.session.api.getAllFriends();
+    const [response, aliasResponse] = await Promise.all([
+      this.state.session.api.getAllFriends().catch((err: unknown) => {
+        this.state.logger.warn('getAllFriends_failed', { error: err instanceof Error ? err.message : String(err) });
+        return [];
+      }),
+      typeof this.state.session.api.getAliasList === 'function'
+        ? this.state.session.api.getAliasList(20000, 1).catch((err: unknown) => {
+            this.state.logger.warn('getAliasList_failed', { error: err instanceof Error ? err.message : String(err) });
+            return null;
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const aliasMap = new Map<string, string>();
+    if (aliasResponse && typeof aliasResponse === 'object') {
+      const items = (aliasResponse as { items?: Array<{ userId: string; alias: string }> }).items;
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          if (item.userId && item.alias) {
+            aliasMap.set(String(item.userId), String(item.alias).trim());
+          }
+        }
+      }
+    }
+
     this.state.logger.info('friends_raw_response_received', {
       responseType: Array.isArray(response) ? 'array' : typeof response,
       keys: response && typeof response === 'object' && !Array.isArray(response) ? Object.keys(response as Record<string, unknown>) : [],
+      aliasCount: aliasMap.size,
     });
-    const friends = normalizeFriendList(response).map((friend: any) => ({
-      userId: String(friend.userId),
-      displayName: String(friend.aliasName || friend.alias || friend.displayName || friend.zaloName || friend.username || friend.userId),
-      zaloName: friend.zaloName ? String(friend.zaloName) : friend.displayName ? String(friend.displayName) : undefined,
-      zaloAlias: friend.aliasName ? String(friend.aliasName) : friend.alias ? String(friend.alias) : undefined,
-      avatar: friend.avatar ? String(friend.avatar) : undefined,
-      status: friend.status ? String(friend.status) : undefined,
-      phoneNumber: friend.phoneNumber ? String(friend.phoneNumber) : undefined,
-      lastSyncAt: new Date().toISOString(),
-    }));
+    const friends = normalizeFriendList(response).map((friend: any) => {
+      const uId = String(friend.userId);
+      const explicitAlias = aliasMap.get(uId) || (friend.aliasName ? String(friend.aliasName) : friend.alias ? String(friend.alias) : undefined);
+      const zaloName = friend.zaloName ? String(friend.zaloName) : friend.displayName ? String(friend.displayName) : undefined;
+      const displayName = String(explicitAlias || friend.displayName || zaloName || friend.username || uId);
 
-    this.state.logger.info('friends_normalized', { count: friends.length });
-    return await this.state.store.replaceContactsByAccount(this.state.boundAccountId, friends);
+      return {
+        userId: uId,
+        displayName,
+        zaloName,
+        zaloAlias: explicitAlias,
+        avatar: friend.avatar ? String(friend.avatar) : undefined,
+        status: friend.status ? String(friend.status) : undefined,
+        phoneNumber: friend.phoneNumber ? String(friend.phoneNumber) : undefined,
+        lastSyncAt: new Date().toISOString(),
+      };
+    });
+
+    this.state.logger.info('friends_normalized', { count: friends.length, withAlias: friends.filter(f => Boolean(f.zaloAlias)).length });
+    const savedContacts = await this.state.store.replaceContactsByAccount(this.state.boundAccountId, friends);
+
+    // Also update direct conversation titles in conversations table if they match friends
+    if (this.state.boundAccountId) {
+      await this.state.store.updateDirectConversationTitlesByFriends(this.state.boundAccountId, friends).catch(() => {});
+    }
+
+    return savedContacts;
   }
 
   async listGroups() {
@@ -657,7 +745,6 @@ export class GoldSync {
 
     this.state.logger.info('groups_normalized', { count: normalizedGroups.length });
     await this.state.store.replaceGroupsByAccount(this.state.boundAccountId, normalizedGroups);
-    await this.state.store.canonicalizeConversationDataForAccount(this.state.boundAccountId);
     await this._hydrate?.();
     return await this.state.store.listGroupsByAccount(this.state.boundAccountId);
   }
@@ -732,17 +819,30 @@ export class GoldSync {
 
       const baseMembers = this._normalizeGroupMembers?.(group.members ?? group.memVerList ?? group.memberIds) ?? [];
       const memberIds = Array.from(new Set(baseMembers.map((member) => member.userId)));
+      
+      const users: Array<Record<string, unknown> & { userId: string }> = [];
+      if (memberIds.length > 0 && typeof api.getUserInfo === 'function') {
+        for (const batch of chunkArray(memberIds, 50)) {
+          try {
+            const batchInfo = normalizeUserInfoMap(await api.getUserInfo(batch)) as Array<Record<string, unknown> & { userId: string }>;
+            users.push(...batchInfo);
+          } catch {}
+        }
+      }
+
       const groupMemberProfiles = memberIds.length > 0 && typeof api.getGroupMembersInfo === 'function'
-        ? normalizeGroupMemberInfoMap(await api.getGroupMembersInfo(memberIds)) as Array<Record<string, unknown> & { userId: string }>
+        ? normalizeGroupMemberInfoMap(await api.getGroupMembersInfo(memberIds).catch(() => ({}))) as Array<Record<string, unknown> & { userId: string }>
         : [];
-      const users = memberIds.length > 0 && typeof api.getUserInfo === 'function'
-        ? normalizeUserInfoMap(await api.getUserInfo(memberIds)) as Array<Record<string, unknown> & { userId: string }>
-        : [];
+
+      const savedContacts = await this.state.store.listContactsByAccount(this.state.boundAccountId).catch(() => []);
+      const contactsById = new Map(savedContacts.map((c) => [c.userId, c]));
       const groupProfilesById = new Map(groupMemberProfiles.map((user) => [String(user.userId), user]));
       const usersById = new Map(users.map((user) => [String(user.userId), user]));
+      
       const members = baseMembers.map((member) => {
         const groupProfile = groupProfilesById.get(member.userId);
         const user = usersById.get(member.userId);
+        const contact = contactsById.get(member.userId);
         return {
           ...member,
           displayName: typeof groupProfile?.displayName === 'string'
@@ -761,7 +861,7 @@ export class GoldSync {
                 ? user.zaloName
                 : typeof user?.name === 'string'
                   ? user.name
-                : member.displayName,
+                : contact?.displayName || member.displayName,
           avatar: typeof groupProfile?.avatar === 'string'
             ? groupProfile.avatar
             : typeof groupProfile?.avatarUrl === 'string'
@@ -770,7 +870,7 @@ export class GoldSync {
             ? user.avatar
             : typeof user?.avatarUrl === 'string'
               ? user.avatarUrl
-              : member.avatar,
+              : contact?.avatar || member.avatar,
         };
       });
 
@@ -884,6 +984,102 @@ export class GoldSync {
     } catch (error) {
       this.state.logger.error('group_metadata_enrich_failed', {
         groupId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async syncLabels() {
+    if (!this.state.session) {
+      await this._loginWithStoredCredential?.();
+    }
+    const api = this.state.session?.api as { getLabels?: () => Promise<any> } | undefined;
+    if (typeof api?.getLabels !== 'function') {
+      return [];
+    }
+
+    try {
+      const response = await api.getLabels();
+      const rawLabels = response?.labelData || [];
+      const formatted = rawLabels.map((l: any) => ({
+        id: Number(l.id),
+        text: String(l.text || l.textKey || ''),
+        color: String(l.color || '#1890ff'),
+        emoji: l.emoji ? String(l.emoji) : undefined,
+        conversations: Array.isArray(l.conversations) ? l.conversations.map(String) : [],
+      }));
+
+      const boundAccId = this.state.boundAccountId || '';
+      await this.state.store.tagRepo.syncZaloLabels(boundAccId, formatted);
+      this.state.logger.info('zalo_labels_synced', { accountId: boundAccId, count: formatted.length });
+      return await this.state.store.tagRepo.listTags(boundAccId);
+    } catch (error) {
+      this.state.logger.error('zalo_labels_sync_failed', {
+        accountId: this.state.boundAccountId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return await this.state.store.tagRepo.listTags(this.state.boundAccountId);
+    }
+  }
+
+  async syncMuteStates() {
+    if (!this.state.session) {
+      await this._loginWithStoredCredential?.();
+    }
+    const api = this.state.session?.api as { getMute?: () => Promise<any> } | undefined;
+    if (typeof api?.getMute !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await api.getMute();
+      const chatEntries = Array.isArray(response?.chatEntries) ? response.chatEntries : [];
+      const groupChatEntries = Array.isArray(response?.groupChatEntries) ? response.groupChatEntries : [];
+
+      const mutedList: Array<{ id: string; duration: number; type: 'direct' | 'group' }> = [
+        ...chatEntries.map((c: any) => ({ id: String(c.id), duration: Number(c.duration), type: 'direct' as const })),
+        ...groupChatEntries.map((g: any) => ({ id: String(g.id), duration: Number(g.duration), type: 'group' as const })),
+      ];
+
+      const boundAccId = this.state.boundAccountId || '';
+      await this.state.store.conversationRepo.batchUpdateMuteStates(boundAccId, mutedList);
+      this.state.logger.info('zalo_mute_states_synced', { accountId: boundAccId, count: mutedList.length });
+    } catch (error) {
+      this.state.logger.warn('zalo_mute_states_sync_failed', {
+        accountId: this.state.boundAccountId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async syncUnreadMarks() {
+    if (!this.state.session) {
+      await this._loginWithStoredCredential?.();
+    }
+    const api = this.state.session?.api as { getUnreadMark?: () => Promise<any> } | undefined;
+    if (typeof api?.getUnreadMark !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await api.getUnreadMark();
+      const direct = Array.isArray(response?.data?.convsUser) ? response.data.convsUser : [];
+      const group = Array.isArray(response?.data?.convsGroup) ? response.data.convsGroup : [];
+
+      const activeUnreadThreadIds = [
+        ...direct.map((d: any) => String(d.id || d.threadId || '')).filter(Boolean),
+        ...group.map((g: any) => String(g.id || g.threadId || '')).filter(Boolean),
+      ];
+
+      const boundAccId = this.state.boundAccountId || '';
+      await this.state.store.conversationRepo.syncUnreadFromZalo(boundAccId, activeUnreadThreadIds);
+      this.state.logger.info('zalo_unread_marks_synced', {
+        accountId: boundAccId,
+        activeUnreadCount: activeUnreadThreadIds.length,
+      });
+    } catch (error) {
+      this.state.logger.warn('zalo_unread_marks_sync_failed', {
+        accountId: this.state.boundAccountId,
         error: error instanceof Error ? error.message : String(error),
       });
     }

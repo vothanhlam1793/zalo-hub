@@ -2,58 +2,14 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { GoldMessageKind, GoldAttachment, GoldConversationType, GoldMessageQuote, GoldMessageReactionItem } from '../types.js';
 import type { CookieShape } from './types.js';
+import { projectRichMessage } from '../message-projection.js';
 
 export function normalizeMessageText(data: Record<string, unknown>) {
-  const content = data.content;
-
-  if (typeof content === 'string' && content.trim()) {
-    return content.trim();
-  }
-
-  if (content && typeof content === 'object') {
-    const message = (content as Record<string, unknown>).msg;
-    if (typeof message === 'string' && message.trim()) {
-      return message.trim();
-    }
-
-    const title = (content as Record<string, unknown>).title;
-    if (typeof title === 'string' && title.trim()) {
-      return title.trim();
-    }
-  }
-
-  const candidateKeys = ['msg', 'text', 'body', 'message'];
-  for (const key of candidateKeys) {
-    const value = data[key];
-    if (typeof value === 'string' && value.trim()) {
-      return value.trim();
-    }
-  }
-
-  return '';
+  return projectRichMessage({}, data).text;
 }
 
 export function normalizeMessageKind(data: Record<string, unknown>): GoldMessageKind {
-  const msgType = String(data.msgType ?? '');
-  if (msgType === 'chat.photo') return 'image';
-  if (msgType.includes('sticker') || msgType === 'chat.sticker' || msgType === 'sticker') return 'sticker';
-  if (msgType === 'chat.reaction' || msgType === 'reaction') return 'reaction';
-  if (msgType === 'chat.vote' || msgType === 'poll') return 'poll';
-  if (msgType === 'chat.voice') return 'voice';
-  if (msgType === 'chat.gif') return 'gif';
-  if (
-    msgType === 'chat.video.msg' ||
-    msgType === 'chat.video' ||
-    msgType === 'video'
-  ) return 'video';
-  if (
-    msgType === 'chat.file' ||
-    msgType === 'chat.doc' ||
-    msgType === 'chat.voice' ||
-    msgType === 'chat.gif' ||
-    msgType === 'share.file'
-  ) return 'file';
-  return 'text';
+  return projectRichMessage({}, data).kind;
 }
 
 function toReactionEmoji(value: unknown) {
@@ -97,17 +53,12 @@ export function normalizeMessageQuote(data: Record<string, unknown>): GoldMessag
 
   if (!candidate) return undefined;
 
-  const text = typeof candidate.content === 'string'
-    ? candidate.content.trim()
-    : typeof candidate.msg === 'string'
-      ? candidate.msg.trim()
-      : typeof candidate.text === 'string'
-        ? candidate.text.trim()
-        : typeof candidate.title === 'string'
-          ? candidate.title.trim()
-          : undefined;
-
-  const kind = normalizeMessageKind(candidate);
+  const projected = projectRichMessage({}, {
+    ...candidate,
+    content: candidate.content ?? candidate.message ?? candidate.msg ?? candidate.text ?? candidate.title,
+  });
+  const text = projected.text || undefined;
+  const kind = projected.kind;
   return {
     messageId: candidate.msgId ? String(candidate.msgId) : candidate.messageId ? String(candidate.messageId) : undefined,
     senderId: candidate.uidFrom ? String(candidate.uidFrom) : candidate.senderId ? String(candidate.senderId) : undefined,
@@ -115,6 +66,27 @@ export function normalizeMessageQuote(data: Record<string, unknown>): GoldMessag
     text,
     kind: text || kind !== 'text' ? kind : undefined,
   } satisfies GoldMessageQuote;
+}
+
+export function normalizeMessageMentions(data: Record<string, unknown>): import('../types.js').GoldMessageMention[] | undefined {
+  const mentions = data.mentions || pickRecord(data.content)?.mentions || pickRecord(data.paramsExt)?.mentions;
+  if (!Array.isArray(mentions) || mentions.length === 0) return undefined;
+  const list: import('../types.js').GoldMessageMention[] = [];
+  for (const item of mentions) {
+    const record = pickRecord(item);
+    if (!record) continue;
+    const pos = Number(record.pos);
+    const len = Number(record.len);
+    const uid = String(record.uid ?? '');
+    if (isNaN(pos) || isNaN(len) || !uid) continue;
+    list.push({
+      pos,
+      len,
+      uid,
+      type: typeof record.type === 'number' ? record.type : undefined,
+    });
+  }
+  return list.length > 0 ? list : undefined;
 }
 
 export function normalizeMessageReactions(data: Record<string, unknown>): GoldMessageReactionItem[] | undefined {
@@ -180,71 +152,7 @@ export function normalizeMessageReactions(data: Record<string, unknown>): GoldMe
 }
 
 export function normalizeAttachments(data: Record<string, unknown>): GoldAttachment[] {
-  const msgType = String(data.msgType ?? '');
-  const content = data.content;
-  const contentObj = content && typeof content === 'object' ? content as Record<string, unknown> : null;
-
-   if (msgType.includes('sticker') || msgType === 'chat.sticker' || msgType === 'sticker') {
-    const url = typeof contentObj?.href === 'string'
-      ? contentObj.href.trim()
-      : typeof contentObj?.src === 'string'
-        ? contentObj.src.trim()
-        : typeof contentObj?.url === 'string'
-          ? contentObj.url.trim()
-          : typeof contentObj?.thumbnail === 'string'
-            ? contentObj.thumbnail.trim()
-            : typeof data.url === 'string'
-              ? data.url.trim()
-              : undefined;
-    if (!url) return [];
-    return [{
-      id: String(data.msgId ?? data.cliMsgId ?? Math.random()),
-      type: 'sticker',
-      url,
-      thumbnailUrl: url,
-    }];
-  }
-
-  if (msgType === 'chat.photo') {
-    const url = typeof contentObj?.href === 'string' ? contentObj.href.trim() : undefined;
-    if (!url) return [];
-    return [{
-      id: String(data.msgId ?? data.cliMsgId ?? Math.random()),
-      type: 'image',
-      url,
-      thumbnailUrl: url,
-    }];
-  }
-
-  if (msgType === 'chat.video.msg' || msgType === 'chat.video' || msgType === 'video') {
-    const url = typeof contentObj?.href === 'string' ? contentObj.href.trim() : undefined;
-    const thumb = typeof contentObj?.thumb === 'string' ? contentObj.thumb.trim() : undefined;
-    if (!url) return [];
-    return [{
-      id: String(data.msgId ?? data.cliMsgId ?? Math.random()),
-      type: 'video',
-      url,
-      thumbnailUrl: thumb ?? url,
-      fileName: typeof contentObj?.title === 'string' ? contentObj.title : undefined,
-    }];
-  }
-
-  if (msgType === 'chat.file' || msgType === 'chat.doc' || msgType === 'chat.voice' || msgType === 'chat.gif' || msgType === 'share.file') {
-    const url = typeof contentObj?.href === 'string' ? contentObj.href.trim() : undefined;
-    const fileName = typeof contentObj?.title === 'string' ? contentObj.title.trim()
-      : typeof contentObj?.fileName === 'string' ? contentObj.fileName.trim() : undefined;
-    const thumb = typeof contentObj?.thumb === 'string' ? contentObj.thumb.trim() : undefined;
-    if (!url && !fileName) return [];
-    return [{
-      id: String(data.msgId ?? data.cliMsgId ?? Math.random()),
-      type: 'file',
-      url,
-      thumbnailUrl: thumb,
-      fileName,
-    }];
-  }
-
-  return [];
+  return projectRichMessage({}, data).attachments;
 }
 
 export function mergeAttachmentMetadata(existing: GoldAttachment | undefined, normalized: GoldAttachment, fallbackKind: GoldMessageKind) {
@@ -272,15 +180,7 @@ export function localMediaUrlNeedsRepair(url?: string) {
 }
 
 export function normalizeImageUrl(data: Record<string, unknown>) {
-  const content = data.content;
-  if (content && typeof content === 'object') {
-    const href = (content as Record<string, unknown>).href;
-    if (typeof href === 'string' && href.trim()) {
-      return href.trim();
-    }
-  }
-
-  return undefined;
+  return projectRichMessage({}, data).imageUrl;
 }
 
 export function normalizeMessageTimestamp(data: Record<string, unknown>) {

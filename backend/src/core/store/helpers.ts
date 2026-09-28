@@ -1,4 +1,5 @@
 import type { GoldAttachment, GoldMessageKind } from '../types.js';
+import { projectRichMessage, storedMessageKind } from '../message-projection.js';
 
 export type RawCredentialRow = {
   cookie_json: string;
@@ -41,6 +42,7 @@ export type RawConversationRow = {
   last_message_text: string;
   last_message_kind: string;
   last_direction: 'incoming' | 'outgoing';
+  last_message_sender_name: string | null;
   last_message_timestamp: string;
   message_count: number;
   last_read_at: string;
@@ -60,8 +62,9 @@ export type RawMessageRow = {
   timestamp: string;
   sender_id: string | null;
   sender_name: string | null;
+  sender_avatar?: string | null;
   provider_message_id: string | null;
-  raw_message_json: string | null;
+  raw_message_json: string | Record<string, unknown> | null;
   reactions_json: string | null;
 };
 
@@ -118,11 +121,13 @@ export function resolveContactDisplayName(contact: {
   userId: string;
   hubAlias?: string | null;
   zaloAlias?: string | null;
+  displayName?: string | null;
   zaloName?: string | null;
   phoneNumber?: string | null;
 }) {
   return contact.hubAlias?.trim()
     || contact.zaloAlias?.trim()
+    || contact.displayName?.trim()
     || contact.zaloName?.trim()
     || contact.phoneNumber?.trim()
     || contact.userId;
@@ -141,8 +146,7 @@ export function buildStoredAttachmentId(accountId: string, attachmentId: string)
 }
 
 export function toMessageKind(raw: string): GoldMessageKind {
-  if (raw === 'image' || raw === 'file' || raw === 'video' || raw === 'sticker' || raw === 'reaction' || raw === 'poll' || raw === 'voice' || raw === 'gif') return raw;
-  return 'text';
+  return storedMessageKind(raw);
 }
 
 export function looksLikeFileName(value: string) {
@@ -216,14 +220,15 @@ export function canonicalizeStoredMessage(row: RawMessageRow, currentAttachments
     });
   }
 
-  return {
+  return projectRichMessage({
+    id: row.id,
     kind: canonicalKind,
     text: canonicalText,
     attachments,
     imageUrl: canonicalKind === 'image'
       ? (attachments[0]?.url ?? row.image_url ?? undefined)
       : row.image_url ?? undefined,
-  };
+  }, row.raw_message_json);
 }
 
 export function parseConversationId(conversationId: string) {

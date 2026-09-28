@@ -8,6 +8,7 @@ import type { DifyBotExecutor } from './services/dify-bot-executor.js';
 export type AccountMessageEvent = {
   accountId: string;
   message: GoldConversationMessage;
+  event?: 'new';
 };
 
 export class AccountRuntimeManager {
@@ -59,9 +60,52 @@ export class AccountRuntimeManager {
     return this.runtimes.get(accountId);
   }
 
-  async restartRuntime(accountId: string): Promise<void> {
-    this.stopRuntime(accountId);
-    await this.ensureRuntime(accountId);
+  async restartRuntime(accountId: string): Promise<{ ok: boolean; runtime?: GoldRuntime; error?: string; needsRelogin?: boolean }> {
+    const normalizedAccountId = accountId.trim();
+    this.stopRuntime(normalizedAccountId);
+    try {
+      const runtime = await this.ensureRuntime(normalizedAccountId);
+      const status = await this.getRuntimeStatus(normalizedAccountId);
+      this.broadcast?.({
+        type: 'session_state',
+        accountId: normalizedAccountId,
+        status: {
+          hasCredential: status.hasCredential,
+          sessionActive: status.sessionActive,
+          loggedIn: status.sessionActive,
+          loginInProgress: false,
+          friendCacheCount: 0,
+          qrCodeAvailable: false,
+          account: {
+            userId: status.accountId,
+            displayName: status.displayName,
+            phoneNumber: status.phoneNumber,
+          },
+          listener: status.listener,
+        },
+      });
+      return { ok: true, runtime };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('account_runtime_manual_restart_failed', { accountId: normalizedAccountId, error: errMsg });
+      const needsRelogin = errMsg.includes('kick') || errMsg.includes('close') || errMsg.includes('credential') || errMsg.includes('login') || errMsg.includes('QR');
+      
+      this.broadcast?.({
+        type: 'session_state',
+        accountId: normalizedAccountId,
+        status: {
+          hasCredential: true,
+          sessionActive: false,
+          loggedIn: false,
+          loginInProgress: false,
+          friendCacheCount: 0,
+          qrCodeAvailable: false,
+          account: { userId: normalizedAccountId },
+          listener: { connected: false, started: false, lastError: errMsg },
+        },
+      });
+      return { ok: false, error: errMsg, needsRelogin };
+    }
   }
 
   hasRuntime(accountId: string) {
@@ -136,9 +180,9 @@ export class AccountRuntimeManager {
     const startPromise = (async () => {
       const store = new GoldStore(this.knex);
       const runtime = new GoldRuntime(store, this.logger, { boundAccountId: normalizedAccountId });
-      runtime.onConversationMessage((message) => {
+      runtime.onConversationMessage((message, event) => {
         for (const listener of this.messageListeners) {
-          listener({ accountId: normalizedAccountId, message });
+          listener({ accountId: normalizedAccountId, message, event });
         }
       });
 
@@ -148,12 +192,18 @@ export class AccountRuntimeManager {
         this.logger.info('dify_bot_executor_attached', { accountId: normalizedAccountId });
       }
 
-      await runtime.startBoundAccount();
+      try {
+        await runtime.startBoundAccount();
+        this.logger.info('account_runtime_ready', { accountId: normalizedAccountId });
+        void this.backgroundSyncAfterLogin(runtime, normalizedAccountId);
+      } catch (startError) {
+        this.logger.warn('account_runtime_start_offline', {
+          accountId: normalizedAccountId,
+          error: startError instanceof Error ? startError.message : String(startError),
+        });
+      }
+
       this.runtimes.set(normalizedAccountId, runtime);
-      this.logger.info('account_runtime_ready', { accountId: normalizedAccountId });
-
-      void this.backgroundSyncAfterLogin(runtime, normalizedAccountId);
-
       return runtime;
     })();
 
@@ -173,16 +223,20 @@ export class AccountRuntimeManager {
       hasCred: Boolean(await this.registryStore.getCredentialForAccount(account.accountId)),
     })));
     const accounts = accountCreds.filter(({ hasCred }) => hasCred).map(({ account }) => account);
-    await Promise.all(accounts.map(async (account) => {
-      try {
-        await this.ensureRuntime(account.accountId);
-      } catch (error) {
-        this.logger.error('account_runtime_warm_start_failed', {
-          accountId: account.accountId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }));
+    
+    // Parallel fast boot - start all active accounts concurrently
+    await Promise.allSettled(
+      accounts.map(async (account) => {
+        try {
+          await this.ensureRuntime(account.accountId);
+        } catch (error) {
+          this.logger.error('account_runtime_warm_start_failed', {
+            accountId: account.accountId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })
+    );
   }
 
   private async watchRuntimes() {
@@ -286,24 +340,49 @@ export class AccountRuntimeManager {
       this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'loading' });
       this.logger.info('account_auto_sync_starting', { accountId });
 
-      await runtime.listFriends().catch(() => undefined);
-      await runtime.listGroups().catch(() => undefined);
-      this.logger.info('account_auto_sync_loaded_contacts', { accountId });
+      // Immediate DB-first conversation summaries emission
+      const initialSummaries = await runtime.getConversationSummaries().catch(() => []);
+      if (initialSummaries.length > 0) {
+        this.broadcast?.({
+          type: 'conversation_summaries',
+          accountId,
+          conversations: initialSummaries,
+        });
+      }
 
-      this.broadcast?.({ type: 'ws_sync_status', accountId, status: 'syncing' });
-      const result = await runtime.mobileSyncAllAccountConversations({ perThreadTimeoutMs: 10_000, maxTotalTimeMs: 120_000 });
+      // Non-blocking background metadata enrichment and safe recent message catchup
+      setImmediate(async () => {
+        try {
+          await runtime.listFriends().catch(() => undefined);
+          await runtime.listGroups().catch(() => undefined);
+          await runtime.syncLabels().catch(() => undefined);
+          await runtime.syncMuteStates().catch(() => undefined);
+          await runtime.syncUnreadMarks().catch(() => undefined);
 
-      const totalHistoryMsgs = result.results?.reduce((s: number, x: any) => s + (x.historyResult?.remoteCount || 0), 0) ?? 0;
-      this.logger.info('account_auto_sync_completed', { accountId, requ18Received: result.requ18Received, historyMsgs: totalHistoryMsgs });
+          // Safe catchup for top 15 recent conversations to fill gap after downtime/relogin
+          const catchupResult = await runtime.catchupRecentConversations({ limitConversations: 15, perBatchTimeoutMs: 5000 }).catch(() => ({ totalChecked: 0, totalInserted: 0 }));
 
-      this.broadcast?.({
-        type: 'ws_sync_status',
-        accountId,
-        status: 'done',
-        requ18Received: result.requ18Received,
-        requ18Inserted: result.requ18Inserted,
-        historySynced: result.historySynced,
-        historyMsgs: totalHistoryMsgs,
+          const summaries = await runtime.getConversationSummaries().catch(() => []);
+          this.broadcast?.({
+            type: 'conversation_summaries',
+            accountId,
+            conversations: summaries,
+          });
+          this.broadcast?.({
+            type: 'ws_sync_status',
+            accountId,
+            status: 'done',
+            requ18Received: 0,
+            requ18Inserted: 0,
+            historySynced: catchupResult.totalChecked,
+            historyMsgs: catchupResult.totalInserted,
+          });
+          this.logger.info('account_auto_sync_ready', {
+            accountId,
+            conversationCount: summaries.length,
+            catchupInserted: catchupResult.totalInserted,
+          });
+        } catch { /* ignore */ }
       });
     } catch (error) {
       this.logger.info('account_auto_sync_skipped', { accountId, reason: error instanceof Error ? error.message : String(error) });

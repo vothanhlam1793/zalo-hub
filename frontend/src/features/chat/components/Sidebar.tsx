@@ -1,12 +1,22 @@
 import { Button } from '@/components/ui/button';
+import { messagePreview } from '../model/message-preview';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useEffect, useState } from 'react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { GroupAvatar } from '@/components/GroupAvatar';
 import { cn } from '@/lib/utils';
-import { getAccountDisplayName, getContactDisplayName, getInitial, directConversationId, groupConversationId } from '@/utils';
-import type { Contact, ConversationSummary, Group } from '@/types';
+import { getAccountDisplayName, getContactDisplayName, getInitial, directConversationId, groupConversationId, formatConversationTitle } from '@/utils';
+import type { Contact, ConversationSummary, Group, TagItem } from '@/types';
 
 type SidebarTab = 'conversations' | 'contacts' | 'groups';
 
@@ -24,11 +34,24 @@ interface SidebarProps {
   accountDisplayName?: string;
   accountAvatar?: string;
   accountPhoneNumber?: string;
+  isSessionActive?: boolean;
   className?: string;
+  tags?: TagItem[];
+  selectedTagId?: string | null;
+  onSelectTag?: (tagId: string | null) => void;
+  onSyncTags?: () => void;
+  onSyncContacts?: () => void;
+  syncingContacts?: boolean;
+  onMarkAllRead?: () => void;
+  onSyncUnread?: () => void;
+  onReconnectAccount?: (accountId?: string) => void;
   onRenameAccount: (nextDisplayName: string) => Promise<void>;
   onSelectConversation: (id: string) => void;
   onOpenDirectConversation: (contact: Contact) => void;
   onOpenGroupConversation: (group: Group) => void;
+  onLoadOlderConversations?: () => void;
+  loadingOlderConversations?: boolean;
+  hasMoreConversations?: boolean;
 }
 
 export function Sidebar({
@@ -45,11 +68,24 @@ export function Sidebar({
   accountDisplayName,
   accountAvatar,
   accountPhoneNumber,
+  isSessionActive = true,
   className,
+  tags = [],
+  selectedTagId,
+  onSelectTag,
+  onSyncTags,
+  onSyncContacts,
+  syncingContacts,
+  onMarkAllRead,
+  onSyncUnread,
+  onReconnectAccount,
   onRenameAccount,
   onSelectConversation,
   onOpenDirectConversation,
   onOpenGroupConversation,
+  onLoadOlderConversations,
+  loadingOlderConversations,
+  hasMoreConversations,
 }: SidebarProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(accountHubAlias ?? '');
@@ -80,9 +116,9 @@ export function Sidebar({
   };
 
   return (
-    <div className={cn('w-[300px] min-w-[280px] border-r border-[var(--sidebar-border)] flex flex-col bg-[var(--sidebar)] overflow-hidden max-sm:w-[260px] max-sm:min-w-[240px]', className)}>
+    <div className={cn('w-[300px] min-w-[280px] border-r border-[var(--sidebar-border)] flex flex-col bg-[var(--sidebar)] text-[var(--sidebar-foreground)] overflow-hidden max-sm:w-[260px] max-sm:min-w-[240px] transition-colors', className)}>
       <div className="px-3.5 pt-3.5 pb-2.5 border-b border-[var(--sidebar-border)]">
-        <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--muted)] px-3 py-3 shadow-xs">
           <div className="flex items-center gap-3">
             <Avatar className="w-10 h-10 rounded-xl shrink-0">
               {accountAvatar ? <img src={accountAvatar} alt={resolvedAccountLabel} className="w-full h-full object-cover rounded-xl" /> : null}
@@ -91,20 +127,57 @@ export function Sidebar({
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="text-sm font-semibold text-[#eef2ff] truncate">
-                  {resolvedAccountLabel}
+              <div className="flex items-center justify-between gap-1.5 min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="text-sm font-semibold text-[var(--foreground)] truncate">
+                    {resolvedAccountLabel}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRenameOpen(true)}
+                    className="shrink-0 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                    title="Đổi tên account"
+                  >
+                    ✎
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setRenameOpen(true)}
-                  className="shrink-0 text-[11px] text-muted-foreground hover:text-[#9fc0ff] transition-colors"
-                  title="Đổi tên account"
-                >
-                  ✎
-                </button>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  {onSyncUnread && (
+                    <button
+                      type="button"
+                      onClick={onSyncUnread}
+                      className="w-6.5 h-6.5 rounded-lg inline-flex items-center justify-center text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors border border-[var(--border)]"
+                      title="Đồng bộ lại số tin chưa đọc từ Zalo gốc"
+                    >
+                      🔄
+                    </button>
+                  )}
+
+                  {onMarkAllRead && (
+                    <button
+                      type="button"
+                      onClick={onMarkAllRead}
+                      className="w-6.5 h-6.5 rounded-lg inline-flex items-center justify-center text-xs font-bold text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors border border-[var(--border)]"
+                      title="Đánh dấu tất cả là đã đọc"
+                    >
+                      ✓✓
+                    </button>
+                  )}
+
+                  {!isSessionActive && onReconnectAccount && (
+                    <button
+                      type="button"
+                      onClick={() => onReconnectAccount(workspaceAccountId)}
+                      className="shrink-0 text-[11px] text-amber-500 hover:text-amber-400 transition-colors flex items-center gap-0.5 bg-amber-500/10 px-1.5 py-0.5 rounded font-medium"
+                      title="Kết nối lại tài khoản Zalo"
+                    >
+                      ⚡
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="text-[11px] text-muted-foreground truncate mt-1">
+              <div className="text-[11px] text-muted-foreground truncate mt-0.5">
                 {resolvedAccountSubLabel}
               </div>
             </div>
@@ -147,16 +220,111 @@ export function Sidebar({
         </TabsList>
       </Tabs>
 
-      <div className="px-3.5 pb-2.5">
+      <div className="px-3.5 pb-2.5 space-y-2">
         <Input
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={sidebarTab === 'conversations' ? 'Tìm cuộc trò chuyện...' : sidebarTab === 'contacts' ? 'Tìm bạn bè...' : 'Tìm nhóm...'}
           className="h-10"
         />
+
+        {sidebarTab === 'conversations' && (
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'flex-1 flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-colors select-none text-left',
+                    selectedTagId
+                      ? 'bg-blue-500/15 border-blue-500/40 text-blue-600 dark:text-blue-300 font-semibold'
+                      : 'bg-[var(--muted)] border-[var(--border)] text-muted-foreground hover:text-[var(--foreground)]'
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span>🏷️</span>
+                    <span className="truncate">
+                      {selectedTagId
+                        ? (() => {
+                            const current = tags.find((t) => t.id === selectedTagId);
+                            return current ? `${current.emoji ? `${current.emoji} ` : ''}${current.name}` : 'Đã chọn nhãn';
+                          })()
+                        : 'Lọc theo nhãn (Tất cả)'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] opacity-60">▼</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56 bg-[var(--popover)] border border-[var(--border)] text-[var(--popover-foreground)] shadow-xl">
+                <DropdownMenuLabel className="text-xs text-muted-foreground font-semibold">
+                  Phân loại nhãn Zalo
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-[var(--border)]" />
+                <DropdownMenuCheckboxItem
+                  checked={!selectedTagId}
+                  onCheckedChange={() => onSelectTag?.(null)}
+                  className="text-xs cursor-pointer focus:bg-[var(--accent)] focus:text-[var(--accent-foreground)]"
+                >
+                  <span>Tất cả cuộc trò chuyện</span>
+                </DropdownMenuCheckboxItem>
+                {tags.map((tag) => (
+                  <DropdownMenuCheckboxItem
+                    key={tag.id}
+                    checked={selectedTagId === tag.id}
+                    onCheckedChange={() => onSelectTag?.(selectedTagId === tag.id ? null : tag.id)}
+                    className="text-xs cursor-pointer focus:bg-[var(--accent)] focus:text-[var(--accent-foreground)] flex items-center gap-2"
+                  >
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tag.color || '#3b82f6' }} />
+                    <span className="truncate">{tag.emoji ? `${tag.emoji} ` : ''}{tag.name}</span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {onSyncTags && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onSyncTags}
+                className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)]"
+                title="Đồng bộ danh sách nhãn từ Zalo"
+              >
+                🏷️ Nhãn
+              </Button>
+            )}
+
+            {onSyncContacts && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onSyncContacts}
+                disabled={syncingContacts}
+                className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-[var(--foreground)] hover:bg-[var(--accent)] shrink-0 border border-[var(--border)] disabled:opacity-50"
+                title="Đồng bộ danh bạ & tên gợi nhớ bạn đặt trên Zalo"
+              >
+                {syncingContacts ? (
+                  <span className="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  '👥 Tên gợi nhớ'
+                )}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div
+        className="flex-1 min-h-0 overflow-y-auto"
+        onScroll={(e) => {
+          if (sidebarTab !== 'conversations' || !onLoadOlderConversations || loadingOlderConversations || !hasMoreConversations) return;
+          const el = e.currentTarget;
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+            onLoadOlderConversations();
+          }
+        }}
+      >
         {sidebarTab === 'conversations' && conversations.map((entry) => (
           (() => {
             const resolvedContact = entry.type === 'direct'
@@ -165,74 +333,127 @@ export function Sidebar({
             const resolvedGroup = entry.type === 'group'
               ? groups.find((group) => group.groupId === entry.threadId)
               : undefined;
-            const resolvedTitle = resolvedContact
+            const rawTitle = resolvedContact
               ? getContactDisplayName(resolvedContact)
               : resolvedGroup?.displayName ?? entry.title;
+            const resolvedTitle = formatConversationTitle(rawTitle, entry.type, entry.threadId);
             const resolvedAvatar = resolvedContact?.avatar ?? resolvedGroup?.avatar ?? entry.avatar;
             const isActive = activeConversationId === entry.id;
             const showUnread = !isActive && (entry.unreadCount ?? 0) > 0;
+
+            // Compute sender prefix for last message
+            const senderPrefix = (() => {
+              if (entry.lastDirection === 'outgoing') return 'Bạn: ';
+              if (entry.type === 'group' && entry.lastMessageSenderName) {
+                return `${entry.lastMessageSenderName}: `;
+              }
+              return '';
+            })();
 
             return (
               <div
                 key={entry.id}
                 onClick={() => onSelectConversation(entry.id)}
-                className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${isActive ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+                className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${isActive ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
               >
-                <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
-                  {resolvedAvatar ? <img src={resolvedAvatar} alt={resolvedTitle} className="w-full h-full object-cover rounded-full" /> : null}
-                  <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
-                    {getInitial(resolvedTitle)}
-                  </AvatarFallback>
-                </Avatar>
+                {entry.type === 'group' ? (
+                  <GroupAvatar
+                    avatar={resolvedAvatar}
+                    title={resolvedTitle}
+                    members={resolvedGroup?.members}
+                    memberAvatars={entry.memberAvatars}
+                    contacts={contacts}
+                    memberCount={resolvedGroup?.memberCount}
+                    size="md"
+                  />
+                ) : (
+                  <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
+                    {resolvedAvatar ? <img src={resolvedAvatar} alt={resolvedTitle} className="w-full h-full object-cover rounded-full" /> : null}
+                    <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
+                      {getInitial(resolvedTitle)}
+                    </AvatarFallback>
+                  </Avatar>
+                )}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-sm truncate ${showUnread ? 'font-bold text-white' : 'font-semibold text-[#eee]'}`}>{resolvedTitle}{entry.type === 'group' ? ' (Nhóm)' : ''}</span>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className={`text-sm truncate flex items-center gap-1.5 ${showUnread ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]/90'}`}>
+                      <span className="truncate">{resolvedTitle}{entry.type === 'group' && !resolvedTitle.includes('Nhóm') ? ' (Nhóm)' : ''}</span>
+                      {entry.isMuted && <span className="text-xs text-muted-foreground shrink-0" title="Đã tắt thông báo">🔕</span>}
+                    </span>
                     {showUnread && (
-                      <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-[#4f7aff] rounded-full leading-none">
+                      <span className={`shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white rounded-full leading-none ${entry.isMuted ? 'bg-slate-400 dark:bg-slate-600' : 'bg-blue-600'}`}>
                         {entry.unreadCount > 99 ? '99+' : entry.unreadCount}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-[#666] mt-0.5 truncate">
-                    {entry.lastDirection === 'outgoing' ? 'Bạn: ' : ''}
-                    {entry.lastMessageKind !== 'text' ? `[${entry.lastMessageKind}] ` : ''}
-                    {entry.lastMessageText}
+                  <div className="text-xs text-muted-foreground mt-0.5 truncate">
+                    <span className={senderPrefix ? 'font-medium text-[var(--foreground)]/80' : ''}>{senderPrefix}</span>
+                    {messagePreview({ kind: entry.lastMessageKind, text: entry.lastMessageText })}
                   </div>
+                  {Array.isArray(entry.labels) && entry.labels.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {entry.labels.map((lbl) => (
+                        <span
+                          key={lbl.id}
+                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium leading-none text-white shrink-0"
+                          style={{ backgroundColor: lbl.color || '#3b82f6' }}
+                        >
+                          {lbl.emoji ? `${lbl.emoji} ` : ''}{lbl.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })()
         ))}
 
+        {sidebarTab === 'conversations' && loadingOlderConversations && (
+          <div className="py-3 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
+            <span className="inline-block w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            <span>Đang tải thêm cuộc trò chuyện...</span>
+          </div>
+        )}
+
+        {sidebarTab === 'conversations' && conversations.length > 0 && !hasMoreConversations && !loadingOlderConversations && (
+          <div className="py-4 text-center text-[11px] text-muted-foreground/60 select-none">
+            Đã hiển thị tất cả cuộc trò chuyện
+          </div>
+        )}
+
         {sidebarTab === 'contacts' && contacts.map((entry) => {
           const contactConvId = directConversationId(entry.userId);
           const contactUnread = conversations.find(c => c.id === contactConvId)?.unreadCount || 0;
           const isActive = activeConversationId === contactConvId;
+          const name = getContactDisplayName(entry);
           
           return (
             <div
               key={entry.userId}
               onClick={() => onOpenDirectConversation(entry)}
-              className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${isActive ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+              className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${isActive ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
             >
               <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
-                {entry.avatar ? <img src={entry.avatar} alt={getContactDisplayName(entry)} className="w-full h-full object-cover rounded-full" /> : null}
+                {entry.avatar ? <img src={entry.avatar} alt={name} className="w-full h-full object-cover rounded-full" /> : null}
                 <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
-                  {getInitial(getContactDisplayName(entry))}
+                  {getInitial(name)}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className={`text-sm truncate ${contactUnread > 0 && !isActive ? 'font-bold text-white' : 'font-semibold text-[#eee]'}`}>
-                    {getContactDisplayName(entry)}
+                <div className="flex items-center justify-between gap-1">
+                  <span className={`text-sm truncate ${contactUnread > 0 && !isActive ? 'font-bold text-[var(--foreground)]' : 'font-medium text-[var(--foreground)]'}`}>
+                    {name}
                   </span>
                   {contactUnread > 0 && !isActive && (
-                    <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-[#4f7aff] rounded-full leading-none">
+                    <span className="shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 text-[10px] font-bold text-white bg-blue-600 rounded-full leading-none">
                       {contactUnread > 99 ? '99+' : contactUnread}
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-[#666] mt-0.5 truncate">Nhấn để mở chat</div>
+                <div className="text-xs text-muted-foreground mt-0.5 truncate">
+                  {entry.phoneNumber ? `📞 ${entry.phoneNumber}` : 'Nhấn để mở chat'}
+                </div>
               </div>
             </div>
           );
@@ -242,17 +463,19 @@ export function Sidebar({
           <div
             key={entry.groupId}
             onClick={() => onOpenGroupConversation(entry)}
-            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-white/4 transition-colors hover:bg-white/4 ${activeConversationId === groupConversationId(entry.groupId) ? 'bg-[rgba(79,122,255,0.12)]' : ''}`}
+            className={`flex items-center gap-3 px-4 py-3 cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--accent)]/40 ${activeConversationId === groupConversationId(entry.groupId) ? 'bg-blue-500/10 dark:bg-blue-500/20' : ''}`}
           >
-            <Avatar className="w-[42px] h-[42px] rounded-full shrink-0">
-              {entry.avatar ? <img src={entry.avatar} alt={entry.displayName} className="w-full h-full object-cover rounded-full" /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] text-base font-bold">
-                {getInitial(entry.displayName)}
-              </AvatarFallback>
-            </Avatar>
+            <GroupAvatar
+              avatar={entry.avatar}
+              title={entry.displayName}
+              members={entry.members}
+              contacts={contacts}
+              memberCount={entry.memberCount}
+              size="md"
+            />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-[#eee] truncate">{entry.displayName}</div>
-              <div className="text-xs text-[#666] mt-0.5 truncate">{entry.memberCount ? `${entry.memberCount} thành viên` : 'Nhấn để mở nhóm chat'}</div>
+              <div className="text-sm font-medium text-[var(--foreground)] truncate">{entry.displayName}</div>
+              <div className="text-xs text-muted-foreground mt-0.5 truncate">{entry.memberCount ? `${entry.memberCount} thành viên` : 'Nhấn để mở nhóm chat'}</div>
             </div>
           </div>
         ))}

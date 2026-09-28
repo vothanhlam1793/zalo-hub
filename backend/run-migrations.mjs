@@ -47,7 +47,42 @@ async function main() {
   )`);
   await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS unread_count INTEGER NOT NULL DEFAULT 0`);
   await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_read_at TEXT NULL`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_restricted BOOLEAN NOT NULL DEFAULT false`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS restricted_by TEXT NULL`);
+  await knex.raw(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS restricted_at TIMESTAMPTZ NULL`);
   console.log("OK conversations");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS tags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    color VARCHAR(50) NOT NULL DEFAULT '#1890ff',
+    emoji VARCHAR(50),
+    source VARCHAR(50) NOT NULL DEFAULT 'system',
+    zalo_label_id INTEGER,
+    account_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  console.log("OK tags");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS conversation_tags (
+    conversation_id TEXT NOT NULL,
+    tag_id UUID NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    assigned_by VARCHAR(50) NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (conversation_id, tag_id)
+  )`);
+  console.log("OK conversation_tags");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS user_tag_permissions (
+    user_id TEXT NOT NULL REFERENCES system_users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    tag_id UUID NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, account_id, tag_id)
+  )`);
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_user_tag_perms_lookup ON user_tag_permissions(user_id, account_id)");
+  console.log("OK user_tag_permissions");
 
   await knex.raw(`CREATE TABLE IF NOT EXISTS conversation_read_state (
     account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -102,6 +137,41 @@ async function main() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
   console.log("OK attachments");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS storage_drives (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'gdrive',
+    account_email VARCHAR(255),
+    credentials JSONB NOT NULL DEFAULT '{}',
+    root_folder_id VARCHAR(255),
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+    assigned_accounts JSONB NOT NULL DEFAULT '[]',
+    is_default BOOLEAN NOT NULL DEFAULT false,
+    quota_bytes BIGINT,
+    used_bytes BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_storage_drives_provider ON storage_drives(provider)");
+  console.log("OK storage_drives");
+
+  await knex.raw(`CREATE TABLE IF NOT EXISTS storage_settings (
+    key VARCHAR(100) PRIMARY KEY,
+    value JSONB NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  console.log("OK storage_settings");
+
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS storage_tier VARCHAR(20) NOT NULL DEFAULT 'hot'`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS storage_provider VARCHAR(50) NOT NULL DEFAULT 'minio'`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS storage_drive_id UUID NULL REFERENCES storage_drives(id) ON DELETE SET NULL`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS remote_file_id TEXT NULL`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS remote_web_view_link TEXT NULL`);
+  await knex.raw(`ALTER TABLE attachments ADD COLUMN IF NOT EXISTS offloaded_at TIMESTAMPTZ NULL`);
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_attachments_tier_created ON attachments(storage_tier, created_at)");
+  await knex.raw("CREATE INDEX IF NOT EXISTS idx_attachments_local_path ON attachments(local_path)");
+  console.log("OK attachments extension for tiered storage");
 
   await knex.raw(`CREATE TABLE IF NOT EXISTS system_users (
     id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,

@@ -1,5 +1,42 @@
 # Brief
 
+## Active approval — 2026-09-27
+User approved implementation of the reviewed rich-message upgrade on baseline 2ea9921: PC/realtime normalization, historical projection, media/event presentation and notification compatibility. See gold_2_sales_chat/sprint_2/upgrade-plan.md. Preserve account/conversation permissions, drafts and pending sends. No commit or production data rewrite is implied.
+
+## Current Initiative — 2026-09-22
+
+**The active goal is Sales Chat Readiness in the existing monolith.** The independent-service brief below is retained as historical context, not current execution scope.
+
+### Goal
+Enable the sales team to use responsive chat, understandable voice/call/sticker content, and customer labels for management.
+
+### Scope
+1. Responsive sending, receipt reconciliation, drafts/cache, account-scoped realtime.
+2. Rich-message normalization and presentation, including historical messages.
+3. Account-safe internal label management and Zalo label import.
+
+Bulk sending, automatic sending on tag change, service extraction and broad monolith restructuring are deferred. Tags prepare stable management data for future automation only.
+
+### Current Request and Status
+The user has authorized implementation and explicitly allowed an agent team. Execute Sprint 1 of the agreed plan first, with backend delivery, frontend state and realtime work in parallel behind fixed contracts. Complete review/testing and report before the next sprint checkpoint. Planner artifacts are in `gold_2_sales_chat/`.
+
+### Constraints
+- Use current `backend/` and `frontend/` paths and the browser `/api` + `/ws` integration.
+- Preserve existing behavior/API fields except documented corrections on touched authorization paths.
+- Preserve the existing uncommitted Case Station webhook change.
+- Provider response formats and ambiguous tag mappings require evidence, not guesses.
+- No automatic commit, deploy, migration on production, or live customer messaging is authorized by this documentation task.
+
+### Verify
+Follow each sprint's weighted test key and critical gates. Measure latency; distinguish mock coverage from live Zalo smoke. During this design task validate documentation structure/consistency only.
+
+### Recommended Mode
+gold-sprint (GOLD), three incremental sprints. See `gold_2_sales_chat/README.md`, `design.md`, `execution.md`.
+
+---
+
+## Historical Brief — Independent Services (superseded for current delivery)
+
 ## Goal
 Restructure ZaloHub into independently deployable Zalo Gateway, Management API, and Web Platform services with explicit database ownership and contracts.
 

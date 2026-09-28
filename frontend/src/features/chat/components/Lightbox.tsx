@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { XIcon, ChevronLeftIcon, ChevronRightIcon, ZoomInIcon, ZoomOutIcon, DownloadIcon } from "lucide-react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 export interface LightboxImage {
+  key?: string;
   url: string;
   senderName?: string;
 }
@@ -20,7 +21,8 @@ const MAX_ZOOM = 5;
 const ZOOM_STEP = 0.25;
 
 function Lightbox({ images, index, open, onClose }: LightboxProps) {
-  const [currentIndex, setCurrentIndex] = useState(index);
+  const [currentKey, setCurrentKey] = useState(images[index]?.key || images[index]?.url);
+  const currentIndex = Math.max(0, images.findIndex(image => (image.key || image.url) === currentKey));
   const [loaded, setLoaded] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -33,7 +35,7 @@ function Lightbox({ images, index, open, onClose }: LightboxProps) {
 
   useEffect(() => {
     if (open) {
-      setCurrentIndex(index);
+      setCurrentKey(images[index]?.key || images[index]?.url);
       setLoaded(false);
       setZoom(1);
       setPan({ x: 0, y: 0 });
@@ -44,8 +46,9 @@ function Lightbox({ images, index, open, onClose }: LightboxProps) {
     setLoaded(false);
     setZoom(1);
     setPan({ x: 0, y: 0 });
-    setCurrentIndex((prev) => (prev + dir + total) % total);
-  }, [total]);
+    const next = images[(currentIndex + dir + total) % total];
+    setCurrentKey(next?.key || next?.url);
+  }, [total, images, currentIndex]);
 
   const toggleZoom = useCallback(() => {
     setZoom((z) => {
@@ -127,11 +130,15 @@ function Lightbox({ images, index, open, onClose }: LightboxProps) {
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
-        className="max-w-[100vw] max-h-[100vh] w-screen h-screen p-0 gap-0 bg-black/98 border-0 rounded-none shadow-none [&>button:first-child]:hidden select-none"
+        showCloseButton={false}
+        aria-describedby={undefined}
+        className="max-w-[100vw] sm:max-w-[100vw] max-h-[100vh] w-screen h-screen p-0 gap-0 bg-black/98 border-0 rounded-none shadow-none select-none"
         onPointerDownOutside={onClose}
       >
+        <DialogTitle className="sr-only">Xem ảnh</DialogTitle>
         <button
           type="button"
+          aria-label="Đóng ảnh"
           className="absolute top-4 right-4 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white/80 hover:bg-white/20 hover:text-white transition"
           onClick={onClose}
         >
@@ -179,6 +186,7 @@ function Lightbox({ images, index, open, onClose }: LightboxProps) {
               type="button"
               className="absolute left-4 top-1/2 -translate-y-1/2 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white/80 hover:bg-white/20 hover:text-white transition"
               onClick={() => go(-1)}
+              aria-label="Ảnh trước"
             >
               <ChevronLeftIcon className="h-6 w-6" />
             </button>
@@ -186,6 +194,7 @@ function Lightbox({ images, index, open, onClose }: LightboxProps) {
               type="button"
               className="absolute right-4 top-1/2 -translate-y-1/2 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white/80 hover:bg-white/20 hover:text-white transition"
               onClick={() => go(1)}
+              aria-label="Ảnh tiếp theo"
             >
               <ChevronRightIcon className="h-6 w-6" />
             </button>
@@ -211,6 +220,7 @@ function Lightbox({ images, index, open, onClose }: LightboxProps) {
           )}
           {item && (
             <img
+              key={item.key || item.url}
               src={item.url}
               alt=""
               className={cn(

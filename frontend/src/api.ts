@@ -1,4 +1,10 @@
-import type { AccountSummary, Contact, ConversationSummary, Group, HistorySyncResult, Message, SessionStatus } from './types';
+import type { AccountSummary, Contact, ConversationSummary, Group, HistorySyncResult, Message, SessionStatus, SendReceipt, SendResponse } from './types';
+import { chatSession, readStoredCredential, type ChatSessionSnapshot } from './features/chat/model/chat-session';
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public receipt?: SendReceipt, public code?: string) { super(message); }
+}
+export const SEND_TIMEOUT_MS = { text: 30_000, attachment: 120_000 };
 
 export interface AccountStatusSummary extends AccountSummary {
   listener?: { connected: boolean; started: boolean; lastError?: string };
@@ -7,38 +13,69 @@ export interface AccountStatusSummary extends AccountSummary {
   qrCodeAvailable?: boolean;
 }
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem('auth_token');
+type RequestIdentity = ChatSessionSnapshot | { bootstrapToken: string } | null;
+function assertIdentity(identity: RequestIdentity) {
+  if (identity === null) return; // Only the public system login endpoint.
+  if ('bootstrapToken' in identity) {
+    chatSession.synchronizeCredentials();
+    if (identity.bootstrapToken && identity.bootstrapToken === readStoredCredential()) return;
+  } else if (chatSession.valid(identity) && identity.token) return;
+  throw new ApiError('Phiên đăng nhập đã thay đổi. Vui lòng xác thực lại.', 401);
+}
+function identityHeaders(identity: RequestIdentity): Record<string, string> {
+  assertIdentity(identity);
+  const token = identity && ('bootstrapToken' in identity ? identity.bootstrapToken : identity.token);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function req<T>(url: string, options: RequestInit = {}): Promise<T> {
+async function req<T>(url: string, options: RequestInit = {}, identity: RequestIdentity = chatSession.capture()): Promise<T> {
   const extraHeaders = (options.headers as Record<string, string>) ?? {};
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders(), ...extraHeaders },
     ...options,
+    headers: { 'Content-Type': 'application/json', ...extraHeaders, ...identityHeaders(identity) },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  assertIdentity(identity);
+  if (!res.ok) throw new ApiError(body.error ?? `HTTP ${res.status}`, res.status, body.receipt, body.code);
   return body as T;
 }
 
-async function upload(url: string, formData: FormData) {
-  const res = await fetch(url, { method: 'POST', body: formData });
+async function upload<T = SendResponse>(url: string, formData: FormData, signal?: AbortSignal, identity = chatSession.capture()): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: identityHeaders(identity),
+    body: formData,
+    signal,
+  });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  assertIdentity(identity);
+  if (!res.ok) throw new ApiError(body.error ?? `HTTP ${res.status}`, res.status, body.receipt, body.code);
   return body;
+}
+
+/** Composer calls share the same auth/session boundary as existing sends. */
+export function composerRequest<T>(account: string, conversation: string, path: string, options: RequestInit = {}, identity = chatSession.capture()): Promise<T> {
+  const url = `/api/accounts/${encodeURIComponent(account)}/composer${path}${path.includes('?') ? '&' : '?'}conversationId=${encodeURIComponent(conversation)}`;
+  return options.body instanceof FormData
+    ? upload<T>(url, options.body, options.signal || undefined, identity)
+    : req<T>(url, options, identity);
 }
 
 export const api = {
   status: () => req<SessionStatus>('/api/status'),
   health: () => req<SessionStatus>('/api/health'),
 
-  loginStart: () => req<{ started: boolean }>('/api/login/start', { method: 'POST', body: '{}' }),
+  loginStart: (force = false) => req<{ started: boolean }>('/api/login/start', { method: 'POST', body: JSON.stringify({ force }) }),
+  loginCancel: () => req<{ ok: boolean }>('/api/login/cancel', { method: 'POST', body: '{}' }),
   loginQr: () => req<{ qrCode: string | null; ready: boolean }>('/api/login/qr'),
+  loginCookie: (cookie: string, userAgent?: string) => req<{ ok: boolean; account: { accountId: string; displayName: string; avatar?: string } }>('/api/login/cookie', {
+    method: 'POST',
+    body: JSON.stringify({ cookie, userAgent }),
+  }),
   reconnectStart: (accountId: string) => req<{ started: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/reconnect`, { method: 'POST', body: '{}' }),
   reconnectQr: (accountId: string) => req<{ qrCode: string | null; ready: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/reconnect/qr`),
   logout: () => req('/api/logout', { method: 'POST', body: '{}' }),
+  authLogout: () => req('/api/auth/logout', { method: 'POST', body: '{}' }),
   accounts: () => req<{ accounts: AccountStatusSummary[]; activeAccountId?: string }>('/api/accounts'),
   activateAccount: (accountId: string) => req<{ ok: boolean; accountId: string; status: SessionStatus }>('/api/accounts/activate', {
     method: 'POST',
@@ -59,17 +96,34 @@ export const api = {
   accountContacts: (accountId: string, refresh = false) =>
     req<{ contacts: Contact[] }>(`/api/accounts/${encodeURIComponent(accountId)}/contacts${refresh ? '?refresh=1' : ''}`),
 
+  accountSyncContacts: (accountId: string) =>
+    req<{ ok: boolean; count: number; aliasCount: number; message: string }>(`/api/accounts/${encodeURIComponent(accountId)}/sync-contacts`, {
+      method: 'POST',
+    }),
+
   groups: (refresh = false) =>
     req<{ groups: Group[] }>(`/api/groups${refresh ? '?refresh=1' : ''}`),
 
   accountGroups: (accountId: string, refresh = false) =>
     req<{ groups: Group[] }>(`/api/accounts/${encodeURIComponent(accountId)}/groups${refresh ? '?refresh=1' : ''}`),
 
-  conversations: () =>
-    req<{ conversations: ConversationSummary[] }>('/api/conversations'),
+  conversations: (options?: { limit?: number; offset?: number; q?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+    if (options?.q) params.set('q', options.q);
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return req<{ conversations: ConversationSummary[]; count: number; hasMore?: boolean }>(`/api/conversations${suffix}`);
+  },
 
-  accountConversations: (accountId: string) =>
-    req<{ conversations: ConversationSummary[] }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations`),
+  accountConversations: (accountId: string, options?: { limit?: number; offset?: number; q?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+    if (options?.q) params.set('q', options.q);
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return req<{ conversations: ConversationSummary[]; count: number; hasMore?: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations${suffix}`);
+  },
 
   messages: (conversationId: string, options: { since?: string; before?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();
@@ -123,11 +177,14 @@ export const api = {
       body: JSON.stringify({ conversationId, text }),
     }),
 
-  accountSendText: (accountId: string, conversationId: string, text: string) =>
-    req(`/api/accounts/${encodeURIComponent(accountId)}/send`, {
+  accountSendText: (accountId: string, conversationId: string, text: string, intent: { clientRequestId?: string; retry?: boolean; mentions?: import('./types').MessageMention[]; quoteMessageId?: string } = {}, signal?: AbortSignal, identity = chatSession.capture()) =>
+    req<SendResponse>(`/api/accounts/${encodeURIComponent(accountId)}/send`, {
       method: 'POST',
-      body: JSON.stringify({ conversationId, text }),
-    }),
+      body: JSON.stringify({ conversationId, text, ...intent }),
+      signal,
+    }, identity),
+  sendRequest: (accountId: string, clientRequestId: string, signal?: AbortSignal, identity = chatSession.capture()) =>
+    req<{ receipt: SendReceipt }>(`/api/accounts/${encodeURIComponent(accountId)}/send-requests/${encodeURIComponent(clientRequestId)}`, { signal }, identity),
 
   sendAttachment: (conversationId: string, file: File, caption?: string) => {
     const fd = new FormData();
@@ -137,24 +194,25 @@ export const api = {
     return upload('/api/send-attachment', fd);
   },
 
-  accountSendAttachment: (accountId: string, conversationId: string, file: File, caption?: string) => {
+  accountSendAttachment: (accountId: string, conversationId: string, file: File, caption?: string, intent: { clientRequestId?: string; retry?: boolean } = {}, signal?: AbortSignal, identity = chatSession.capture()) => {
     const fd = new FormData();
     fd.append('conversationId', conversationId);
     fd.append('file', file, file.name);
     if (caption) fd.append('caption', caption);
-    return upload(`/api/accounts/${encodeURIComponent(accountId)}/send-attachment`, fd);
+    if (intent.clientRequestId) fd.append('clientRequestId', intent.clientRequestId);
+    if (intent.retry) fd.append('retry', 'true');
+    return upload(`/api/accounts/${encodeURIComponent(accountId)}/send-attachment`, fd, signal, identity);
   },
 
   authLogin: (email: string, password: string) =>
     req<{ token: string; user: { id: string; email: string; displayName: string; type: string } }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
-    }),
+    }, null),
 
   authMe: (token: string) =>
     req<{ token: string; user: { id: string; email: string; displayName: string; type: string } }>('/api/auth/me', {
-      headers: { Authorization: `Bearer ${token}` } as Record<string, string>,
-    }),
+    }, { bootstrapToken: token }),
 
   accountSendSticker: (accountId: string, conversationId: string, stickerId: string, catId: string) =>
     req(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/sticker`, {
@@ -173,6 +231,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ messageId, cliMsgId, icon }),
     }),
+
+  accountUpdateNotes: (accountId: string, conversationId: string, notes: string | null) =>
+    req<{ ok: boolean; conversationId: string; notes: string | null; notesUpdatedBy?: string | null; notesUpdatedAt?: string | null }>(
+      `/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/notes`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ notes }),
+      },
+    ),
+
+  accountUpdateRestriction: (accountId: string, conversationId: string, isRestricted: boolean) =>
+    req<{ ok: boolean; conversationId: string; isRestricted: boolean; restrictedBy?: string; restrictedAt?: string }>(
+      `/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/restriction`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ isRestricted }),
+      },
+    ),
 
   accountUpdateReadState: (accountId: string, conversationId: string, readAt: string) =>
     req<{ ok: boolean; readAt: string }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/read-state`, {
@@ -205,7 +281,19 @@ export const api = {
     }),
 
   accountSyncAll: (accountId: string) =>
-    req<{ synced: number; failed: number; results: Array<{ conversationId: string; remoteCount: number; insertedCount: number; dedupedCount: number; batchCount?: number }> }>(`/api/accounts/${encodeURIComponent(accountId)}/sync-all`, {
+    req<{ started: boolean; message: string }>(`/api/accounts/${encodeURIComponent(accountId)}/sync-all`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  accountStartReSyncQr: (accountId: string) =>
+    req<{ ok: boolean; qrCode: string; message: string }>(`/api/accounts/${encodeURIComponent(accountId)}/re-sync-qr`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  accountCancelReSyncQr: (accountId: string) =>
+    req<{ ok: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/re-sync-cancel`, {
       method: 'POST',
       body: '{}',
     }),
@@ -265,6 +353,20 @@ export const api = {
       body: JSON.stringify(updates),
     }),
 
+  adminGetUserTagPermissions: (userId: string, accountId?: string) =>
+    req<{ permissions: Array<{ account_id: string; tag_id: string }> }>(
+      `/api/admin/users/${encodeURIComponent(userId)}/tag-permissions${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ''}`,
+    ),
+
+  adminUpdateUserTagPermissions: (userId: string, accountId: string, tagIds: string[]) =>
+    req<{ ok: boolean; userId: string; accountId: string; tagIds: string[] }>(
+      `/api/admin/users/${encodeURIComponent(userId)}/tag-permissions`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ accountId, tagIds }),
+      },
+    ),
+
   adminDeleteAccount: (accountId: string) =>
     req<{ ok: boolean }>(`/api/admin/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),
 
@@ -284,8 +386,66 @@ export const api = {
     }),
 
   restartAccount: (accountId: string) =>
-    req<{ ok: boolean; message?: string }>(`/api/accounts/${encodeURIComponent(accountId)}/restart`, {
+    req<{ ok: boolean; message?: string; error?: string }>(`/api/accounts/${encodeURIComponent(accountId)}/restart`, {
       method: 'POST',
+    }),
+
+  // Tags API
+  listTags: (accountId?: string) =>
+    req<{ tags: import('./types').TagItem[] }>(`/api/tags${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ''}`),
+
+  createTag: (data: { name: string; color?: string; emoji?: string; source?: string; accountId?: string }) =>
+    req<{ ok: boolean; tag: import('./types').TagItem }>('/api/tags', { method: 'POST', body: JSON.stringify(data) }),
+
+  deleteTag: (tagId: string) =>
+    req<{ ok: boolean; deleted: boolean }>(`/api/tags/${encodeURIComponent(tagId)}`, { method: 'DELETE' }),
+
+  assignTag: (conversationId: string, tagId: string, accountId?: string) =>
+    req<{ ok: boolean; conversationId: string; tags: import('./types').TagItem[] }>('/api/tags/assign', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, tagId, accountId }),
+    }),
+
+  unassignTag: (conversationId: string, tagId: string, accountId?: string) =>
+    req<{ ok: boolean; conversationId: string; tags: import('./types').TagItem[] }>('/api/tags/unassign', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, tagId, accountId }),
+    }),
+
+  syncTags: (accountId: string) =>
+    req<{ ok: boolean; tags: import('./types').TagItem[]; count: number }>(`/api/tags/sync/${encodeURIComponent(accountId)}`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  // User Settings API
+  getUserSettings: () => req<{ ok: boolean; settings: import('./types').UserSettings }>('/api/user/settings'),
+  updateUserSettings: (settings: Partial<import('./types').UserSettings>) =>
+    req<{ ok: boolean; settings: import('./types').UserSettings }>('/api/user/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+
+  // Mute API
+  setConversationMute: (accountId: string, conversationId: string, action: 'mute' | 'unmute', duration = -1) =>
+    req<{ ok: boolean; conversationId: string; isMuted: boolean; muteUntil: number | null }>(
+      `/api/accounts/${encodeURIComponent(accountId)}/conversations/${encodeURIComponent(conversationId)}/mute`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ action, duration }),
+      },
+    ),
+
+  markAllRead: (accountId: string) =>
+    req<{ ok: boolean; count: number }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/mark-all-read`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  syncUnread: (accountId: string) =>
+    req<{ ok: boolean; count: number }>(`/api/accounts/${encodeURIComponent(accountId)}/conversations/sync-unread`, {
+      method: 'POST',
+      body: '{}',
     }),
 
   // Dify Bots
@@ -294,4 +454,77 @@ export const api = {
   adminBotUpdate: (id: string, data: any) => req<any>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
   adminBotDelete: (id: string) => req<{ ok: boolean }>(`/api/admin/bots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   adminAccountEntities: (accountId: string) => req<{ accountId: string; entities: Array<{ id: string; name: string; type: 'group' | 'contact' | 'conversation' }> }>(`/api/admin/accounts/${encodeURIComponent(accountId)}/entities`),
+
+  // Storage & Google Drive
+  getStorageSettings: () => req<{ settings: import('./types').StorageSettings; stats: import('./types').StorageStats }>('/api/admin/storage/settings'),
+  updateStorageSettings: (data: Partial<import('./types').StorageSettings>) =>
+    req<{ ok: boolean; settings: import('./types').StorageSettings }>('/api/admin/storage/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  getStorageDrives: () => req<{ drives: import('./types').StorageDrive[] }>('/api/admin/storage/drives'),
+  createStorageDrive: (data: {
+    name: string;
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+    accountEmail?: string;
+    rootFolderId?: string;
+    assignedAccounts?: string[];
+    isDefault?: boolean;
+  }) =>
+    req<{ ok: boolean; drive: import('./types').StorageDrive }>('/api/admin/storage/drives', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateStorageDrive: (id: string, data: Partial<{
+    name: string;
+    accountEmail: string;
+    rootFolderId: string;
+    assignedAccounts: string[];
+    isDefault: boolean;
+    status: 'active' | 'disabled' | 'full' | 'error';
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+  }>) =>
+    req<{ ok: boolean; drive: import('./types').StorageDrive }>(`/api/admin/storage/drives/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteStorageDrive: (id: string) =>
+    req<{ ok: boolean }>(`/api/admin/storage/drives/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  testStorageDrive: (id: string) =>
+    req<{ ok: boolean; displayName?: string; email?: string; quotaLimit?: number; quotaUsage?: number }>(
+      `/api/admin/storage/drives/${encodeURIComponent(id)}/test`,
+      { method: 'POST', body: '{}' }
+    ),
+  triggerOffloadNow: (limit = 100) =>
+    req<{ ok: boolean; result: { totalScanned: number; totalOffloaded: number; totalFailed: number; bytesSaved: number; errors: Array<{ attachmentId: string; message: string }> } }>(
+      '/api/admin/storage/offload-now',
+      { method: 'POST', body: JSON.stringify({ limit }) }
+    ),
+  backfillRemoteMedia: (limit = 100) =>
+    req<{ ok: boolean; result: { scanned: number; mirrored: number; failed: number; totalBytes: number } }>(
+      '/api/admin/storage/backfill-media',
+      { method: 'POST', body: JSON.stringify({ limit }) }
+    ),
+  scanDriveBackups: (driveId: string) =>
+    req<{ driveId: string; driveName: string; files: Array<{ id: string; name: string; size?: number; mimeType?: string; modifiedTime?: string; space: 'appDataFolder' | 'drive' }> }>(
+      `/api/admin/storage/drives/${encodeURIComponent(driveId)}/scan-backup`
+    ),
+  importDriveBackup: (driveId: string, data: { fileId: string; accountId: string; backupPassword?: string }) =>
+    req<{ success: boolean; totalParsed: number; totalInserted: number; totalSkipped: number; error?: string }>(
+      `/api/admin/storage/drives/${encodeURIComponent(driveId)}/import-backup`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+  getGoogleOAuthUrl: () =>
+    req<{ ok: boolean; authUrl: string; clientId: string; redirectUri: string }>(
+      '/api/admin/storage/oauth/google-url'
+    ),
+  exchangeGoogleOAuth: (data: { codeOrUrl: string; name?: string; assignedAccounts?: string[]; isDefault?: boolean }) =>
+    req<{ ok: boolean; drive: import('./types').StorageDrive; email?: string; displayName?: string; quotaLimit?: number; quotaUsage?: number }>(
+      '/api/admin/storage/oauth/exchange',
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
 };

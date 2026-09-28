@@ -4,6 +4,8 @@ import type { Knex } from 'knex';
 import type { GoldStore } from '../../core/store.js';
 import type { GoldLogger } from '../../core/logger.js';
 import type { AccountRuntimeManager } from '../account-manager.js';
+import { PlaywrightQrLogin } from '../../core/playwright-qr.js';
+import { IndexedDbImporter } from '../../core/indexeddb-importer.js';
 
 export function createAdminRouter(
   logger: GoldLogger,
@@ -14,9 +16,12 @@ export function createAdminRouter(
   _requireAccountAccess: (minRole?: string) => (req: Request, res: Response, next: NextFunction) => void,
   requireAccountMaster: (req: Request, res: Response, next: NextFunction) => void,
   accountManager?: AccountRuntimeManager,
+  broadcast?: (payload: Record<string, unknown>) => void,
 ) {
   const router = Router();
   const requireAdminOrSuper = requireSystemRole('admin');
+  const indexedDbImporter = new IndexedDbImporter(knex, logger);
+  const activeReconnectSessions = new Map<string, { handler: any; qrCode: string | null }>();
 
   function passwordHash(password: string): string {
     const salt = crypto.randomBytes(16).toString('hex');
@@ -85,6 +90,75 @@ export function createAdminRouter(
       res.json({ ok: true });
     } catch {
       res.status(500).json({ error: 'Xoa that bai' });
+    }
+  });
+
+  // ---- USER TAG PERMISSIONS (admin or master) ----
+  router.get('/admin/users/:id/tag-permissions', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const targetUserId = String(req.params.id);
+      const accountId = req.query.accountId ? String(req.query.accountId) : undefined;
+      let query = 'SELECT account_id, tag_id FROM user_tag_permissions WHERE user_id = ?';
+      const params: any[] = [targetUserId];
+      if (accountId) {
+        query += ' AND account_id = ?';
+        params.push(accountId);
+      }
+      const { rows } = await knex.raw(query, params);
+      res.json({ permissions: rows });
+    } catch (err) {
+      res.status(500).json({ error: 'Lỗi tải phân quyền tag' });
+    }
+  });
+
+  router.put('/admin/users/:id/tag-permissions', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const targetUserId = String(req.params.id);
+      const accountId = String(req.body?.accountId ?? '');
+      const tagIds: string[] = Array.isArray(req.body?.tagIds) ? req.body.tagIds : [];
+
+      if (!accountId) {
+        res.status(400).json({ error: 'Thiếu accountId' });
+        return;
+      }
+
+      // Authorization check: Caller must be admin, super_admin, or master/admin of this account
+      const callerUserId = (req as any).systemUserId as string;
+      const { rows: callerUser } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [callerUserId]);
+      const systemRole = callerUser[0]?.role;
+
+      const { rows: callerMem } = await knex.raw(
+        'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
+        [callerUserId, accountId],
+      );
+      const accountRole = callerMem[0]?.role;
+
+      const isAllowed =
+        systemRole === 'super_admin' ||
+        systemRole === 'admin' ||
+        accountRole === 'master' ||
+        accountRole === 'admin';
+
+      if (!isAllowed) {
+        res.status(403).json({ error: 'Không có quyền cấu hình tag permissions cho account này' });
+        return;
+      }
+
+      await knex.transaction(async (trx) => {
+        await trx.raw('DELETE FROM user_tag_permissions WHERE user_id = ? AND account_id = ?', [targetUserId, accountId]);
+        for (const tid of tagIds) {
+          if (tid) {
+            await trx.raw(
+              'INSERT INTO user_tag_permissions (user_id, account_id, tag_id) VALUES (?, ?, ?)',
+              [targetUserId, accountId, tid],
+            );
+          }
+        }
+      });
+
+      res.json({ ok: true, userId: targetUserId, accountId, tagIds });
+    } catch (err) {
+      res.status(500).json({ error: 'Cập nhật phân quyền tag thất bại' });
     }
   });
 
@@ -292,32 +366,111 @@ export function createAdminRouter(
     const userId = String((req as any).systemUserId ?? '');
     const accountId = String(req.params.id).trim();
     try {
-      const { rows } = await knex.raw(
-        'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
-        [userId, accountId]
-      );
-      if (rows.length === 0) {
-        res.status(403).json({ error: 'Khong co quyen reconnect tai khoan nay' });
-        return;
+      const { rows: userRows } = await knex.raw('SELECT role FROM system_users WHERE id = ?', [userId]);
+      const user = userRows[0] as { role: string } | undefined;
+
+      if (user?.role !== 'super_admin') {
+        const { rows } = await knex.raw(
+          'SELECT role FROM zalo_account_memberships WHERE user_id = ? AND account_id = ?',
+          [userId, accountId]
+        );
+        if (rows.length === 0) {
+          res.status(403).json({ error: 'Khong co quyen reconnect tai khoan nay' });
+          return;
+        }
       }
 
-      try { accountManager?.stopRuntime(accountId); } catch {}
+      logger.info('playwright_reconnect_start_requested', { accountId, userId });
 
-      // Create a fresh runtime directly — do NOT call ensureRuntime which
-      // would attempt loginWithStoredCredential (stale cookie) before QR.
-      const { GoldRuntime } = await import('../../core/runtime/index.js');
-      const { GoldStore } = await import('../../core/store/index.js');
-      const freshRuntime = new GoldRuntime(new GoldStore(knex), logger, { boundAccountId: accountId });
-      // Register in manager so the /reconnect/qr poll can find it
-      (accountManager as any)?.runtimes?.set(accountId, freshRuntime);
+      // 1. Teardown active session and close WebSocket listener immediately so Zalo servers don't complain
+      try {
+        const oldRuntime = accountManager?.getRuntime(accountId);
+        if (oldRuntime) {
+          await oldRuntime.closeMessageListener().catch(() => {});
+        }
+        accountManager?.stopRuntime(accountId);
+      } catch {}
 
-      // Kick off QR login in background — do NOT await
-      freshRuntime.loginByQr({ onQr: () => {} }).catch((err) => {
-        logger.error('reconnect_qr_failed', { accountId, error: err instanceof Error ? err.message : String(err) });
+      await knex('account_sessions')
+        .where({ account_id: accountId })
+        .update({ is_active: 0, updated_at: knex.fn.now() })
+        .catch(() => undefined);
+
+      broadcast?.({
+        type: 'session_state',
+        accountId,
+        status: { loggedIn: false, sessionActive: false, qrCodeAvailable: true },
       });
 
-      // Give loginQR a moment to generate the QR before responding
-      await new Promise((r) => setTimeout(r, 2000));
+      // 2. Clean existing reconnect handler if any
+      const existing = activeReconnectSessions.get(accountId);
+      if (existing) {
+        if (typeof (existing.handler as any)?.cancel === 'function') {
+          void (existing.handler as any).cancel().catch(() => {});
+        }
+        activeReconnectSessions.delete(accountId);
+      }
+
+      setImmediate(async () => {
+        try {
+          const runtime = accountManager?.getRuntime(accountId) ?? await accountManager?.ensureRuntime(accountId);
+          if (!runtime) throw new Error('Khong khoi tao duoc runtime cho account ' + accountId);
+
+          activeReconnectSessions.set(accountId, { handler: runtime, qrCode: null });
+
+          let qrReceived = false;
+          await runtime.loginByQr({
+            onQr: (qrBase64: string) => {
+              const sess = activeReconnectSessions.get(accountId);
+              if (sess) sess.qrCode = qrBase64;
+              qrReceived = true;
+              broadcast?.({
+                type: 'ws_sync_progress',
+                accountId,
+                step: 'qr_ready',
+                percent: 25,
+                qrCode: qrBase64.startsWith('data:') ? qrBase64 : `data:image/png;base64,${qrBase64}`,
+                message: 'Mã QR đã sẵn sàng. Vui lòng quét bằng Zalo trên điện thoại.',
+              });
+            },
+          });
+
+          // QR Login completed successfully!
+          broadcast?.({
+            type: 'ws_sync_progress',
+            accountId,
+            step: 'completed',
+            percent: 100,
+            message: '🎉 Đăng nhập thành công! Hệ thống đang tự động bắt kịp tin nhắn gần đây...',
+          });
+
+          // Ensure session is marked active in database
+          await knex('account_sessions')
+            .where({ account_id: accountId })
+            .update({ is_active: 1, updated_at: knex.fn.now() })
+            .catch(() => undefined);
+
+          // Broadcast updated summaries and trigger background catchup sync
+          await accountManager?.activatePrimaryAccount(accountId);
+          const summaries = await runtime.getConversationSummaries().catch(() => []);
+          broadcast?.({ type: 'conversation_summaries', accountId, conversations: summaries });
+          void accountManager?.syncAccountAfterLogin(accountId);
+        } catch (err) {
+          logger.error('reconnect_failed', { accountId, error: String(err) });
+          broadcast?.({
+            type: 'ws_sync_progress',
+            accountId,
+            step: 'error',
+            percent: 0,
+            message: 'Đăng nhập lại thất bại hoặc hết thời gian quét QR',
+          });
+        } finally {
+          activeReconnectSessions.delete(accountId);
+        }
+      });
+
+      // Brief wait to allow QR code generation
+      await new Promise((r) => setTimeout(r, 1000));
 
       res.json({ started: true });
     } catch (err) {
@@ -327,17 +480,12 @@ export function createAdminRouter(
 
   router.get('/admin/accounts/:id/reconnect/qr', requireAuth, async (req: Request, res: Response) => {
     const accountId = String(req.params.id).trim();
-    const runtime = accountManager?.getRuntime(accountId);
-    if (!runtime) {
+    const sess = activeReconnectSessions.get(accountId);
+    if (!sess || !sess.qrCode) {
       res.json({ qrCode: null, ready: false });
       return;
     }
-    const qrCode = runtime.getCurrentQrCode();
-    if (!qrCode) {
-      res.json({ qrCode: null, ready: false });
-      return;
-    }
-    res.json({ qrCode, ready: true });
+    res.json({ qrCode: `data:image/png;base64,${sess.qrCode}`, ready: true });
   });
 
   // ---- ACCOUNT MANAGEMENT (master only) ----

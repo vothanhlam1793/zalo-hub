@@ -12,20 +12,20 @@ interface Props {
 export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Props) {
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isReconnect = Boolean(accountId);
 
-  useEffect(() => {
-    if (!open) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
+  const loadFreshQr = (force = false) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
     setQrCode(null);
-    setStatus("Đang tạo QR...");
+    setRefreshing(true);
+    setStatus("Đang tạo QR mới...");
 
     const startFn = isReconnect
       ? () => api.reconnectStart(accountId!)
-      : () => api.loginStart();
+      : () => api.loginStart(force);
 
     const qrFn = isReconnect
       ? () => api.reconnectQr(accountId!)
@@ -37,20 +37,49 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
           const qr = await qrFn();
           if (qr.qrCode) {
             setQrCode(qr.qrCode);
+            setRefreshing(false);
             setStatus("Quét mã QR bằng Zalo để đăng nhập");
           }
-          const st = await api.status();
-          if ((st as any).status?.loggedIn) {
+          const st = (await api.status()) as any;
+          const isLoggedIn = Boolean(
+            st?.loggedIn ||
+            st?.sessionActive ||
+            st?.account?.userId ||
+            st?.status?.loggedIn
+          );
+          if (isLoggedIn) {
             if (timerRef.current) clearInterval(timerRef.current);
             setStatus("Đăng nhập thành công!");
             setTimeout(() => { onSuccess(); onOpenChange(false); }, 1000);
           }
         } catch { /* polling */ }
-      }, 2000);
-    }).catch(() => setStatus("Lỗi tạo QR"));
+      }, 1000);
+    }).catch(() => {
+      setStatus("Lỗi tạo QR");
+      setRefreshing(false);
+    });
+  };
 
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [open]);
+  useEffect(() => {
+    if (!open) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = null;
+      if (!isReconnect) {
+        api.loginCancel().catch(() => {});
+      }
+      return;
+    }
+
+    loadFreshQr(true);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = null;
+      if (!isReconnect) {
+        api.loginCancel().catch(() => {});
+      }
+    };
+  }, [open, isReconnect, accountId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -62,7 +91,17 @@ export function QrLoginDialog({ open, onOpenChange, onSuccess, accountId }: Prop
         </DialogHeader>
         <div className="flex flex-col items-center gap-4">
           {qrCode ? (
-            <img src={qrCode} alt="QR Code" className="w-48 h-48 rounded-lg border border-white/10" />
+            <div className="flex flex-col items-center gap-2">
+              <img src={qrCode} alt="QR Code" className="w-48 h-48 rounded-lg border border-white/10 bg-white p-1" />
+              <button
+                type="button"
+                onClick={() => loadFreshQr(true)}
+                disabled={refreshing}
+                className="text-xs text-blue-400 hover:text-blue-300 px-2 py-0.5 rounded bg-blue-500/10 hover:bg-blue-500/20 transition disabled:opacity-50"
+              >
+                {refreshing ? "Đang tạo mã mới..." : "🔄 Đổi mã QR mới"}
+              </button>
+            </div>
           ) : (
             <div className="w-48 h-48 rounded-lg border border-white/10 bg-[#0d1015] flex items-center justify-center text-muted-foreground text-sm">
               Đang tạo QR...

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { projectRichMessage, providerMessageData } from '../message-projection.js';
 import * as ZaloApi from 'zalo-api-final';
 import { GoldLogger } from '../logger.js';
 import { GoldMediaStore } from '../media-store.js';
@@ -8,7 +9,7 @@ import { GoldListener } from './listener.js';
 import { GoldSender } from './sender.js';
 import { GoldSync } from './sync.js';
 import { renderQrToTerminal, parseSendArgs } from './qr.js';
-import { mergeAttachmentMetadata, localMediaUrlNeedsRepair, normalizeMessageKind, normalizeMessageText, normalizeAttachments, normalizeImageUrl, normalizeMessageQuote, normalizeMessageReactions } from './normalizer.js';
+import { localMediaUrlNeedsRepair, normalizeMessageQuote, normalizeMessageReactions } from './normalizer.js';
 import type {
   GoldAttachment,
   GoldConversationMessage,
@@ -32,11 +33,15 @@ export * from './normalizer.js';
 export * from './types.js';
 
 export class GoldRuntime {
+  /** Server-only SDK access for the scoped extended-tools adapter. Never serialize this object. */
+  getExtendedToolsApi() { return this.state.session?.api; }
   private readonly auth: GoldSessionAuth;
   private readonly listener: GoldListener;
   private readonly sender: GoldSender;
   private readonly sync: GoldSync;
   private readonly state: SharedState;
+  private readonly senderNameCache = new Map<string, string>();
+  private knownGroupIdsCache = new Set<string>();
 
   constructor(
     store: GoldStore,
@@ -72,7 +77,7 @@ export class GoldRuntime {
         closeWindowStart: 0,
         needsRelogin: false,
       },
-      historySyncState: undefined,
+      historySyncStates: new Map(),
       pendingHistorySyncs: new Map(),
       cipherKey: undefined,
     };
@@ -179,9 +184,8 @@ export class GoldRuntime {
         return true;
       }
 
-      if (await this.state.store.hasMessageByProviderIdForAccount(this.state.boundAccountId, message.conversationId, message.providerMessageId.trim())) {
-        return true;
-      }
+      // Distinct provider identities must never collapse just because text/time match.
+      return this.state.store.hasMessageByProviderIdForAccount(this.state.boundAccountId, message.conversationId, message.providerMessageId.trim());
     }
 
     const messageTime = Date.parse(message.timestamp);
@@ -256,54 +260,35 @@ export class GoldRuntime {
 
     const attachments = await Promise.all(message.attachments.map((attachment) => this.persistAttachmentLocally(message.id, attachment)));
     const imageAttachment = attachments.find((attachment) => attachment.type === 'image' && attachment.url);
-    return {
+    const updated: GoldConversationMessage = projectRichMessage({
       ...message,
       attachments,
       imageUrl: imageAttachment?.url ?? message.imageUrl,
-    } satisfies GoldConversationMessage;
+    });
+
+    // Update DB row and memory cache with mirrored local URLs
+    await this.state.store.appendConversationMessageByAccount(this.state.boundAccountId, updated);
+    const existing = this.state.conversations.get(updated.conversationId);
+    if (existing) {
+      const idx = existing.findIndex((m) => m.id === updated.id || (m.providerMessageId && m.providerMessageId === updated.providerMessageId));
+      if (idx >= 0) {
+        existing[idx] = updated;
+      }
+    }
+    return updated;
   }
 
   private repairMessageFromRawPayload(message: GoldConversationMessage) {
-    if (!message.rawMessageJson) {
-      return message;
-    }
-
-    try {
-      const raw = JSON.parse(message.rawMessageJson) as Record<string, unknown>;
-      const normalizedKind = normalizeMessageKind(raw);
-      const normalizedText = normalizeMessageText(raw);
-      const normalizedAttachments = normalizeAttachments(raw);
-      const normalizedImageUrl = normalizeImageUrl(raw);
-      const normalizedQuote = normalizeMessageQuote(raw);
-      const normalizedReactions = normalizeMessageReactions(raw);
-
-      if (normalizedAttachments.length === 0 && normalizedKind === 'text' && !normalizedImageUrl && !normalizedQuote && !normalizedReactions) {
-        return message;
-      }
-
-      const nextAttachments = normalizedAttachments.length > 0
-        ? normalizedAttachments.map((attachment, index) => mergeAttachmentMetadata(message.attachments[index], attachment, normalizedKind))
-        : message.attachments;
-
-      return {
-        ...message,
-        text: normalizedText || message.text,
-        kind: normalizedKind !== 'text' || nextAttachments.length > 0 ? normalizedKind : message.kind,
-        attachments: nextAttachments,
-        imageUrl: normalizedImageUrl ?? nextAttachments.find((attachment) => attachment.type === 'image')?.url ?? message.imageUrl,
-        quote: normalizedQuote ?? message.quote,
-        reactions: normalizedReactions ?? message.reactions,
-      } satisfies GoldConversationMessage;
-    } catch (error) {
-      this.state.logger.error('repair_message_from_raw_payload_failed', {
-        messageId: message.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return message;
-    }
+    const raw = providerMessageData(message.rawMessageJson);
+    return {
+      ...projectRichMessage(message),
+      quote: normalizeMessageQuote(raw) ?? message.quote,
+      reactions: normalizeMessageReactions(raw) ?? message.reactions,
+    } satisfies GoldConversationMessage;
   }
 
-  private async appendConversationMessage(message: GoldConversationMessage) {
+  private async appendConversationMessage(message: GoldConversationMessage, notifyNew = true) {
+    message = projectRichMessage(message);
     const key = this.buildSeenKey(message);
     if (this.state.seenMessageKeys.has(key)) {
       return false;
@@ -318,14 +303,25 @@ export class GoldRuntime {
     }
 
     this.state.seenMessageKeys.add(key);
+    // Keep sliding window of seen keys to prevent memory leak
+    if (this.state.seenMessageKeys.size > 5000) {
+      const keysToDelete = Array.from(this.state.seenMessageKeys).slice(0, 1000);
+      for (const k of keysToDelete) this.state.seenMessageKeys.delete(k);
+    }
     existing.push(message);
     existing.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     this.state.conversations.set(message.conversationId, existing);
 
-    await this.state.store.replaceConversationMessagesByAccount(this.state.boundAccountId, message.conversationId, existing);
+    // Fast-path: Notify live WebSocket subscribers first before awaiting Postgres persistence
     for (const listener of this.state.conversationListeners) {
-      listener(message);
+      try {
+        listener(message, notifyNew ? 'new' : undefined);
+      } catch (listenerError) {
+        this.logger.error('conversation_listener_dispatch_failed', { error: listenerError });
+      }
     }
+
+    await this.state.store.appendConversationMessageByAccount(this.state.boundAccountId, message);
     return true;
   }
 
@@ -347,24 +343,49 @@ export class GoldRuntime {
     }
 
     return members
-      .filter((member) => member && typeof member === 'object')
-      .map((member: any) => ({
-        userId: String(member.userId ?? member.uid ?? member.id),
-        displayName: member.displayName ? String(member.displayName) : member.name ? String(member.name) : undefined,
-        avatar: member.avatar ? String(member.avatar) : member.avatarUrl ? String(member.avatarUrl) : undefined,
-        role: member.role ? String(member.role) : undefined,
-      }));
+      .map((member: any) => {
+        if (typeof member === 'string' || typeof member === 'number') {
+          const raw = String(member).trim();
+          if (!raw) return null;
+          const userId = raw.replace(/_\d+$/, '');
+          return { userId };
+        }
+        if (member && typeof member === 'object') {
+          const rawId = member.userId ?? member.uid ?? member.id ?? member.memberId;
+          if (!rawId) return null;
+          const userId = String(rawId).replace(/_\d+$/, '');
+          return {
+            userId,
+            displayName: member.displayName ? String(member.displayName) : member.name ? String(member.name) : member.dName ? String(member.dName) : undefined,
+            avatar: member.avatar ? String(member.avatar) : member.avatarUrl ? String(member.avatarUrl) : member.thumb ? String(member.thumb) : undefined,
+            role: member.role ? String(member.role) : undefined,
+          };
+        }
+        return null;
+      })
+      .filter((m): m is GoldGroupMemberRecord => Boolean(m && m.userId));
   }
 
   private async resolveGroupSenderName(groupId: string, senderId?: string) {
     if (!senderId) return undefined;
+    const cacheKey = `${groupId}:${senderId}`;
+    const cached = this.senderNameCache.get(cacheKey);
+    if (cached) return cached;
+
     const groups = await this.state.store.listGroupsByAccount(this.state.boundAccountId);
     const group = groups.find((entry) => entry.groupId === groupId);
     const member = group?.members?.find((entry) => entry.userId === senderId);
-    if (member?.displayName) return member.displayName;
+    if (member?.displayName) {
+      this.senderNameCache.set(cacheKey, member.displayName);
+      return member.displayName;
+    }
     const contacts = await this.state.store.listContactsByAccount(this.state.boundAccountId);
     const contact = contacts.find((entry) => entry.userId === senderId);
-    return contact?.displayName;
+    if (contact?.displayName) {
+      this.senderNameCache.set(cacheKey, contact.displayName);
+      return contact.displayName;
+    }
+    return undefined;
   }
 
   // --- Public API delegation ---
@@ -477,6 +498,10 @@ export class GoldRuntime {
     return this.sync.mobileSyncAllAccountConversations(options);
   }
 
+  async catchupRecentConversations(options?: { limitConversations?: number; sinceTimestamp?: string; perBatchTimeoutMs?: number }) {
+    return this.sync.catchupRecentConversations(options);
+  }
+
   async syncAllAccountConversations(options?: { perConversationTimeoutMs?: number; maxTotalTimeMs?: number }) {
     return this.sync.syncAllAccountConversations(options);
   }
@@ -493,21 +518,27 @@ export class GoldRuntime {
     return this.sync.listGroups();
   }
 
-  async sendText(conversationId: string, text: string) {
-    return this.sender.sendText(conversationId, text);
+  async sendText(
+    conversationId: string,
+    text: string,
+    optionsOrLifecycle?: import('./sender.js').SendTextOptions | import('./send-contract.js').SendLifecycle,
+    lifecycle?: import('./send-contract.js').SendLifecycle,
+  ) {
+    return this.sender.sendText(conversationId, text, optionsOrLifecycle, lifecycle);
   }
 
   async sendAttachment(conversationId: string, options: {
+    mentions?: import('../types.js').GoldMessageMention[]; quoteMessageId?: string;
     fileBuffer: Buffer;
     fileName: string;
     mimeType: string;
     caption?: string;
-  }) {
-    return this.sender.sendAttachment(conversationId, options);
+  }, lifecycle?: import('./send-contract.js').SendLifecycle) {
+    return this.sender.sendAttachment(conversationId, options, lifecycle);
   }
 
-  async sendImage(conversationId: string, options: { imageBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
-    return this.sender.sendImage(conversationId, options);
+  async sendImage(conversationId: string, options: { imageBuffer: Buffer; fileName: string; mimeType: string; caption?: string }, lifecycle?: import('./send-contract.js').SendLifecycle) {
+    return this.sender.sendImage(conversationId, options, lifecycle);
   }
 
   async sendFile(conversationId: string, options: { fileBuffer: Buffer; fileName: string; mimeType: string; caption?: string }) {
@@ -545,6 +576,18 @@ export class GoldRuntime {
     return true;
   }
 
+  async syncLabels() {
+    return this.sync.syncLabels();
+  }
+
+  async syncMuteStates() {
+    return this.sync.syncMuteStates();
+  }
+
+  async syncUnreadMarks() {
+    return this.sync.syncUnreadMarks();
+  }
+
   async createPoll(groupId: string, question: string, options: string[]) {
     return this.sender.createPoll(groupId, question, options);
   }
@@ -561,8 +604,15 @@ export class GoldRuntime {
     return parseSendArgs(argv);
   }
 
-  onConversationMessage(listener: (message: GoldConversationMessage) => void) {
-    return this.listener.onConversationMessage(listener);
+  onConversationMessage(listener: (message: GoldConversationMessage, event?: 'new') => void) {
+    this.state.conversationListeners.add(listener);
+    return () => {
+      this.state.conversationListeners.delete(listener);
+    };
+  }
+
+  getStore(): GoldStore {
+    return this.state.store;
   }
 
   getListenerState() {

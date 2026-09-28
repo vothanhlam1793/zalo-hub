@@ -5,6 +5,8 @@ import { MiniSidebar } from './components/MiniSidebar';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { ConversationDetailsPanel } from './components/ConversationDetailsPanel';
+import { ReconnectModal } from './components/ReconnectModal';
+import { QrLoginDialog } from '@/features/accounts/components/QrLoginDialog';
 import type { Contact, Group } from '@/types';
 import type { DashboardState } from './useDashboardState';
 import { useDashboardState } from './useDashboardState';
@@ -42,6 +44,19 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
     onSend,
     onReactMessage,
     onRenameAccount,
+    onReconnectAccount,
+    reconnectModal,
+    setReconnectModal,
+    qrLoginOpen,
+    setQrLoginOpen,
+    qrLoginAccountId,
+    onOpenQrLogin,
+    tags,
+    selectedTagId,
+    setSelectedTagId,
+    onSyncTags,
+    onAssignTag,
+    onUnassignTag,
   } = dashboard;
 
   return (
@@ -54,6 +69,8 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           conversations={Object.values(chat.conversationsByAccount).flat()}
           onSelectAccount={onSelectAccount}
           onOpenAdmin={() => navigate('/admin')}
+          onMoveAccount={dashboard.onMoveAccount}
+          onReorderAccounts={dashboard.onReorderAccounts}
         />
         <Sidebar
           sidebarTab={workspace.sidebarTab}
@@ -69,49 +86,108 @@ function DesktopDashboardPage({ dashboard }: { dashboard: DashboardState }) {
           accountDisplayName={workspaceAccount?.displayName ?? status?.account?.displayName}
           accountAvatar={workspaceAccount?.avatar ?? status?.account?.avatar}
           accountPhoneNumber={workspaceAccount?.phoneNumber ?? status?.account?.phoneNumber}
+          isSessionActive={Boolean(workspaceAccount?.sessionActive ?? status?.sessionActive)}
+          tags={tags}
+          selectedTagId={selectedTagId}
+          onSelectTag={setSelectedTagId}
+          onSyncTags={onSyncTags}
+          onSyncContacts={dashboard.onSyncContacts}
+          syncingContacts={dashboard.syncingContacts}
+          onMarkAllRead={dashboard.onMarkAllRead}
+          onSyncUnread={dashboard.onSyncUnread}
+          onReconnectAccount={onReconnectAccount}
           onRenameAccount={onRenameAccount}
           onSelectConversation={onSelectConversation}
           onOpenDirectConversation={onOpenDirectConversation}
           onOpenGroupConversation={onOpenGroupConversation}
+          onLoadOlderConversations={dashboard.onLoadOlderConversations}
+          loadingOlderConversations={dashboard.loadingOlderConversations}
+          hasMoreConversations={dashboard.hasMoreConversations}
         />
         <div className="flex-1 min-w-0 flex relative">
           <ChatPanel
+            key={chat.activeKey}
+            loadState={dashboard.messageLoad?.loadState}
+            onRetryLoad={() => onSelectConversation(chat.activeConversationId)}
+            isComposing={dashboard.isComposing}
+            canSend={dashboard.canSend}
+            onRetryMessage={dashboard.onRetryMessage}
+            onQueryMessage={dashboard.onQueryMessage}
+            onCancelMessage={dashboard.onCancelMessage}
+            onRestoreDraft={dashboard.onRestoreDraft}
             activeConversationId={chat.activeConversationId}
             activeConversation={activeConversation}
             activeName={activeName}
             activeAvatar={activeAvatar}
             activeSubtitle={activeSubtitle}
             isGroupConversation={isGroupConversation}
+            groupMembers={activeGroup?.members}
+            contacts={chat.contacts}
             messages={chat.messages}
             hasMoreHistory={chat.hasMoreHistory}
             loadingOlder={chat.loadingOlder}
             syncingHistory={chat.syncingHistory}
             statusMsg={composer.statusMsg}
-            loadError={composer.loadError}
-            text={composer.text}
-            attachFile={composer.attachFile}
+            loadError={dashboard.messageLoad?.error || composer.loadError}
+            showDisconnectBanner={Boolean(workspaceAccount?.sessionActive === false && workspaceAccount?.hasCredential)}
+            onReconnectAccount={onReconnectAccount}
+            workspaceAccountId={resolveWorkspaceId()}
             sending={composer.sending}
             typingUsers={[]}
             detailsOpen={detailsOpen}
             onScroll={onMessagesScroll}
+            onLoadOlder={dashboard.onLoadOlder}
             onTextChange={composer.setText}
             onKeyDown={onKeyDown}
+            onCompositionStart={dashboard.handleCompositionStart}
+            onCompositionEnd={dashboard.handleCompositionEnd}
+            textareaRef={dashboard.textareaRef}
             onSend={onSend}
             onAttachFile={composer.setAttachFile}
             onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onReactMessage={onReactMessage}
-            showDisconnectBanner={status ? !status.sessionActive && !status.loginInProgress && !!workspace.selectedAccountId : false}
+            onUpdateRestriction={dashboard.onUpdateRestriction}
+            onToggleMute={dashboard.onToggleMute}
           />
-          <ConversationDetailsPanel
-            open={detailsOpen}
-            conversation={activeConversation}
-            contact={activeContact}
-            group={activeGroup}
-            workspaceAccount={workspaceAccount}
-            onClose={() => setDetailsOpen(false)}
-          />
+        <ConversationDetailsPanel
+          open={detailsOpen}
+          conversation={activeConversation}
+          contact={activeContact}
+          group={activeGroup}
+          contacts={chat.contacts}
+          workspaceAccount={workspaceAccount}
+          allTags={tags}
+          onAssignTag={onAssignTag}
+          onUnassignTag={onUnassignTag}
+          onCreateTag={dashboard.onCreateTag}
+          onDeleteTag={dashboard.onDeleteTag}
+          onSyncTags={onSyncTags}
+          onUpdateNotes={dashboard.onUpdateNotes}
+          onUpdateRestriction={dashboard.onUpdateRestriction}
+          onToggleMute={dashboard.onToggleMute}
+          onClose={() => setDetailsOpen(false)}
+        />
         </div>
+
+        <ReconnectModal
+          open={reconnectModal.open}
+          status={reconnectModal.status}
+          errorMsg={reconnectModal.errorMsg}
+          accountId={reconnectModal.accountId}
+          onOpenQrLogin={onOpenQrLogin}
+          onClose={() => setReconnectModal((prev) => ({ ...prev, open: false }))}
+        />
+
+        <QrLoginDialog
+          open={qrLoginOpen}
+          accountId={qrLoginAccountId ?? undefined}
+          onOpenChange={setQrLoginOpen}
+          onSuccess={() => {
+            setQrLoginOpen(false);
+            window.location.reload();
+          }}
+        />
       </div>
     </TooltipProvider>
   );
@@ -150,6 +226,12 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
     onSend,
     onReactMessage,
     onRenameAccount,
+    tags,
+    selectedTagId,
+    setSelectedTagId,
+    onSyncTags,
+    onAssignTag,
+    onUnassignTag,
   } = dashboard;
   const [screen, setScreen] = useState<'list' | 'chat'>('list');
 
@@ -222,10 +304,22 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               accountDisplayName={workspaceAccount?.displayName ?? status?.account?.displayName}
               accountAvatar={workspaceAccount?.avatar ?? status?.account?.avatar}
               accountPhoneNumber={workspaceAccount?.phoneNumber ?? status?.account?.phoneNumber}
+              isSessionActive={Boolean(workspaceAccount?.sessionActive ?? status?.sessionActive)}
+              tags={tags}
+              selectedTagId={selectedTagId}
+              onSelectTag={setSelectedTagId}
+              onSyncTags={onSyncTags}
+              onSyncContacts={dashboard.onSyncContacts}
+              syncingContacts={dashboard.syncingContacts}
+              onMarkAllRead={dashboard.onMarkAllRead}
+              onSyncUnread={dashboard.onSyncUnread}
               onRenameAccount={onRenameAccount}
               onSelectConversation={handleSelectConversation}
               onOpenDirectConversation={handleOpenDirectConversation}
               onOpenGroupConversation={handleOpenGroupConversation}
+              onLoadOlderConversations={dashboard.onLoadOlderConversations}
+              loadingOlderConversations={dashboard.loadingOlderConversations}
+              hasMoreConversations={dashboard.hasMoreConversations}
             />
           </div>
         )}
@@ -233,12 +327,24 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
         {screen === 'chat' && (
           <div className="relative flex h-dvh w-full flex-col overflow-hidden">
             <ChatPanel
+              key={chat.activeKey}
+              workspaceAccountId={resolveWorkspaceId()}
+              loadState={dashboard.messageLoad?.loadState}
+              onRetryLoad={() => onSelectConversation(chat.activeConversationId)}
+              isComposing={dashboard.isComposing}
+              canSend={dashboard.canSend}
+              onRetryMessage={dashboard.onRetryMessage}
+              onQueryMessage={dashboard.onQueryMessage}
+              onCancelMessage={dashboard.onCancelMessage}
+              onRestoreDraft={dashboard.onRestoreDraft}
               activeConversationId={chat.activeConversationId}
               activeConversation={activeConversation}
               activeName={activeName}
               activeAvatar={activeAvatar}
               activeSubtitle={activeSubtitle}
               isGroupConversation={isGroupConversation}
+              groupMembers={activeGroup?.members}
+              contacts={chat.contacts}
               headerLeading={
                 <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-xs" onClick={() => setScreen('list')}>
                   ← DS
@@ -249,20 +355,23 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               loadingOlder={chat.loadingOlder}
               syncingHistory={chat.syncingHistory}
               statusMsg={composer.statusMsg}
-              loadError={composer.loadError}
-              text={composer.text}
-              attachFile={composer.attachFile}
+              loadError={dashboard.messageLoad?.error || composer.loadError}
               sending={composer.sending}
               typingUsers={[]}
               detailsOpen={detailsOpen}
               onScroll={onMessagesScroll}
+              onLoadOlder={dashboard.onLoadOlder}
               onTextChange={composer.setText}
               onKeyDown={onKeyDown}
+              onCompositionStart={dashboard.handleCompositionStart}
+              onCompositionEnd={dashboard.handleCompositionEnd}
+              textareaRef={dashboard.textareaRef}
               onSend={onSend}
               onAttachFile={composer.setAttachFile}
               onClearFile={() => { composer.setAttachFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
               onToggleDetails={() => setDetailsOpen((open) => !open)}
               onReactMessage={onReactMessage}
+              onToggleMute={dashboard.onToggleMute}
               showDisconnectBanner={status ? !status.sessionActive && !status.loginInProgress && !!workspace.selectedAccountId : false}
             />
             {detailsOpen && (
@@ -273,7 +382,17 @@ function MobileDashboardPage({ dashboard }: { dashboard: DashboardState }) {
               conversation={activeConversation}
               contact={activeContact}
               group={activeGroup}
+              contacts={chat.contacts}
               workspaceAccount={workspaceAccount}
+              allTags={tags}
+              onAssignTag={onAssignTag}
+              onUnassignTag={onUnassignTag}
+              onCreateTag={dashboard.onCreateTag}
+              onDeleteTag={dashboard.onDeleteTag}
+              onSyncTags={onSyncTags}
+              onUpdateNotes={dashboard.onUpdateNotes}
+              onUpdateRestriction={dashboard.onUpdateRestriction}
+              onToggleMute={dashboard.onToggleMute}
               onClose={() => setDetailsOpen(false)}
             />
           </div>

@@ -13,6 +13,8 @@ import { GoldContactRepo } from './contact-repo.js';
 import { GoldConversationRepo } from './conversation-repo.js';
 import { GoldGroupRepo } from './group-repo.js';
 import { GoldMessageRepo } from './message-repo.js';
+import { GoldTagRepo } from './tag-repo.js';
+import { GoldUserSettingsRepo } from './user-settings-repo.js';
 
 function createKnexConfig(env: string): Knex.Config {
   return {
@@ -29,10 +31,12 @@ function createKnexConfig(env: string): Knex.Config {
 export class GoldStore {
   private readonly knex: Knex;
   readonly accountRepo: GoldAccountRepo;
-  private readonly contactRepo: GoldContactRepo;
-  private readonly groupRepo: GoldGroupRepo;
-  private readonly messageRepo: GoldMessageRepo;
-  private readonly conversationRepo: GoldConversationRepo;
+  readonly contactRepo: GoldContactRepo;
+  readonly groupRepo: GoldGroupRepo;
+  readonly messageRepo: GoldMessageRepo;
+  readonly conversationRepo: GoldConversationRepo;
+  readonly tagRepo: GoldTagRepo;
+  readonly userSettingsRepo: GoldUserSettingsRepo;
 
   constructor(knex?: Knex) {
     this.knex = knex ?? knexConstructor(createKnexConfig(process.env.NODE_ENV || 'development'));
@@ -63,6 +67,8 @@ export class GoldStore {
     );
 
     this.messageRepo = new GoldMessageRepo(this.knex, resolveAccountId, requireAccountId);
+    this.tagRepo = new GoldTagRepo(this.knex);
+    this.userSettingsRepo = new GoldUserSettingsRepo(this.knex);
   }
 
   async init() {
@@ -233,8 +239,18 @@ export class GoldStore {
     return this.messageRepo.appendConversationMessage(this.accountRepo.activeAccountId, message, upsertConversation);
   }
 
+  async appendConversationMessageByAccount(accountId: string | undefined, message: GoldConversationMessage): Promise<GoldConversationMessage[]> {
+    const upsertConversation = (acctId: string, convId: string, msgs: GoldConversationMessage[], trx?: Knex.Transaction) =>
+      this.conversationRepo.upsertConversation(acctId, convId, msgs, trx);
+    return this.messageRepo.appendConversationMessage(accountId, message, upsertConversation);
+  }
+
   async updateMessageReactions(accountId: string, providerMessageId: string, reactions: { emoji: string; count: number; userIds?: string[] }[]) {
     return this.messageRepo.updateMessageReactions(accountId, providerMessageId, reactions);
+  }
+
+  async getMessageById(accountId: string | undefined, messageId: string): Promise<GoldConversationMessage | undefined> {
+    return this.messageRepo.getMessageById(accountId, messageId);
   }
 
   // --- Conversation methods ---
@@ -243,8 +259,15 @@ export class GoldStore {
     return this.conversationRepo.listConversationSummaries(this.accountRepo.activeAccountId);
   }
 
-  async listConversationSummariesByAccount(accountId?: string): Promise<GoldConversationSummary[]> {
-    return this.conversationRepo.listConversationSummariesByAccount(accountId);
+  async listConversationSummariesByAccount(
+    accountId?: string,
+    options?: { limit?: number; offset?: number; q?: string },
+  ): Promise<GoldConversationSummary[]> {
+    return this.conversationRepo.listConversationSummariesByAccount(accountId, options);
+  }
+
+  async updateDirectConversationTitlesByFriends(accountId: string, friends: Array<{ userId: string; displayName?: string }>) {
+    return this.conversationRepo.updateDirectConversationTitlesByFriends(accountId, friends);
   }
 
   async canonicalizeConversationData() {
@@ -352,5 +375,14 @@ export class GoldStore {
     conversationId: string,
   ) {
     return this.conversationRepo.getConversationSummaryByAccountAndId(accountId, conversationId);
+  }
+
+  async setConversationRestriction(
+    accountId: string,
+    conversationId: string,
+    isRestricted: boolean,
+    restrictedBy?: string,
+  ) {
+    return this.conversationRepo.setConversationRestriction(accountId, conversationId, isRestricted, restrictedBy);
   }
 }

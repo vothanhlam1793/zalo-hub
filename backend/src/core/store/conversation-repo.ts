@@ -6,11 +6,12 @@ import type {
   GoldGroupRecord,
 } from '../types.js';
 import {
+  canonicalizeStoredMessage,
   nowIso,
   parseConversationId,
   toMessageKind,
 } from './helpers.js';
-import type { RawConversationRow } from './helpers.js';
+import type { RawConversationRow, RawMessageRow, RawAttachmentRow } from './helpers.js';
 
 export class GoldConversationRepo {
   private knex: Knex;
@@ -19,6 +20,58 @@ export class GoldConversationRepo {
   private getGroupAvatarFn: (groupId: string, accountId?: string) => Promise<string | undefined>;
   private getFriendDisplayNameFn: (friendId: string, accountId?: string) => Promise<string | undefined>;
   private getFriendAvatarFn: (friendId: string, accountId?: string) => Promise<string | undefined>;
+
+  /** One bounded query per 200 summaries, not one history/attachment request per row.
+   * LATERAL LIMIT allows account/conversation index lookups and returns only the
+   * latest message and its primary attachment. No history backfill or DB mutation.
+   */
+  private async projectSummaryPreviews(accountId: string, rows: Array<{
+    id: string; last_message_text: string; last_message_kind: string;
+  }>) {
+    for (let offset = 0; offset < rows.length; offset += 200) {
+      const batch = rows.slice(offset, offset + 200);
+      const latest = (await this.knex.raw(`
+        SELECT c.id AS preview_conversation_id, m.*,
+               a.attachment AS preview_attachment
+        FROM conversations c
+        JOIN LATERAL (
+          SELECT id, conversation_id, thread_id, conversation_type, friend_id,
+                 text, kind, image_url, raw_message_json, direction, is_self,
+                 timestamp, sender_id, sender_name, provider_message_id, reactions_json
+          FROM messages m
+          WHERE m.account_id = c.account_id
+            AND (m.conversation_id = c.id OR
+                 (m.conversation_id IS NULL AND c.type = 'direct' AND m.friend_id = c.friend_id))
+          ORDER BY m.timestamp DESC, m.created_at DESC, m.id DESC
+          LIMIT 1
+        ) m ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT row_to_json(att) AS attachment FROM attachments att
+          WHERE att.message_id = m.id ORDER BY att.id LIMIT 1
+        ) a ON TRUE
+        WHERE c.account_id = ? AND c.id = ANY(?::text[])
+      `, [accountId, batch.map(row => row.id)])).rows as Array<RawMessageRow & {
+        preview_conversation_id: string; preview_attachment: RawAttachmentRow | null;
+      }>;
+      const previews = new Map(latest.map(message => {
+        const a = message.preview_attachment;
+        const projected = canonicalizeStoredMessage(message, a ? [{
+          id: a.id, type: toMessageKind(a.type), url: a.url ?? undefined,
+          sourceUrl: a.source_url ?? undefined, localPath: a.local_path ?? undefined,
+          thumbnailUrl: a.thumbnail_url ?? undefined, fileName: a.file_name ?? undefined,
+          mimeType: a.mime_type ?? undefined, duration: a.duration ?? undefined,
+        }] : []);
+        return [message.preview_conversation_id, projected] as const;
+      }));
+      for (const row of batch) {
+        const preview = previews.get(row.id);
+        if (preview) {
+          row.last_message_text = preview.text;
+          row.last_message_kind = preview.kind;
+        }
+      }
+    }
+  }
 
   constructor(
     knex: Knex,
@@ -43,11 +96,23 @@ export class GoldConversationRepo {
     trx?: Knex.Transaction,
   ) {
     const db = trx ?? this.knex;
-    const lastMessage = messages[messages.length - 1];
     const timestamp = nowIso();
 
-    if (!lastMessage) {
+    if (!messages || messages.length === 0) {
       await db.raw('DELETE FROM conversations WHERE account_id = ? AND id = ?', [accountId, conversationId]);
+      return;
+    }
+
+    // Always sort by true timestamp so the latest message in time is selected, never an older ID
+    const sortedByTime = [...messages].sort((a, b) => {
+      const tA = Date.parse(a.timestamp);
+      const tB = Date.parse(b.timestamp);
+      if (!Number.isNaN(tA) && !Number.isNaN(tB) && tA !== tB) return tA - tB;
+      return a.timestamp.localeCompare(b.timestamp);
+    });
+    const lastMessage = sortedByTime[sortedByTime.length - 1];
+
+    if (!lastMessage) {
       return;
     }
 
@@ -84,23 +149,41 @@ export class GoldConversationRepo {
         last_message_text,
         last_message_kind,
         last_direction,
+        last_message_sender_name,
         last_message_timestamp,
         message_count,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, friend_id) DO UPDATE SET
         id = EXCLUDED.id,
         thread_id = EXCLUDED.thread_id,
         type = EXCLUDED.type,
-        title = EXCLUDED.title,
-        avatar = EXCLUDED.avatar,
-        display_name_snapshot = EXCLUDED.display_name_snapshot,
-        last_message_text = EXCLUDED.last_message_text,
-        last_message_kind = EXCLUDED.last_message_kind,
-        last_direction = EXCLUDED.last_direction,
-        last_message_timestamp = EXCLUDED.last_message_timestamp,
-        message_count = EXCLUDED.message_count,
+        title = COALESCE(conversations.title, EXCLUDED.title),
+        avatar = COALESCE(EXCLUDED.avatar, conversations.avatar),
+        display_name_snapshot = COALESCE(conversations.display_name_snapshot, EXCLUDED.display_name_snapshot),
+        last_message_text = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_message_text
+          ELSE conversations.last_message_text
+        END,
+        last_message_kind = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_message_kind
+          ELSE conversations.last_message_kind
+        END,
+        last_direction = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_direction
+          ELSE conversations.last_direction
+        END,
+        last_message_sender_name = CASE
+          WHEN EXCLUDED.last_message_timestamp >= conversations.last_message_timestamp OR conversations.last_message_timestamp IS NULL
+          THEN EXCLUDED.last_message_sender_name
+          ELSE conversations.last_message_sender_name
+        END,
+        last_message_timestamp = GREATEST(conversations.last_message_timestamp, EXCLUDED.last_message_timestamp),
+        message_count = GREATEST(conversations.message_count, EXCLUDED.message_count),
         updated_at = EXCLUDED.updated_at
     `, [
       storedConversationId,
@@ -114,6 +197,7 @@ export class GoldConversationRepo {
       lastMessage.text,
       lastMessage.kind,
       lastMessage.direction,
+      lastMessage.senderName ?? null,
       lastMessage.timestamp,
       messages.length,
       createdAt,
@@ -125,22 +209,70 @@ export class GoldConversationRepo {
     return this.listConversationSummariesByAccount(activeAccountId);
   }
 
-  async listConversationSummariesByAccount(accountId?: string): Promise<GoldConversationSummary[]> {
+  async listConversationSummariesByAccount(
+    accountId?: string,
+    options?: { limit?: number; offset?: number; q?: string },
+  ): Promise<GoldConversationSummary[]> {
     const resolvedAccountId = this.resolveAccountId(accountId);
     if (!resolvedAccountId) {
       return [];
     }
 
-    const rows = (await this.knex.raw(`
-      SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_timestamp, c.message_count
-           , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
-           , c.id, c.thread_id, c.type, c.title, c.avatar
-      FROM conversations c
-      LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
-      WHERE c.account_id = ?
-      ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
-    `, [resolvedAccountId])).rows as RawConversationRow[];
+    const limit = Math.min(Math.max(Number(options?.limit) || 150, 1), 300);
+    const offset = Math.max(Number(options?.offset) || 0, 0);
+    const q = options?.q?.trim() ? `%${options.q.trim().toLowerCase()}%` : null;
 
+    const query = q
+      ? `
+        SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count
+             , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
+             , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
+             , c.is_muted, c.mute_until, c.is_pinned
+             , c.is_restricted, c.restricted_by, c.restricted_at
+             , c.notes, c.notes_updated_by, c.notes_updated_at
+        FROM conversations c
+        LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+        WHERE c.account_id = ?
+          AND (
+            LOWER(c.title) LIKE ?
+            OR LOWER(COALESCE(c.display_name_snapshot, '')) LIKE ?
+            OR LOWER(COALESCE(c.last_message_text, '')) LIKE ?
+          )
+        ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
+        LIMIT ? OFFSET ?
+      `
+      : `
+        SELECT c.friend_id, c.display_name_snapshot, c.last_message_text, c.last_message_kind, c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count
+             , COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at
+             , c.id, c.thread_id, c.type, c.title, c.avatar, c.labels_json
+             , c.is_muted, c.mute_until, c.is_pinned
+             , c.is_restricted, c.restricted_by, c.restricted_at
+             , c.notes, c.notes_updated_by, c.notes_updated_at
+        FROM conversations c
+        LEFT JOIN conversation_read_state rs ON rs.account_id = c.account_id AND rs.conversation_id = c.id
+        WHERE c.account_id = ?
+        ORDER BY c.last_message_timestamp DESC, c.updated_at DESC
+        LIMIT ? OFFSET ?
+      `;
+
+    const bindings = q
+      ? [resolvedAccountId, q, q, q, limit, offset]
+      : [resolvedAccountId, limit, offset];
+
+    const rows = (await this.knex.raw(query, bindings)).rows as (RawConversationRow & {
+      labels_json?: any;
+      is_muted?: boolean;
+      mute_until?: number | string | null;
+      is_pinned?: boolean;
+      is_restricted?: boolean;
+      restricted_by?: string | null;
+      restricted_at?: string | null;
+      notes?: string | null;
+      notes_updated_by?: string | null;
+      notes_updated_at?: string | null;
+    })[];
+
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
     const unreadMap = new Map<string, number>();
     if (rows.length > 0) {
       const unreadRows = (await this.knex.raw(`
@@ -160,10 +292,59 @@ export class GoldConversationRepo {
     }
 
     const summaries: GoldConversationSummary[] = [];
+
+    // Collect group threadIds that do not have custom avatar to batch-load member avatars
+    const groupThreadIdsWithoutAvatar = rows
+      .filter((r) => r.type === 'group' && (!r.avatar || r.avatar.trim() === ''))
+      .map((r) => r.thread_id ?? r.friend_id)
+      .filter(Boolean);
+
+    const groupMemberAvatarsMap = new Map<string, string[]>();
+    if (groupThreadIdsWithoutAvatar.length > 0) {
+      try {
+        const memberAvatarRows = (await this.knex.raw(`
+          WITH recent_senders AS (
+            SELECT m.thread_id, m.sender_id, MAX(m.timestamp) as max_ts
+            FROM messages m
+            WHERE m.account_id = ?
+              AND m.conversation_type = 'group'
+              AND m.thread_id = ANY(?)
+              AND m.sender_id IS NOT NULL
+            GROUP BY m.thread_id, m.sender_id
+          )
+          SELECT rs.thread_id, f.avatar
+          FROM recent_senders rs
+          JOIN friends f ON f.account_id = ? AND f.friend_id = rs.sender_id
+          WHERE f.avatar IS NOT NULL AND f.avatar <> ''
+          ORDER BY rs.thread_id, rs.max_ts DESC
+        `, [resolvedAccountId, groupThreadIdsWithoutAvatar, resolvedAccountId])).rows as Array<{
+          thread_id: string;
+          avatar: string;
+        }>;
+
+        for (const item of memberAvatarRows) {
+          const list = groupMemberAvatarsMap.get(item.thread_id) || [];
+          if (list.length < 4 && !list.includes(item.avatar)) {
+            list.push(item.avatar);
+            groupMemberAvatarsMap.set(item.thread_id, list);
+          }
+        }
+      } catch {
+        /* ignore batch avatar query errors */
+      }
+    }
+
     for (const row of rows) {
       const resolvedType = row.type ?? 'direct';
       const threadOrFriend = row.thread_id ?? row.friend_id;
       const effectiveLastReadAt = row.last_read_at;
+
+      let parsedLabels: any = undefined;
+      if (row.labels_json) {
+        try {
+          parsedLabels = typeof row.labels_json === 'string' ? JSON.parse(row.labels_json) : row.labels_json;
+        } catch { /* ignore */ }
+      }
 
       summaries.push({
         id: `${resolvedType}:${threadOrFriend}`,
@@ -184,9 +365,21 @@ export class GoldConversationRepo {
         lastMessageKind: toMessageKind(row.last_message_kind),
         lastMessageTimestamp: row.last_message_timestamp,
         lastDirection: row.last_direction,
+        lastMessageSenderName: row.last_message_sender_name || undefined,
+        memberAvatars: resolvedType === 'group' ? groupMemberAvatarsMap.get(threadOrFriend) : undefined,
         messageCount: row.message_count,
         unreadCount: unreadMap.get(row.id) ?? 0,
         lastReadAt: effectiveLastReadAt,
+        labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
+        isMuted: Boolean(row.is_muted),
+        muteUntil: row.mute_until ?? undefined,
+        isPinned: Boolean(row.is_pinned),
+        isRestricted: Boolean(row.is_restricted),
+        restrictedBy: row.restricted_by || undefined,
+        restrictedAt: row.restricted_at || undefined,
+        notes: row.notes || undefined,
+        notesUpdatedBy: row.notes_updated_by || undefined,
+        notesUpdatedAt: row.notes_updated_at || undefined,
       } satisfies GoldConversationSummary);
     }
     return summaries;
@@ -475,7 +668,7 @@ export class GoldConversationRepo {
     }
 
     let whereExtra = '';
-    const bindings: any[] = [resolvedAccountId, options.from, options.to];
+    const bindings: any[] = [options.from, options.to, resolvedAccountId, options.from, options.to];
 
     if (options.type) {
       whereExtra += ' AND c.type = ?';
@@ -533,7 +726,7 @@ export class GoldConversationRepo {
         ${whereExtra}
       ORDER BY c.last_message_timestamp DESC
       LIMIT ?
-    `, [...bindings, options.from, options.to, resolvedAccountId, options.from, options.to, limit + 1])).rows as Array<{
+    `, bindings)).rows as Array<{
       id: string;
       thread_id: string;
       type: 'direct' | 'group';
@@ -553,6 +746,8 @@ export class GoldConversationRepo {
 
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
+
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
 
     const items: GoldConversationSummary[] = [];
     for (const row of rows) {
@@ -637,6 +832,7 @@ export class GoldConversationRepo {
       unread_count: number;
     }>;
 
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
     const items: GoldConversationSummary[] = [];
     for (const row of rows) {
       const threadOrFriend = row.thread_id ?? row.friend_id;
@@ -682,7 +878,8 @@ export class GoldConversationRepo {
     const rows = (await this.knex.raw(`
       SELECT c.id, c.thread_id, c.type, c.title, c.avatar, c.friend_id,
              c.display_name_snapshot, c.last_message_text, c.last_message_kind,
-             c.last_direction, c.last_message_timestamp, c.message_count,
+             c.last_direction, c.last_message_sender_name, c.last_message_timestamp, c.message_count,
+             c.labels_json, c.notes, c.notes_updated_by, c.notes_updated_at,
              COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000Z') AS last_read_at,
              (SELECT COUNT(*)::int FROM messages mr
               WHERE mr.account_id = c.account_id
@@ -707,16 +904,61 @@ export class GoldConversationRepo {
       last_message_text: string;
       last_message_kind: string;
       last_direction: 'incoming' | 'outgoing';
+      last_message_sender_name: string | null;
       last_message_timestamp: string;
       message_count: number;
       last_read_at: string;
       unread_count: number;
+      labels_json?: any;
+      is_muted?: boolean;
+      mute_until?: number | string | null;
+      is_pinned?: boolean;
+      is_restricted?: boolean;
+      restricted_by?: string | null;
+      restricted_at?: string | null;
+      notes?: string | null;
+      notes_updated_by?: string | null;
+      notes_updated_at?: string | null;
     }>;
 
     const row = rows[0];
     if (!row) return undefined;
 
+    await this.projectSummaryPreviews(resolvedAccountId, rows);
+
+    let parsedLabels: any = undefined;
+    if (row.labels_json) {
+      try {
+        parsedLabels = typeof row.labels_json === 'string' ? JSON.parse(row.labels_json) : row.labels_json;
+      } catch { /* ignore */ }
+    }
+
     const threadOrFriend = row.thread_id ?? row.friend_id;
+    let memberAvatars: string[] | undefined = undefined;
+    if (row.type === 'group' && (!row.avatar || row.avatar.trim() === '')) {
+      try {
+        const memberAvatarRows = (await this.knex.raw(`
+          WITH recent_senders AS (
+            SELECT m.sender_id, MAX(m.timestamp) as max_ts
+            FROM messages m
+            WHERE m.account_id = ?
+              AND m.conversation_type = 'group'
+              AND m.thread_id = ?
+              AND m.sender_id IS NOT NULL
+            GROUP BY m.sender_id
+          )
+          SELECT f.avatar
+          FROM recent_senders rs
+          JOIN friends f ON f.account_id = ? AND f.friend_id = rs.sender_id
+          WHERE f.avatar IS NOT NULL AND f.avatar <> ''
+          ORDER BY rs.max_ts DESC
+          LIMIT 4
+        `, [resolvedAccountId, threadOrFriend, resolvedAccountId])).rows as Array<{ avatar: string }>;
+
+        memberAvatars = memberAvatarRows.map((r) => r.avatar);
+      } catch { /* ignore */ }
+    }
+
     return {
       id: row.id,
       accountId: resolvedAccountId,
@@ -735,9 +977,201 @@ export class GoldConversationRepo {
       lastMessageKind: toMessageKind(row.last_message_kind),
       lastMessageTimestamp: row.last_message_timestamp,
       lastDirection: row.last_direction,
+      lastMessageSenderName: row.last_message_sender_name || undefined,
+      memberAvatars,
       messageCount: row.message_count,
       unreadCount: row.unread_count,
       lastReadAt: row.last_read_at,
+        labels: Array.isArray(parsedLabels) ? parsedLabels : undefined,
+        isMuted: Boolean(row.is_muted),
+        muteUntil: row.mute_until ?? undefined,
+        isPinned: Boolean(row.is_pinned),
+        isRestricted: Boolean(row.is_restricted),
+        restrictedBy: row.restricted_by || undefined,
+        restrictedAt: row.restricted_at || undefined,
+        notes: row.notes || undefined,
+      notesUpdatedBy: row.notes_updated_by || undefined,
+      notesUpdatedAt: row.notes_updated_at || undefined,
     } satisfies GoldConversationSummary;
+  }
+
+  async updateDirectConversationTitlesByFriends(
+    accountId: string,
+    friends: Array<{ userId: string; displayName?: string }>,
+  ) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId || friends.length === 0) return;
+
+    for (const friend of friends) {
+      if (friend.displayName) {
+        await this.knex('conversations')
+          .where({ account_id: resolvedAccountId })
+          .andWhere((builder) => {
+            builder.where({ id: `direct:${friend.userId}` }).orWhere({ friend_id: friend.userId });
+          })
+          .update({
+            title: friend.displayName,
+            display_name_snapshot: friend.displayName,
+            updated_at: nowIso(),
+          })
+          .catch(() => {});
+      }
+    }
+  }
+
+  async updateConversationNotes(
+    accountId: string,
+    conversationId: string,
+    notes: string | null,
+    updatedBy?: string,
+  ) {
+    const { type, threadId } = parseConversationId(conversationId);
+    const canonicalConversationId = `${type}:${threadId}`;
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
+
+    const now = nowIso();
+    await this.knex('conversations')
+      .where({ account_id: resolvedAccountId, id: canonicalConversationId })
+      .update({
+        notes: notes ? notes.trim() : null,
+        notes_updated_by: updatedBy || null,
+        notes_updated_at: now,
+      });
+
+    return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);
+  }
+
+  async setConversationRestriction(
+    accountId: string,
+    conversationId: string,
+    isRestricted: boolean,
+    restrictedBy?: string,
+  ) {
+    const { type, threadId } = parseConversationId(conversationId);
+    const canonicalConversationId = `${type}:${threadId}`;
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
+
+    const now = nowIso();
+    await this.knex('conversations')
+      .where({ account_id: resolvedAccountId })
+      .andWhere((qb) => {
+        qb.where('id', canonicalConversationId)
+          .orWhere('thread_id', threadId)
+          .orWhere('friend_id', threadId)
+          .orWhere('friend_id', `group:${threadId}`);
+      })
+      .update({
+        is_restricted: isRestricted,
+        restricted_by: isRestricted ? (restrictedBy || null) : null,
+        restricted_at: isRestricted ? now : null,
+        updated_at: this.knex.fn.now(),
+      });
+
+    return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);
+  }
+
+  async setConversationMuteState(
+    accountId: string,
+    conversationId: string,
+    isMuted: boolean,
+    muteUntil?: number | string | null,
+  ) {
+    const { type, threadId } = parseConversationId(conversationId);
+    const canonicalConversationId = `${type}:${threadId}`;
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return undefined;
+
+    await this.knex('conversations')
+      .where({ account_id: resolvedAccountId })
+      .andWhere((qb) => {
+        qb.where('id', canonicalConversationId)
+          .orWhere('thread_id', threadId)
+          .orWhere('friend_id', threadId)
+          .orWhere('friend_id', `group:${threadId}`);
+      })
+      .update({
+        is_muted: isMuted,
+        mute_until: muteUntil !== undefined ? muteUntil : null,
+        updated_at: this.knex.fn.now(),
+      });
+
+    return this.getConversationSummaryByAccountAndId(resolvedAccountId, canonicalConversationId);
+  }
+
+  async batchUpdateMuteStates(
+    accountId: string,
+    mutedEntries: Array<{ id: string; duration: number; type: 'direct' | 'group' }>,
+  ) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return;
+
+    await this.knex.transaction(async (trx) => {
+      // First reset muted state
+      await trx('conversations').where('account_id', resolvedAccountId).update({ is_muted: false, mute_until: null });
+
+      for (const entry of mutedEntries) {
+        const threadId = entry.id;
+        const muteUntil = entry.duration === -1 ? null : Date.now() + entry.duration * 1000;
+        await trx('conversations')
+          .where('account_id', resolvedAccountId)
+          .andWhere((qb) => {
+            qb.where('thread_id', threadId)
+              .orWhere('friend_id', threadId)
+              .orWhere('friend_id', `group:${threadId}`)
+              .orWhere('id', `${entry.type}:${threadId}`);
+          })
+          .update({
+            is_muted: true,
+            mute_until: muteUntil,
+          });
+      }
+    });
+  }
+
+  async syncUnreadFromZalo(accountId: string, activeUnreadThreadIds: string[]) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return;
+    const nowIso = new Date().toISOString();
+
+    if (activeUnreadThreadIds.length === 0) {
+      await this.knex.raw(`
+        INSERT INTO conversation_read_state (account_id, conversation_id, last_read_at, updated_at)
+        SELECT c.account_id, c.id, ?, NOW()
+        FROM conversations c
+        WHERE c.account_id = ?
+        ON CONFLICT (account_id, conversation_id) DO UPDATE SET
+          last_read_at = EXCLUDED.last_read_at,
+          updated_at = NOW()
+      `, [nowIso, resolvedAccountId]);
+    } else {
+      await this.knex.raw(`
+        INSERT INTO conversation_read_state (account_id, conversation_id, last_read_at, updated_at)
+        SELECT c.account_id, c.id, ?, NOW()
+        FROM conversations c
+        WHERE c.account_id = ?
+          AND COALESCE(c.thread_id, c.friend_id) != ALL(?)
+        ON CONFLICT (account_id, conversation_id) DO UPDATE SET
+          last_read_at = EXCLUDED.last_read_at,
+          updated_at = NOW()
+      `, [nowIso, resolvedAccountId, activeUnreadThreadIds]);
+    }
+  }
+
+  async markAllAsRead(accountId: string) {
+    const resolvedAccountId = this.resolveAccountId(accountId);
+    if (!resolvedAccountId) return;
+    const nowIso = new Date().toISOString();
+
+    await this.knex.raw(`
+      INSERT INTO conversation_read_state (account_id, conversation_id, last_read_at, updated_at)
+      SELECT c.account_id, c.id, ?, NOW()
+      FROM conversations c
+      WHERE c.account_id = ?
+      ON CONFLICT (account_id, conversation_id) DO UPDATE SET
+        last_read_at = EXCLUDED.last_read_at,
+        updated_at = NOW()
+    `, [nowIso, resolvedAccountId]);
   }
 }

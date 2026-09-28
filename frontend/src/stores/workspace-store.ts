@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AccountSummary } from '../types';
+import { chatSession } from '../features/chat/model/chat-session';
 
 type SidebarTab = 'conversations' | 'contacts' | 'groups';
 
@@ -21,7 +22,8 @@ const LS_KEY = 'zalohub_selected_account';
 
 function loadSelectedAccountId(): string {
   try {
-    return localStorage.getItem(LS_KEY) || '';
+    const user = chatSession.capture().userId;
+    return user ? localStorage.getItem(`${LS_KEY}:${user}`) || '' : '';
   } catch {
     return '';
   }
@@ -29,8 +31,10 @@ function loadSelectedAccountId(): string {
 
 function saveSelectedAccountId(id: string) {
   try {
-    if (id) localStorage.setItem(LS_KEY, id);
-    else localStorage.removeItem(LS_KEY);
+    const user = chatSession.capture().userId;
+    if (!user) return;
+    if (id) localStorage.setItem(`${LS_KEY}:${user}`, id);
+    else localStorage.removeItem(`${LS_KEY}:${user}`);
   } catch { /* ignore */ }
 }
 
@@ -68,8 +72,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     saveSelectedAccountId('');
     set({
       selectedAccountId: '',
+      knownAccounts: [],
       sidebarTab: 'conversations',
       query: '',
     });
   },
 }));
+chatSession.subscribe(() => useWorkspaceStore.setState({ selectedAccountId: loadSelectedAccountId(), knownAccounts: [], sidebarTab: 'conversations', query: '' }));

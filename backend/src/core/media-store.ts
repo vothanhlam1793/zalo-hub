@@ -2,11 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Client as MinioClient } from 'minio';
 
 function resolveMinioConfig() {
-  const endPoint = process.env.MINIO_ENDPOINT || 'localhost';
+  const endPoint = process.env.MINIO_ENDPOINT || '127.0.0.1';
   const port = Number(process.env.MINIO_PORT || 9000);
-  const accessKey = process.env.MINIO_ACCESS_KEY || 'minioadmin';
-  const secretKey = process.env.MINIO_SECRET_KEY || 'minioadmin';
-  return { endPoint, port, useSSL: false, accessKey, secretKey };
+  const useSSL = process.env.MINIO_USE_SSL === 'true';
+  const accessKey = process.env.MINIO_ACCESS_KEY || process.env.MINIO_USER || 'zalohub';
+  const secretKey = process.env.MINIO_SECRET_KEY || process.env.MINIO_PASSWORD || 'zalohub-minio-secret';
+  return { endPoint, port, useSSL, accessKey, secretKey };
 }
 
 const BUCKET = process.env.MINIO_BUCKET || 'zalohub-media';

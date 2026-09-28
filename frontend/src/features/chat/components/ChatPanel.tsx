@@ -1,19 +1,37 @@
-import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback, useLayoutEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { GroupAvatar } from '@/components/GroupAvatar';
+import { cn } from '@/lib/utils';
 import { formatSize, getInitial, isImageAttachment } from '@/utils';
-import { MessageBubble } from './MessageBubble';
+import { MessageBubble, type MessageGroupItem } from './MessageBubble';
 import Lightbox, { type LightboxImage } from './Lightbox';
-import type { ConversationSummary, Message } from '@/types';
+import { attachmentSource } from '../model/message-media';
+import { messagePreview } from '../model/message-preview';
+import { selectAlbumRows } from '../model/album-selector';
+import { AlbumMessage } from './messages/AlbumMessage';
+import type { Contact, ConversationSummary, GroupMember, Message, MessageReactionOption } from '@/types';
+import { useComposerStore } from '@/stores/composer-store';
+import type { DeliveryActions } from './messages/MessageDeliveryStatus';
+import { ComposerAttachments, useAttachmentInput } from './ComposerAttachments';
+import { ComposerLocalTools } from './ComposerLocalTools';
+import { ComposerExtendedTools } from './ComposerExtendedTools';
+import { ImagePlus, Paperclip, Send } from 'lucide-react';
 
-interface ChatPanelProps {
+interface ChatPanelProps extends DeliveryActions {
+  loadState?: 'idle' | 'loading' | 'ready' | 'error';
+  onRetryLoad?: () => void;
+  isComposing?: boolean;
+  canSend?: boolean;
   activeConversationId: string;
   activeConversation?: ConversationSummary;
   activeName: string;
   activeAvatar?: string;
   activeSubtitle?: string;
   isGroupConversation: boolean;
+  groupMembers?: GroupMember[];
+  contacts?: Contact[];
   headerLeading?: React.ReactNode;
   messages: Message[];
   hasMoreHistory: boolean;
@@ -22,19 +40,40 @@ interface ChatPanelProps {
   statusMsg: string;
   loadError: string;
   showDisconnectBanner?: boolean;
-  text: string;
-  attachFile: File | null;
+  onReconnectAccount?: (accountId?: string) => void;
+  workspaceAccountId?: string;
   sending: boolean;
   typingUsers: string[];
   detailsOpen: boolean;
   onScroll: (e: React.UIEvent<HTMLDivElement>) => void;
+  onLoadOlder?: () => Promise<void>;
   onTextChange: (text: string) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onCompositionStart?: () => void;
+  onCompositionEnd?: () => void;
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
   onSend: (e: React.FormEvent) => void;
   onAttachFile: (file: File | null) => void;
   onClearFile: () => void;
   onToggleDetails: () => void;
-  onReactMessage: (message: Message, reaction: { emoji: string; type: number }) => void;
+  onReactMessage: (message: Message, reaction: MessageReactionOption) => void;
+  onUpdateRestriction?: (isRestricted: boolean) => Promise<void>;
+  onToggleMute?: (action: 'mute' | 'unmute') => Promise<void>;
+}
+
+function formatDateDivider(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return '';
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return 'Hôm nay';
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return 'Hôm qua';
+    return d.toLocaleDateString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return '';
+  }
 }
 
 export function ChatPanel({
@@ -44,6 +83,8 @@ export function ChatPanel({
   activeAvatar,
   activeSubtitle,
   isGroupConversation,
+  groupMembers,
+  contacts,
   headerLeading,
   messages,
   hasMoreHistory,
@@ -52,56 +93,281 @@ export function ChatPanel({
   statusMsg,
   loadError,
   showDisconnectBanner,
-  text,
-  attachFile,
+  onReconnectAccount,
+  workspaceAccountId,
   sending,
   typingUsers,
   detailsOpen,
   onScroll,
+  onLoadOlder,
   onTextChange,
   onKeyDown,
+  onCompositionStart,
+  onCompositionEnd,
+  textareaRef,
   onSend,
   onAttachFile,
   onClearFile,
   onToggleDetails,
   onReactMessage,
+  onUpdateRestriction,
+  onToggleMute,
+  loadState, onRetryLoad, isComposing, canSend = true,
+  onRetryMessage, onQueryMessage, onCancelMessage, onRestoreDraft,
 }: ChatPanelProps) {
+  const text = useComposerStore((s) => s.text);
+  const attachFile = useComposerStore((s) => s.attachFile);
+  const missingFileName = useComposerStore((s) => s.missingFileName);
+  const replyingTo = useComposerStore((s) => s.replyingTo);
+  const composerKey = useComposerStore(s => s.activeKey);
+  const attachments = useComposerStore(s => s.attachments);
+  const batch = useComposerStore(s => s.batch);
+  const attachmentInput = useAttachmentInput(composerKey);
+
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionPos, setMentionPos] = useState<number>(-1);
+  const [mentionIndex, setMentionIndex] = useState<number>(0);
+
+  const mentionCandidates = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    const list: Array<{ uid: string; displayName: string; avatar?: string; isAll?: boolean }> = [];
+
+    if (isGroupConversation) {
+      if ('all'.includes(q) || 'tất cả'.includes(q) || q === '') {
+        list.push({ uid: '-1', displayName: 'All (Cả nhóm)', isAll: true });
+      }
+
+      const seenUids = new Set<string>();
+      const contactMap = new Map((contacts || []).map((c) => [c.userId, c]));
+
+      // 1. Members from group metadata
+      if (groupMembers && groupMembers.length > 0) {
+        for (const m of groupMembers) {
+          if (!m.userId || seenUids.has(m.userId)) continue;
+          seenUids.add(m.userId);
+          const contact = contactMap.get(m.userId);
+          const name = m.displayName || contact?.displayName || contact?.zaloName || m.userId;
+          const avatar = m.avatar || contact?.avatar;
+          if (!q || name.toLowerCase().includes(q)) {
+            list.push({ uid: m.userId, displayName: name, avatar });
+          }
+        }
+      }
+
+      // 2. Participants extracted from loaded messages in the group
+      if (messages && messages.length > 0) {
+        for (const msg of messages) {
+          if (!msg.senderId || seenUids.has(msg.senderId)) continue;
+          seenUids.add(msg.senderId);
+          const contact = contactMap.get(msg.senderId);
+          const name = msg.senderName || contact?.displayName || contact?.zaloName || msg.senderId;
+          const avatar = msg.senderAvatar || contact?.avatar;
+          if (!q || name.toLowerCase().includes(q)) {
+            list.push({ uid: msg.senderId, displayName: name, avatar });
+          }
+        }
+      }
+    } else if (activeConversation) {
+      const name = activeConversation.title || activeConversation.threadId || 'Bạn chat';
+      if (!q || name.toLowerCase().includes(q)) {
+        list.push({ uid: activeConversation.threadId, displayName: name, avatar: activeConversation.avatar });
+      }
+    }
+    return list.slice(0, 10);
+  }, [mentionQuery, isGroupConversation, groupMembers, contacts, messages, activeConversation]);
+
+  const insertMention = useCallback((c: { uid: string; displayName: string; isAll?: boolean }) => {
+    if (mentionPos < 0) return;
+    const mentionTag = `@${c.displayName} `;
+    const before = text.slice(0, mentionPos);
+    const after = text.slice(mentionPos + 1 + (mentionQuery?.length || 0));
+    const newText = before + mentionTag + after;
+
+    const currentMentions = useComposerStore.getState().mentions || [];
+    const newMention: import('@/types').MessageMention = {
+      pos: mentionPos,
+      len: mentionTag.length - 1,
+      uid: c.uid,
+      type: c.isAll ? 1 : 0,
+    };
+    useComposerStore.getState().setMentions([...currentMentions, newMention]);
+    onTextChange(newText);
+    setMentionQuery(null);
+    setMentionIndex(0);
+
+    setTimeout(() => {
+      if (textareaRef?.current) {
+        const nextPos = mentionPos + mentionTag.length;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(nextPos, nextPos);
+      }
+    }, 0);
+  }, [mentionPos, mentionQuery, text, onTextChange, textareaRef]);
+
+  const handleComposerTextChange = (val: string) => {
+    onTextChange(val);
+    // Keep mentions clean and synchronized with text edits
+    const currentMentions = useComposerStore.getState().mentions;
+    if (currentMentions && currentMentions.length > 0) {
+      if (!val.trim()) {
+        useComposerStore.getState().setMentions([]);
+      } else {
+        const filtered = currentMentions.filter((m) => m.pos >= 0 && (m.pos + m.len) <= val.length && val.charAt(m.pos) === '@');
+        if (filtered.length !== currentMentions.length) {
+          useComposerStore.getState().setMentions(filtered);
+        }
+      }
+    }
+    const cursorPos = textareaRef?.current?.selectionStart ?? val.length;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const lastAtIdx = textBeforeCursor.lastIndexOf('@');
+    if (lastAtIdx >= 0 && (lastAtIdx === 0 || /\s/.test(textBeforeCursor[lastAtIdx - 1]))) {
+      const q = textBeforeCursor.slice(lastAtIdx + 1);
+      if (!q.includes('\n') && q.length <= 20) {
+        setMentionQuery(q);
+        setMentionPos(lastAtIdx);
+        setMentionIndex(0);
+        return;
+      }
+    }
+    setMentionQuery(null);
+  };
+
+  const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionQuery !== null && mentionCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        insertMention(mentionCandidates[mentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+    onKeyDown(e);
+  };
+
+  const handleReplyMessage = (msg: Message) => {
+    useComposerStore.getState().setReplyingTo(msg);
+    textareaRef?.current?.focus();
+  };
+  const [draftPreview, setDraftPreview] = useState<string>();
+  useEffect(() => {
+    if (!attachFile?.type.startsWith('image/')) { setDraftPreview(undefined); return; }
+    const url = URL.createObjectURL(attachFile);
+    setDraftPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [attachFile]);
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const prevConversationRef = useRef(activeConversationId);
-  const observerRef = useRef<ResizeObserver | null>(null);
-  const observerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const userScrolledUpRef = useRef(false);
+  const viewKey = JSON.stringify([workspaceAccountId, activeConversationId]);
+  const prevConversationRef = useRef(viewKey);
+  const userInteractedScrollRef = useRef(false);
+  const isAutoScrollingRef = useRef(false);
+  const [showScrollBottomButton, setShowScrollBottomButton] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const olderPendingRef = useRef(false);
+  const [olderPending, setOlderPending] = useState(false);
+  const requestOlder = async () => {
+    if (!onLoadOlder || olderPendingRef.current || loadingOlder || syncingHistory || !hasMoreHistory) return;
+    olderPendingRef.current = true;
+    setOlderPending(true);
+    userInteractedScrollRef.current = true;
+    try { await onLoadOlder(); }
+    finally { olderPendingRef.current = false; setOlderPending(false); }
+  };
+  const scrollSnapshot = useRef({ height: 0, top: 0, first: '', ids: new Set<string>(), anchor: '', offset: 0, inner: '', innerOffset: 0 });
+  const captureAnchor = (el: HTMLDivElement) => {
+    const { top, bottom } = el.getBoundingClientRect();
+    const node = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]')).find((item) => item.getBoundingClientRect().bottom > top);
+    const visible = node ? Array.from(node.querySelectorAll<HTMLElement>('[data-content-anchor]')).filter(item => {
+      const rect = item.getBoundingClientRect();
+      return rect.height > 0 && rect.bottom > top && rect.top < bottom;
+    }) : [];
+    // Prefer an element starting inside the viewport over a trailing sliver of a
+    // resized tile. If the viewport is inside a large tile/caption, keep that one.
+    const inner = visible.find(item => item.getBoundingClientRect().top >= top) || visible[0];
+    return { anchor: node?.dataset.messageId || '', offset: node ? node.getBoundingClientRect().top - top : 0,
+      inner: inner?.dataset.contentAnchor || '', innerOffset: inner ? inner.getBoundingClientRect().top - top : 0 };
+  };
 
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
-  const lightboxImages = useMemo<LightboxImage[]>(() => {
-    const result: LightboxImage[] = [];
-    for (const msg of messages) {
-      const att = msg.attachments?.[0];
-      const imgUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
-      if (imgUrl && isImageAttachment(msg, att?.fileName, att?.mimeType)) {
-        result.push({ url: imgUrl, senderName: msg.senderName });
+  const albumRows = useMemo(() => selectAlbumRows(messages, workspaceAccountId || activeConversation?.accountId || ''), [messages, workspaceAccountId, activeConversation?.accountId]);
+  // Sender grouping is cosmetic only; album membership is decided by the selector.
+  const groupedMessages = useMemo<MessageGroupItem[]>(() => {
+    const list: MessageGroupItem[] = [];
+    let lastDate = '';
+
+    for (let i = 0; i < albumRows.length; i++) {
+      const current = albumRows[i].messages[0];
+      const previousMessages = albumRows[i - 1]?.messages;
+      const prev = previousMessages?.[previousMessages.length - 1];
+      const next = albumRows[i + 1]?.messages[0];
+
+      const currentDateStr = new Date(current.timestamp).toDateString();
+      let showDateDivider: string | undefined;
+      if (currentDateStr !== lastDate) {
+        showDateDivider = formatDateDivider(current.timestamp);
+        lastDate = currentDateStr;
       }
+
+      const isSameSenderAsPrev = Boolean(
+        prev &&
+        prev.direction === current.direction &&
+        current.senderId && prev.senderId === current.senderId &&
+        Math.abs(Date.parse(current.timestamp) - Date.parse(prev.timestamp)) < 5 * 60 * 1000
+      );
+
+      const isSameSenderAsNext = Boolean(
+        next &&
+        next.direction === current.direction &&
+        current.senderId && next.senderId === current.senderId &&
+        Math.abs(Date.parse(next.timestamp) - Date.parse(current.timestamp)) < 5 * 60 * 1000
+      );
+
+      list.push({
+        msg: current,
+        isFirstInGroup: !isSameSenderAsPrev || Boolean(showDateDivider),
+        isLastInGroup: !isSameSenderAsNext,
+        showDateDivider,
+      });
+    }
+
+    return list;
+  }, [albumRows]);
+
+  const lightboxEntries = useMemo(() => {
+    const result: (LightboxImage & { key: string })[] = [];
+    for (const row of albumRows) {
+      row.media.forEach(({ message: msg, attachment: att, index, key }) => {
+        const url = attachmentSource(msg, att, index);
+        if (url && att.type !== 'sticker' && isImageAttachment({ kind: att.type }, att.fileName, att.mimeType)) {
+          result.push({ key, url, senderName: msg.senderName });
+        }
+      });
     }
     return result;
-  }, [messages]);
+  }, [albumRows]);
+  const lightboxImages: LightboxImage[] = lightboxEntries;
+  const lightboxMsgIdToIndex = useMemo(() => new Map(lightboxEntries.map((entry, index) => [entry.key, index])), [lightboxEntries]);
 
-  const lightboxMsgIdToIndex = useMemo(() => {
-    const map = new Map<string, number>();
-    let idx = 0;
-    for (const msg of messages) {
-      const att = msg.attachments?.[0];
-      const imgUrl = att?.url ?? att?.thumbnailUrl ?? msg.imageUrl;
-      if (imgUrl && isImageAttachment(msg, att?.fileName, att?.mimeType)) {
-        map.set(msg.id, idx);
-        idx += 1;
-      }
-    }
-    return map;
-  }, [messages]);
+  useEffect(() => { setLightboxOpen(false); }, [viewKey]);
 
   const openLightbox = useCallback((messageId: string) => {
     const idx = lightboxMsgIdToIndex.get(messageId);
@@ -111,196 +377,436 @@ export function ChatPanel({
     }
   }, [lightboxMsgIdToIndex]);
 
-  useEffect(() => {
-    const container = messagesAreaRef.current;
-    if (!container) return;
+  // Robust bottom scrolling engine
+  const scrollToBottomInstant = useCallback(() => {
+    const el = messagesAreaRef.current;
+    if (!el) return;
+    isAutoScrollingRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    setShowScrollBottomButton(false);
+    setNewMessageCount(0);
+    requestAnimationFrame(() => {
+      if (el) el.scrollTop = el.scrollHeight;
+      setTimeout(() => { isAutoScrollingRef.current = false; }, 50);
+    });
+  }, []);
 
-    const isNewConversation = activeConversationId !== prevConversationRef.current;
-    prevConversationRef.current = activeConversationId;
+  const scrollToBottomSmooth = useCallback(() => {
+    const el = messagesAreaRef.current;
+    if (!el) return;
+    isAutoScrollingRef.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    setShowScrollBottomButton(false);
+    setNewMessageCount(0);
+    setTimeout(() => { isAutoScrollingRef.current = false; }, 300);
+  }, []);
+
+  // When switching conversation: reset state and snap to bottom
+  useLayoutEffect(() => {
+    const isNewConversation = viewKey !== prevConversationRef.current;
+    prevConversationRef.current = viewKey;
 
     if (isNewConversation) {
-      userScrolledUpRef.current = false;
+      userInteractedScrollRef.current = false;
+      scrollSnapshot.current = { height: 0, top: 0, first: '', ids: new Set(), anchor: '', offset: 0, inner: '', innerOffset: 0 };
+      setNewMessageCount(0);
+      scrollToBottomInstant();
     }
+  }, [viewKey, scrollToBottomInstant]);
 
-    const scrollToBottom = () => {
-      if (!messagesAreaRef.current || userScrolledUpRef.current) return;
-      messagesAreaRef.current.scrollTop = messagesAreaRef.current.scrollHeight;
-    };
-
-    const cleanObserver = () => {
-      if (observerRef.current) {
-        observerRef.current.disconnect();
-        observerRef.current = null;
-      }
-      if (observerTimeoutRef.current) {
-        clearTimeout(observerTimeoutRef.current);
-        observerTimeoutRef.current = null;
-      }
-    };
-
-    cleanObserver();
-
-    if (isNewConversation || messages.length > 0) {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(scrollToBottom);
-      });
-
-      observerRef.current = new ResizeObserver(() => {
-        scrollToBottom();
-      });
-      observerRef.current.observe(container);
-
-      observerTimeoutRef.current = setTimeout(() => {
-        cleanObserver();
-      }, 8000);
+  // When messages update: if user hasn't explicitly scrolled up, keep pinned to bottom
+  useLayoutEffect(() => {
+    const el = messagesAreaRef.current;
+    if (!el) return;
+    const old = scrollSnapshot.current;
+    const first = messages[0]?.localId || messages[0]?.id || '';
+    const added = messages.filter((m) => !old.ids.has(m.localId || m.id));
+    const ownSend = added.some((m) => m.delivery === 'queued' || m.delivery === 'sending');
+    const prepended = old.first && first !== old.first && messages.some((m) => (m.localId || m.id) === old.first);
+    if ((prepended || userInteractedScrollRef.current) && !ownSend) {
+      const inner = old.inner && Array.from(el.querySelectorAll<HTMLElement>('[data-content-anchor]')).find(node => node.dataset.contentAnchor === old.inner);
+      const anchor = inner || Array.from(el.querySelectorAll<HTMLElement>('[data-message-id], [data-album-anchor]')).find((node) => node.dataset.messageId === old.anchor || node.dataset.albumAnchor === old.anchor);
+      if (anchor) el.scrollTop += anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - (inner ? old.innerOffset : old.offset);
+      else el.scrollTop = old.top + el.scrollHeight - old.height;
+      if (!prepended && added.length) { setNewMessageCount((count) => count + added.length); setShowScrollBottomButton(true); }
     }
+    else if (ownSend || !userInteractedScrollRef.current) scrollToBottomInstant();
+    else if (added.length) { setNewMessageCount((count) => count + added.length); setShowScrollBottomButton(true); }
+    scrollSnapshot.current = { height: el.scrollHeight, top: el.scrollTop, first, ids: new Set(messages.map((m) => m.localId || m.id)), ...captureAnchor(el) };
+  }, [messages, scrollToBottomInstant]);
 
-    return cleanObserver;
-  }, [activeConversationId, messages]);
+  // Track real user scroll interaction
+  const handleUserWheelOrTouch = () => {
+    userInteractedScrollRef.current = true;
+  };
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const container = e.currentTarget;
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
-    if (!atBottom) {
-      userScrolledUpRef.current = true;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const atBottom = distanceFromBottom < 90;
+    scrollSnapshot.current.top = container.scrollTop;
+    scrollSnapshot.current.height = container.scrollHeight;
+    Object.assign(scrollSnapshot.current, captureAnchor(container));
+
+    if (atBottom) {
+      userInteractedScrollRef.current = false;
+      setShowScrollBottomButton(false);
+      setNewMessageCount(0);
+    } else if (userInteractedScrollRef.current && !isAutoScrollingRef.current) {
+      setShowScrollBottomButton(true);
     }
+
     onScroll(e);
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--background)] transition-colors">
       {!activeConversationId ? (
-        <div className="flex-1 flex items-center justify-center text-[#555] text-sm">
-          Chọn một cuộc trò chuyện để bắt đầu
+        <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-sm gap-2">
+          <div className="w-14 h-14 rounded-2xl bg-[var(--card)] border border-[var(--border)] shadow-xs flex items-center justify-center text-2xl">💬</div>
+          <span className="font-medium">Chọn một cuộc trò chuyện để bắt đầu</span>
         </div>
       ) : (
         <>
-          <div className="shrink-0 px-5 py-3.5 border-b border-[var(--border)] flex items-center gap-3">
+          {/* Header */}
+          <div className="shrink-0 px-5 py-3 border-b border-[var(--border)] flex items-center gap-3 bg-[var(--card)] shadow-2xs z-10 transition-colors">
             {headerLeading}
-            <Avatar className="w-9 h-9 text-sm shrink-0">
-              {activeAvatar ? <img src={activeAvatar} alt={activeName} className="w-full h-full object-cover rounded-full" /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] font-bold">
-                {getInitial(activeName)}
-              </AvatarFallback>
-            </Avatar>
+            {isGroupConversation ? (
+              <GroupAvatar
+                avatar={activeAvatar}
+                title={activeName}
+                members={groupMembers}
+                memberAvatars={activeConversation?.memberAvatars}
+                contacts={contacts}
+                size="md"
+              />
+            ) : (
+              <Avatar className="w-10 h-10 text-sm shrink-0 ring-1 ring-[var(--border)]">
+                {activeAvatar ? <img src={activeAvatar} alt={activeName} className="w-full h-full object-cover rounded-full" /> : null}
+                <AvatarFallback className="bg-gradient-to-br from-[#4f7aff] to-[#5fd4ff] text-[#0a1020] font-bold">
+                  {getInitial(activeName)}
+                </AvatarFallback>
+              </Avatar>
+            )}
             <button
               type="button"
               onClick={onToggleDetails}
-              className="min-w-0 flex-1 text-left rounded-lg px-1.5 py-1 -mx-1.5 hover:bg-white/4 transition-colors"
+              className="min-w-0 flex-1 text-left rounded-lg px-1.5 py-1 -mx-1.5 hover:bg-[var(--accent)]/50 transition-colors"
               title="Xem thông tin hội thoại"
             >
-              <div className="text-[15px] font-bold text-[#eee] truncate">{activeName}</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[15px] font-bold text-[var(--foreground)] truncate">{activeName}</span>
+                {/* Header Tag Badges */}
+                {Array.isArray(activeConversation?.labels) && activeConversation.labels.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    {activeConversation.labels.slice(0, 3).map((lbl) => (
+                      <span
+                        key={lbl.id}
+                        className="px-1.5 py-0.2 rounded text-[10px] font-medium text-white shadow-xs"
+                        style={{ backgroundColor: lbl.color || '#3b82f6' }}
+                      >
+                        {lbl.name}
+                      </span>
+                    ))}
+                    {activeConversation.labels.length > 3 && (
+                      <span className="text-[10px] text-muted-foreground font-semibold">+{activeConversation.labels.length - 3}</span>
+                    )}
+                  </div>
+                )}
+                {/* Note Indicator */}
+                {activeConversation?.notes && (
+                  <span className="text-xs text-amber-500" title="Có ghi chú khách hàng">📝</span>
+                )}
+                {/* Restriction Indicator */}
+                {activeConversation?.isRestricted && (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-red-500/15 text-red-400 border border-red-500/30 font-semibold" title="Cuộc trò chuyện này đang bị khóa đối với nhân viên thường">
+                    🔒 Riêng tư
+                  </span>
+                )}
+              </div>
               {typingUsers.length > 0 ? (
-                <div className="text-xs text-[#7fa8ff] animate-pulse mt-0.5">
+                <div className="text-xs text-blue-500 animate-pulse mt-0.5 font-medium">
                   {typingUsers.length === 1
                     ? `${typingUsers[0]} đang nhập...`
                     : `${typingUsers.length} người đang nhập...`}
                 </div>
               ) : (
-                <div className="text-xs text-muted-foreground mt-0.5 truncate">{activeSubtitle || activeConversationId}</div>
+                <div className="text-xs text-muted-foreground mt-0.5 truncate">{activeSubtitle || '👤 Khách hàng Zalo'}</div>
               )}
             </button>
+            {onUpdateRestriction && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => onUpdateRestriction(!activeConversation?.isRestricted)}
+                className={`text-xs shrink-0 h-8 px-2.5 rounded-lg border ${
+                  activeConversation?.isRestricted
+                    ? 'bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20'
+                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-[var(--accent)]'
+                }`}
+                title={activeConversation?.isRestricted ? 'Nhấn để mở công khai cho nhân viên' : 'Nhấn để khóa (chỉ Quản lý xem được)'}
+              >
+                <span>{activeConversation?.isRestricted ? '🔒 Đã khóa' : '🔓 Khóa'}</span>
+              </Button>
+            )}
+            {onToggleMute && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => onToggleMute(activeConversation?.isMuted ? 'unmute' : 'mute')}
+                className={`text-xs shrink-0 h-8 px-2.5 rounded-lg border transition-all ${
+                  activeConversation?.isMuted
+                    ? 'bg-amber-500/15 text-amber-500 border-amber-500/40 hover:bg-amber-500/25'
+                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-[var(--accent)]'
+                }`}
+                title={activeConversation?.isMuted ? 'Đang tắt thông báo (Bấm để bật lại)' : 'Tắt thông báo cuộc trò chuyện này (🔕)'}
+              >
+                <span>{activeConversation?.isMuted ? '🔕 Đang tắt chuông' : '🔔 Chuông'}</span>
+              </Button>
+            )}
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={onToggleDetails}
-              className={`text-xs shrink-0 h-7 ${detailsOpen ? 'text-[#7fa8ff]' : 'text-muted-foreground hover:text-[#7fa8ff]'}`}
+              className={`text-xs shrink-0 h-8 px-3 rounded-lg border border-transparent ${detailsOpen ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 font-semibold border-blue-500/20' : 'text-muted-foreground hover:text-foreground hover:bg-[var(--accent)]'}`}
             >
               {detailsOpen ? 'Ẩn info' : 'Info'}
             </Button>
           </div>
 
+          {/* Banners */}
           {(statusMsg || loadError) && (
-            <div className={`shrink-0 px-5 py-2.5 text-[13px] ${loadError ? 'bg-[rgba(255,80,80,0.1)] text-[#ff9a9a]' : 'bg-[rgba(60,200,120,0.1)] text-[#6fe0a0]'}`}>
+            <div className={`shrink-0 px-5 py-2 text-xs font-medium ${loadError ? 'bg-rose-500/10 text-rose-300 border-b border-rose-500/20' : 'bg-emerald-500/10 text-emerald-300 border-b border-emerald-500/20'}`}>
               {loadError || statusMsg}
+              {loadState === 'error' && <button type="button" className="underline ml-3 p-2" onClick={onRetryLoad}>Tải lại</button>}
             </div>
           )}
           {showDisconnectBanner && (
-            <div className="shrink-0 px-5 py-2.5 text-[13px] bg-[rgba(255,160,60,0.1)] text-[#ffa03c] flex items-center justify-between">
-              <span>⚠️ Tài khoản mất kết nối. Vào <a href="/admin" className="underline">Admin</a> để quét QR lại hoặc liên hệ master.</span>
+            <div className="shrink-0 px-5 py-2.5 text-xs bg-amber-500/10 text-amber-300 border-b border-amber-500/20 flex items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="inline-block w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                <span className="truncate font-medium">Tài khoản mất kết nối Zalo — Hệ thống đang tự động kết nối lại hoặc cần xác thực lại.</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {onReconnectAccount && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => onReconnectAccount(workspaceAccountId || activeConversation?.accountId)}
+                    className="h-6.5 px-2.5 text-[11px] bg-amber-500 hover:bg-amber-600 text-black font-semibold shrink-0 gap-1"
+                  >
+                    <span>⚡ Kết nối lại</span>
+                  </Button>
+                )}
+                <a href="/admin" className="underline text-[11px] shrink-0 text-amber-200 hover:text-white">Admin</a>
+              </div>
             </div>
           )}
 
-          <div className="flex-1 min-h-0 overflow-visible px-4 pt-4 pb-10">
+          {/* Messages Viewport */}
+          <div className="flex-1 min-h-0 relative">
             <div
               ref={messagesAreaRef}
-              className="h-full overflow-y-auto pr-1"
+              className="h-full overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-0.5"
+              style={{ overflowAnchor: 'none' }}
               onScroll={handleScroll}
+              onWheel={handleUserWheelOrTouch}
+              onTouchMove={handleUserWheelOrTouch}
+              onPointerDown={handleUserWheelOrTouch}
             >
               {hasMoreHistory && (
-                <div className="mx-auto w-fit px-2.5 py-1.5 text-xs text-[#7b8597] bg-white/4 border border-white/6 rounded-full">
-                  {loadingOlder || syncingHistory ? 'Đang tải thêm tin cũ...' : 'Kéo lên để tải thêm tin cũ'}
+                <div className="mx-auto my-2 px-3 py-1 text-[11px] text-muted-foreground bg-white/5 border border-white/5 rounded-full select-none">
+                  {onLoadOlder ? <button type="button" className="p-2 underline disabled:opacity-60" disabled={olderPending || loadingOlder || syncingHistory}
+                    onClick={() => void requestOlder()}>{olderPending || loadingOlder || syncingHistory ? 'Đang tải thêm tin cũ...' : 'Tải thêm tin cũ'}</button>
+                    : loadingOlder || syncingHistory ? 'Đang tải thêm tin cũ...' : 'Kéo lên để tải thêm tin cũ'}
                 </div>
               )}
-              {messages.length === 0 && !hasMoreHistory && (
-                <div className="flex items-center justify-center h-full text-[#555] text-sm mt-8">
-                  Chưa có tin nhắn. Hãy gửi tin nhắn đầu tiên!
+
+              {loadState === 'loading' && <div role="status" className="text-xs text-slate-400 text-center p-3">Đang tải tin nhắn…</div>}
+              {messages.length === 0 && loadState === 'ready' && (
+                <div className="flex flex-col items-center justify-center my-auto py-12 text-center text-muted-foreground text-sm">
+                  <div className="text-3xl mb-2">👋</div>
+                  <div>Chưa có tin nhắn nào.</div>
+                  <div className="text-xs opacity-70 mt-0.5">Gửi tin nhắn đầu tiên để bắt đầu hội thoại!</div>
                 </div>
               )}
-              <div className="flex flex-col gap-1.5">
-                {messages.map((m) => (
-                  <MessageBubble key={m.id} msg={m} isGroup={isGroupConversation} onReact={onReactMessage} onOpenLightbox={openLightbox} />
-                ))}
-              </div>
-              <div ref={messagesEndRef} />
+
+              {groupedMessages.map((item, rowIndex) => {
+                const row = albumRows[rowIndex];
+                const senderContact = item.msg.senderId && contacts ? contacts.find((c) => c.userId === item.msg.senderId) : undefined;
+                const resolvedSenderAvatar = item.msg.senderAvatar || senderContact?.avatar;
+
+                return (
+                  <div key={row.key} data-message-id={item.msg.localId || item.msg.id} className="relative flex flex-col">
+                    {row.album && row.messages.slice(1).map(message => <span key={message.localId || message.id} data-album-anchor={message.localId || message.id} className="absolute top-0 h-px w-px" />)}
+                    {item.showDateDivider && (
+                      <div className="flex items-center justify-center my-4 select-none">
+                        <span className="text-[11px] font-medium tracking-wide uppercase px-3 py-0.5 rounded-full bg-white/5 border border-white/5 text-[#94a3b8] shadow-sm">
+                          {item.showDateDivider}
+                        </span>
+                      </div>
+                    )}
+                    {row.album ? <AlbumMessage row={row} isGroup={isGroupConversation} hasMoreHistory={hasMoreHistory}
+                      onReply={handleReplyMessage} onReact={onReactMessage} onOpenLightbox={openLightbox}
+                      onRetryMessage={onRetryMessage} onQueryMessage={onQueryMessage} onCancelMessage={onCancelMessage} onRestoreDraft={onRestoreDraft} /> : <MessageBubble
+                      msg={item.msg}
+                      isGroup={isGroupConversation}
+                      isFirstInGroup={item.isFirstInGroup}
+                      isLastInGroup={item.isLastInGroup}
+                      senderAvatar={resolvedSenderAvatar}
+                      onReact={onReactMessage}
+                      onReply={handleReplyMessage}
+                      onOpenLightbox={openLightbox}
+                      onRetryMessage={onRetryMessage}
+                      onQueryMessage={onQueryMessage}
+                      onCancelMessage={onCancelMessage}
+                      onRestoreDraft={onRestoreDraft}
+                    />}
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} className="h-1 shrink-0" />
             </div>
+
+            {/* Jump to bottom pill */}
+            {showScrollBottomButton && (
+              <button
+                type="button"
+                onClick={scrollToBottomSmooth}
+                className="absolute right-6 bottom-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1e293b]/95 border border-white/10 text-xs text-white shadow-xl backdrop-blur-sm hover:bg-[#334155] active:scale-95 transition-all animate-in fade-in zoom-in duration-150"
+              >
+                <span>↓ {newMessageCount ? `${newMessageCount} tin nhắn mới` : 'Mới nhất'}</span>
+              </button>
+            )}
           </div>
 
-          <form className="shrink-0 p-3.5 pb-4 border-t border-[var(--border)] flex flex-col gap-2.5 bg-[var(--card)]" onSubmit={onSend}>
-            {attachFile && (
-              <div className="flex items-center gap-2 px-2.5 py-1.5 bg-[rgba(79,122,255,0.1)] border border-[rgba(79,122,255,0.25)] rounded-[10px] text-xs text-[#7fa8ff]">
-                <span>📎 {attachFile.name} ({formatSize(attachFile.size)})</span>
-                <button type="button" onClick={onClearFile} className="ml-auto bg-none border-none text-[#ff8888] cursor-pointer text-sm p-0 leading-none">✕</button>
+          {/* Composer */}
+          <form className="relative shrink-0 min-w-0 p-2 sm:p-3 border-t border-border flex flex-col gap-2 bg-card shadow-lg" onSubmit={onSend}
+            onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
+            onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); attachmentInput.add(Array.from(event.dataTransfer.files)); } }}
+            onPaste={event => { const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/')); if (files.length) { event.preventDefault(); attachmentInput.add(files); } }}>
+            <ComposerAttachments scope={composerKey} />
+            {attachmentInput.error && <p role="status" className="text-xs text-amber-600">{attachmentInput.error}</p>}
+            {/* Mention Autocomplete Dropdown */}
+            {mentionQuery !== null && mentionCandidates.length > 0 && (
+              <div className="absolute bottom-full mb-2 left-4 max-h-52 w-72 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl z-50 p-1 flex flex-col gap-0.5 animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-2.5 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                  Thành viên ({mentionCandidates.length})
+                </div>
+                {mentionCandidates.map((c, i) => (
+                  <button
+                    key={c.uid}
+                    type="button"
+                    onClick={() => insertMention(c)}
+                    className={cn(
+                      'flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors cursor-pointer',
+                      i === mentionIndex
+                        ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 font-semibold'
+                        : 'hover:bg-[var(--accent)] text-[var(--foreground)]'
+                    )}
+                  >
+                    <Avatar className="w-5 h-5 text-[9px]">
+                      {c.avatar ? <img src={c.avatar} alt={c.displayName} className="w-full h-full object-cover rounded-full" /> : null}
+                      <AvatarFallback className="bg-blue-600 text-white font-bold text-[9px]">{getInitial(c.displayName)}</AvatarFallback>
+                    </Avatar>
+                    <span className="truncate">{c.displayName}</span>
+                  </button>
+                ))}
               </div>
             )}
-            <div className="flex gap-2 items-end">
-              <Textarea
-                placeholder={isGroupConversation ? 'Nhập tin nhắn vào nhóm...' : 'Nhập tin nhắn...'}
-                value={text}
-                onChange={(e) => onTextChange(e.target.value)}
-                onKeyDown={onKeyDown}
-                rows={1}
-                className="min-h-[58px] max-h-[160px] resize-none flex-1"
-              />
-              <div className="flex gap-1.5 shrink-0">
-                <Button
+
+            {!canSend && <div className="text-xs text-amber-500 font-medium">Tài khoản cần kết nối và quyền gửi tin nhắn.</div>}
+            {missingFileName && !attachFile && <div role="status" className="text-xs text-amber-500">Chọn lại tệp đính kèm: {missingFileName}
+              <button type="button" className="underline p-2" onClick={onClearFile}>Bỏ tệp</button>
+            </div>}
+
+            {/* Replying Banner */}
+            {replyingTo && (
+              <div className="flex items-center justify-between px-3 py-2 bg-blue-500/10 border border-blue-500/25 rounded-xl text-xs text-[var(--foreground)] animate-in fade-in">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-blue-500 font-bold text-sm shrink-0">↩️</span>
+                  <div className="min-w-0">
+                    <div className="font-semibold text-blue-600 dark:text-blue-400 truncate">
+                      Đang trả lời {replyingTo.senderName || (replyingTo.isSelf ? 'chính bạn' : 'tin nhắn')}
+                    </div>
+                    <div className="text-muted-foreground truncate text-[11px] mt-0.5">
+                      {messagePreview(replyingTo)}
+                    </div>
+                  </div>
+                </div>
+                <button
                   type="button"
-                  variant="ghost"
-                  size="icon"
-                  title="Đính kèm ảnh/file"
-                  onClick={() => fileInputRef.current?.click()}
-                  className={attachFile ? 'border-[rgba(79,122,255,0.6)] text-[#7fa8ff] bg-[rgba(79,122,255,0.12)]' : ''}
+                  onClick={() => useComposerStore.getState().setReplyingTo(null)}
+                  className="text-muted-foreground hover:text-foreground p-1 text-xs shrink-0 cursor-pointer"
+                  title="Hủy trả lời"
                 >
-                  📎
-                </Button>
-                <Button
-                  type="submit"
-                  size="icon"
-                  disabled={sending || (!text.trim() && !attachFile)}
-                  title="Gửi"
-                >
-                  ➤
-                </Button>
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {attachFile && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/25 rounded-xl text-xs text-blue-600 dark:text-blue-400 animate-in fade-in">
+                {draftPreview && <img src={draftPreview} alt="Xem trước ảnh đính kèm" className="w-12 h-12 object-contain rounded" />}
+                <span className="min-w-0 truncate font-medium">📎 {attachFile.name} ({formatSize(attachFile.size)})</span>
+                <button type="button" aria-label="Bỏ tệp đính kèm" onClick={onClearFile} className="ml-auto text-rose-500 hover:text-rose-400 p-2">✕</button>
+              </div>
+            )}
+            <div className="flex flex-col gap-2 min-w-0">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.length) attachmentInput.add(Array.from(e.target.files));
+                  e.target.value = '';
+                }}
+              />
+              <Textarea
+                ref={textareaRef as any}
+                placeholder={isGroupConversation ? 'Nhập tin nhắn vào nhóm (gõ @ để tag tên)...' : 'Nhập tin nhắn...'}
+                aria-label="Nội dung tin nhắn"
+                value={text}
+                onChange={(e) => handleComposerTextChange(e.target.value)}
+                onKeyDown={handleComposerKeyDown}
+                onCompositionStart={onCompositionStart}
+                onCompositionEnd={onCompositionEnd}
+                rows={1}
+                className="min-h-[42px] max-h-[140px] resize-none flex-1 rounded-xl bg-[var(--muted)] border-[var(--border)] focus:border-blue-500 text-sm py-2.5 px-3.5 leading-relaxed text-[var(--foreground)] placeholder:text-muted-foreground"
+              />
+
+              <div role="group" aria-label="Công cụ soạn tin" className="flex items-center min-w-0">
+              <div className="order-1"><ComposerLocalTools scope={composerKey} textareaRef={textareaRef} disabled={false} /></div>
+              <Button type="button" variant="ghost" size="icon-lg" className="order-2 rounded-xl" aria-label="Đính kèm ảnh" title="Đính kèm ảnh" onClick={() => { if (fileInputRef.current) { fileInputRef.current.accept = 'image/*'; fileInputRef.current.click(); } }}><ImagePlus /></Button>
+              <Button type="button" variant="ghost" size="icon-lg" className="order-3 rounded-xl" aria-label="Đính kèm tệp" title="Đính kèm tệp" onClick={() => { if (fileInputRef.current) { fileInputRef.current.accept = ''; fileInputRef.current.click(); } }}><Paperclip /></Button>
+              <ComposerExtendedTools key={composerKey} scope={composerKey} messages={messages} addFiles={attachmentInput.add} disabled={!canSend} />
+              <div className="order-5"><ComposerLocalTools kind="templates" scope={composerKey} textareaRef={textareaRef} disabled={false} /></div>
+              <Button
+                type="submit"
+                aria-label="Gửi" title="Gửi"
+                disabled={!canSend || isComposing || (!text.trim() && !attachFile && !attachments.length) || Boolean(missingFileName && !attachFile) || attachments.some(item => item.upload === 'uploading')}
+                className="order-7 ml-auto h-10 w-10 p-0 rounded-xl bg-primary text-primary-foreground shrink-0 disabled:opacity-40"
+              >
+                <Send />
+              </Button>
               </div>
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar,.txt,.mp4"
-              className="hidden"
-              onChange={(e) => onAttachFile(e.target.files?.[0] ?? null)}
-            />
           </form>
+
+          {/* Lightbox for large images */}
+          {lightboxOpen && (
+            <Lightbox
+              open={lightboxOpen}
+              images={lightboxImages}
+              index={lightboxIndex}
+              onClose={() => setLightboxOpen(false)}
+            />
+          )}
         </>
-      )}
-      {lightboxImages.length > 0 && (
-        <Lightbox
-          images={lightboxImages}
-          index={lightboxIndex}
-          open={lightboxOpen}
-          onClose={() => setLightboxOpen(false)}
-        />
       )}
     </div>
   );
