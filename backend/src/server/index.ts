@@ -104,7 +104,10 @@ async function main() {
 
   app.use(express.json({ limit: '12mb' }));
   app.use((_req, res, next) => {
-    res.setHeader('Cache-Control', 'no-store');
+    // API and Dynamic routes default to no-store
+    if (_req.path.startsWith('/api') || _req.path.startsWith('/ws')) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -254,11 +257,31 @@ async function main() {
   app.use('/api/bot', createBotApiRouter(accountManager, difyBotService, loginStore));
 
   if (fs.existsSync(frontendDir)) {
-    app.use(express.static(frontendDir));
+    // Assets with content hash -> cache immutable for 1 year
+    app.use('/assets', express.static(path.join(frontendDir, 'assets'), {
+      maxAge: '1y',
+      immutable: true,
+    }));
+
+    // Other static files
+    app.use(express.static(frontendDir, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        }
+      },
+    }));
+
+    // SPA fallback -> ALWAYS send index.html with no-cache headers
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api') || req.path.startsWith('/media') || req.path.startsWith('/ws')) {
         return next();
       }
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(frontendDir, 'index.html'));
     });
   }
