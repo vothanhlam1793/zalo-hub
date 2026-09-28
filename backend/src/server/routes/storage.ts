@@ -50,7 +50,7 @@ export function createStorageRouter(
   router.get('/admin/storage/oauth/google-url', requireAuth, requireAdmin, async (_req: Request, res: Response) => {
     try {
       const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID || '';
-      const redirectUri = 'http://localhost:53682/callback';
+      const redirectUri = process.env.GOOGLE_DRIVE_REDIRECT_URI || 'http://localhost:53682/callback';
       const scopes = [
         'https://www.googleapis.com/auth/drive.appdata',
         'https://www.googleapis.com/auth/drive',
