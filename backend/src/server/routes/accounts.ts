@@ -52,14 +52,30 @@ export function createAccountsRouter(
     }
   };
   const dispatch = async (input: NormalizedSend, lifecycle: SendLifecycle) => {
+    logger.info('dispatch_starting', { accountId: input.accountId, conversationId: input.conversationId, clientRequestId: lifecycle.clientRequestId });
     const targetRuntime = await getRuntimeForAccount(input.accountId, accountManager);
     if (!targetRuntime.isSessionActive()) throw new SendFailure('SESSION_UNAVAILABLE', 'Phiên Zalo chưa sẵn sàng.', true, 409);
-    const result = input.attachment
-      ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text, mentions: input.mentions, quoteMessageId: input.quoteMessageId }, lifecycle)
-      : await targetRuntime.sendText(input.conversationId, input.text, {
-          mentions: input.mentions,
-          quoteMessageId: input.quoteMessageId,
-        }, lifecycle);
+    let result;
+    try {
+      result = input.attachment
+        ? await targetRuntime.sendAttachment(input.conversationId, { ...input.attachment, caption: input.text, mentions: input.mentions, quoteMessageId: input.quoteMessageId }, lifecycle)
+        : await targetRuntime.sendText(input.conversationId, input.text, {
+            mentions: input.mentions,
+            quoteMessageId: input.quoteMessageId,
+          }, lifecycle);
+      logger.info('dispatch_succeeded', { accountId: input.accountId, conversationId: input.conversationId, clientRequestId: lifecycle.clientRequestId });
+    } catch (err: any) {
+      logger.error('dispatch_failed', {
+        accountId: input.accountId,
+        conversationId: input.conversationId,
+        clientRequestId: lifecycle.clientRequestId,
+        error: err?.message || String(err),
+        stack: err?.stack,
+        code: err?.code,
+        name: err?.name
+      });
+      throw err;
+    }
     
     // Background async broadcast — does not block or add latency to HTTP Send response
     setImmediate(() => {

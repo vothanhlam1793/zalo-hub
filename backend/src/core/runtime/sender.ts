@@ -169,12 +169,16 @@ export class GoldSender {
       msg: text,
     };
     if (options?.mentions && options.mentions.length > 0) {
-      sendPayload.mentions = options.mentions.map((m) => ({
-        pos: m.pos,
-        len: m.len,
-        uid: String(m.uid),
-        type: m.type,
-      }));
+      // Backend guard: Only allow mentions that strictly fit inside text length
+      const validMentions = options.mentions.filter(m => typeof m.pos === 'number' && typeof m.len === 'number' && m.pos >= 0 && m.len > 0 && (m.pos + m.len) <= text.length);
+      if (validMentions.length > 0) {
+        sendPayload.mentions = validMentions.map((m) => ({
+          pos: m.pos,
+          len: m.len,
+          uid: String(m.uid),
+          type: m.type,
+        }));
+      }
     }
     if (quotePayload) {
       sendPayload.quote = quotePayload;

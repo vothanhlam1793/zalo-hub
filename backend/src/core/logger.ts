@@ -64,5 +64,10 @@ export class GoldLogger {
     ].filter((item) => item !== undefined);
 
     appendFileSync(this.filePath, `${lines.join('\n')}\n`, 'utf8');
+    if (level === 'ERROR') {
+      console.error(`[${level}] ${message}`, details ? JSON.stringify(details) : '');
+    } else {
+      console.log(`[${level}] ${message}`, details ? JSON.stringify(details) : '');
+    }
   }
 }

@@ -5,6 +5,17 @@ export async function lockConversation(db: Knex.Transaction, account: string, co
 }
 /** Call under lockConversation, in the same transaction as the reservation. Scope is account/conversation, not user. */
 export async function assertConversationClear(db: Knex.Transaction, account: string, conversation: string, ownSend?: string, ownBatch?: string) {
+  // Auto-expire requests stuck in sending/unknown older than 60 seconds so conversations never stay blocked indefinitely.
+  await db('send_requests')
+    .where({ account_id: account, conversation_id: conversation })
+    .whereIn('status', ['sending', 'unknown'])
+    .where('updated_at', '<', db.raw("NOW() - INTERVAL '60 seconds'"))
+    .update({
+      status: 'failed',
+      error_code: 'BARRIER_TIMEOUT_EXPIRED',
+      updated_at: db.fn.now()
+    });
+
   const sends = db('send_requests').where({ account_id: account, conversation_id: conversation }).whereIn('status', ['sending', 'unknown']);
   if (ownSend) sends.whereNot('client_request_id', ownSend);
   const actions = db('composer_actions').where({ account_id: account, conversation_id: conversation }).whereIn('status', ['pending', 'unknown']);

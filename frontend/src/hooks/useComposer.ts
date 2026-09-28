@@ -34,8 +34,16 @@ export function useComposer() {
       kind: draft.replyingTo.kind,
     } : undefined;
 
-    submitMessage(key, draft.text.trim(), draft.attachFile || undefined, {
-      mentions: draft.mentions,
+    const text = draft.text.trim();
+    // Sanitize mentions to make sure they strictly fit inside the current text
+    const validMentions = draft.mentions?.filter((m) => {
+      if (typeof m.pos !== 'number' || typeof m.len !== 'number' || m.pos < 0 || m.len <= 0) return false;
+      if (m.pos + m.len > draft.text.length) return false;
+      return draft.text.charAt(m.pos) === '@';
+    });
+
+    submitMessage(key, text, draft.attachFile || undefined, {
+      mentions: validMentions?.length ? validMentions : undefined,
       quoteMessageId: draft.replyingTo?.id,
       quote,
     });

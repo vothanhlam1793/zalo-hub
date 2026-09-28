@@ -31,7 +31,7 @@ const rows = (key: string) => useChatStore.getState().byConversation[key]?.messa
 const queue = new ManualSendQueue((key) => {
   if (!conversationRecovery.ready(key) || actionRecovery.unresolved(key)) return true;
   const draft = useComposerStore.getState().drafts[key];
-  return unresolvedBatch(draft?.batch) || draft?.outbox?.some(e => unresolvedBatch(e.batch)) || rows(key).some((m) => m.delivery === 'unknown' || m.delivery === 'sending') || false;
+  return unresolvedBatch(draft?.batch) || draft?.outbox?.some(e => unresolvedBatch(e.batch)) || false;
 });
 const patch = (intent: Intent, data: Partial<Message>) => {
   if (chatSession.valid(intent.session)) useChatStore.getState().patchMessage(intent.key, intent.localId, data);
@@ -84,15 +84,21 @@ function poll(key: string, requestId: string) {
   const tick = async () => {
     if (!chatSession.valid(session)) { polling.delete(id); return; }
     const retry = await querySendStatus(key, requestId);
+    if (!retry) {
+      // Received 404 or terminal auth/validation error - stop polling immediately and do not overwrite to unknown.
+      polling.delete(id);
+      timers.delete(id);
+      return;
+    }
     const unresolved = rows(key).some((m) => m.clientRequestId === requestId && (m.delivery === 'unknown' || m.delivery === 'sending'));
-    if (retry && unresolved && Date.now() < deadline && chatSession.valid(session)) {
+    if (unresolved && Date.now() < deadline && chatSession.valid(session)) {
       timers.set(id, setTimeout(tick, 2_000));
     } else {
       polling.delete(id);
       timers.delete(id);
       if (chatSession.valid(session)) {
         const target = rows(key).find((m) => m.clientRequestId === requestId);
-        if (target && target.delivery !== 'sent') {
+        if (target && target.delivery !== 'sent' && target.delivery !== 'failed') {
           useChatStore.getState().patchMessage(key, target.localId || target.id, {
             delivery: 'unknown',
             retryable: false,
@@ -187,13 +193,15 @@ export function submitMessage(
 
 export function cancelQueued(key: string, message: Message) {
   if (message.composerBatchId) return;
-  if (!message.clientRequestId) return;
+  if (!message.clientRequestId && !message.localId && !message.id) return;
   const current = rows(key).find((m) => (m.localId || m.id) === (message.localId || message.id));
-  if (!current || current.delivery === 'sent' || current.delivery === 'sending' || current.delivery === 'unknown') return;
-  queue.cancel(key, message.clientRequestId);
-  const intent = intents.get(message.clientRequestId);
-  if (intent?.preview) revokeLocalMediaPreview(intent.preview);
-  intents.delete(message.clientRequestId);
+  if (!current || current.delivery === 'sent') return;
+  if (message.clientRequestId) {
+    queue.cancel(key, message.clientRequestId);
+    const intent = intents.get(message.clientRequestId);
+    if (intent?.preview) revokeLocalMediaPreview(intent.preview);
+    intents.delete(message.clientRequestId);
+  }
   useChatStore.getState().removeMessage(key, message.localId || message.id);
   void queue.resume(key);
 }

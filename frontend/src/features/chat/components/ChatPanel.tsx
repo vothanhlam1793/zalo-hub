@@ -207,6 +207,18 @@ export function ChatPanel({
 
   const handleComposerTextChange = (val: string) => {
     onTextChange(val);
+    // Keep mentions clean and synchronized with text edits
+    const currentMentions = useComposerStore.getState().mentions;
+    if (currentMentions && currentMentions.length > 0) {
+      if (!val.trim()) {
+        useComposerStore.getState().setMentions([]);
+      } else {
+        const filtered = currentMentions.filter((m) => m.pos >= 0 && (m.pos + m.len) <= val.length && val.charAt(m.pos) === '@');
+        if (filtered.length !== currentMentions.length) {
+          useComposerStore.getState().setMentions(filtered);
+        }
+      }
+    }
     const cursorPos = textareaRef?.current?.selectionStart ?? val.length;
     const textBeforeCursor = val.slice(0, cursorPos);
     const lastAtIdx = textBeforeCursor.lastIndexOf('@');
