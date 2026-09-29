@@ -58,7 +58,7 @@ export default function LoginPage() {
             </Button>
           </form>
           <p className="text-[11px] text-muted-foreground mt-3 text-center">
-            admin@zalohub.local / admin123
+            admin@zalohub.local / admin@123
           </p>
         </CardContent>
       </Card>

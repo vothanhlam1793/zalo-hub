@@ -293,10 +293,10 @@ async function main() {
     const existing = existingRows[0] as { id: string; role: string } | undefined;
     if (!existing) {
       const salt = crypto.randomBytes(16).toString('hex');
-      const hash = crypto.scryptSync('admin123', salt, 64).toString('hex');
+      const hash = crypto.scryptSync('admin@123', salt, 64).toString('hex');
       const id = crypto.randomUUID();
       await knex.raw('INSERT INTO system_users (id, email, password_hash, display_name, type, role) VALUES (?, ?, ?, ?, ?, ?)', [id, 'admin@zalohub.local', `${salt}:${hash}`, 'Super Admin', 'human', 'super_admin']);
-      console.log('Seeded super_admin: admin@zalohub.local / admin123');
+      console.log('Seeded super_admin: admin@zalohub.local / admin@123');
     } else if (existing.role !== 'super_admin') {
       await knex.raw('UPDATE system_users SET role = ? WHERE id = ?', ['super_admin', existing.id]);
       console.log('Upgraded admin to super_admin');
