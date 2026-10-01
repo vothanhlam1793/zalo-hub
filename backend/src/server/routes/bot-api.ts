@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import type { Knex } from 'knex';
 import type { AccountRuntimeManager } from '../account-manager.js';
 import type { GoldStore } from '../../core/store/index.js';
 import { createBotAuth } from './bot-auth.js';
@@ -8,9 +9,11 @@ export function createBotApiRouter(
   accountManager: AccountRuntimeManager,
   botService: DifyBotService,
   store: GoldStore,
+  knex?: Knex,
 ) {
   const router = Router();
   const botAuth = createBotAuth(botService);
+  const db = knex || (store as any)?.groupRepo?.knex || (store as any)?.knex;
 
   // GET /api/bot/openapi.json — public, no auth
   router.get('/openapi.json', (_req: Request, res: Response) => {
@@ -72,6 +75,23 @@ export function createBotApiRouter(
               { name: 'limit', in: 'query', schema: { type: 'integer', default: 20, maximum: 100 } },
             ],
             responses: { '200': { description: 'Danh sách tin nhắn' } },
+          },
+        },
+        '/groups': {
+          get: {
+            summary: 'Lấy danh sách nhóm chat',
+            operationId: 'listGroups',
+            responses: { '200': { description: 'Danh sách nhóm chat' } },
+          },
+        },
+        '/groups/{groupId}/members': {
+          get: {
+            summary: 'Lấy danh sách thành viên trong nhóm chat',
+            operationId: 'getGroupMembers',
+            parameters: [
+              { name: 'groupId', in: 'path', required: true, schema: { type: 'string' }, description: 'ID của nhóm (hoặc dạng group:xxx)' },
+            ],
+            responses: { '200': { description: 'Danh sách thành viên trong nhóm' } },
           },
         },
         '/conversations': {
@@ -237,6 +257,124 @@ export function createBotApiRouter(
       res.json({ contacts });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to list contacts' });
+    }
+  });
+
+  // GET /api/bot/groups — list groups
+  router.get('/groups', async (req: Request, res: Response) => {
+    const bot = req.difyBot!;
+    const accountId = bot.account_id;
+
+    try {
+      const runtime = accountManager.getRuntime(accountId);
+      let groups: any[] = [];
+
+      if (runtime && runtime.isSessionActive()) {
+        groups = await runtime.getGroupCache();
+        if (!groups.length) {
+          groups = await runtime.listGroups().catch(() => []);
+        }
+      } else {
+        groups = await store.listGroupsByAccount(accountId);
+      }
+
+      // Map clean payload
+      const result = groups.map((g) => ({
+        groupId: g.groupId,
+        conversationId: `group:${g.groupId}`,
+        displayName: g.displayName,
+        avatar: g.avatar || '',
+        memberCount: g.memberCount || (Array.isArray(g.members) ? g.members.length : 0),
+        lastSyncAt: g.lastSyncAt,
+      }));
+
+      res.json({ groups: result, count: result.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to list groups' });
+    }
+  });
+
+  // GET /api/bot/groups/:groupId/members — get all members in a group
+  router.get('/groups/:groupId/members', async (req: Request, res: Response) => {
+    const bot = req.difyBot!;
+    const accountId = bot.account_id;
+    const rawGroupId = String(req.params.groupId || '').trim();
+    const cleanGroupId = rawGroupId.replace(/^group:/, '');
+
+    if (!cleanGroupId) {
+      res.status(400).json({ error: 'groupId is required' });
+      return;
+    }
+
+    try {
+      let groupRow: any;
+      if (db) {
+        groupRow = await db('groups').where({ account_id: accountId, group_id: cleanGroupId }).first();
+      }
+
+      if (!groupRow) {
+        const cachedGroups = await store.listGroupsByAccount(accountId);
+        groupRow = cachedGroups.find((g) => g.groupId === cleanGroupId);
+      }
+
+      if (!groupRow) {
+        res.status(404).json({ error: 'Group not found' });
+        return;
+      }
+
+      const rawMembers: any[] = Array.isArray(groupRow.members_json)
+        ? groupRow.members_json
+        : (typeof groupRow.members_json === 'string' && groupRow.members_json.trim()
+            ? JSON.parse(groupRow.members_json)
+            : (Array.isArray(groupRow.members) ? groupRow.members : []));
+
+      const uids = rawMembers.map((m) => m.userId).filter(Boolean);
+
+      // Enrich displayName and avatars from friends, messages, and account
+      let contactMap = new Map<string, string>();
+      let senderMap = new Map<string, string>();
+      let accountName = 'Bạn (Tài khoản hiện tại)';
+
+      if (db && uids.length > 0) {
+        const contacts = await db('friends').where('account_id', accountId).whereIn('friend_id', uids);
+        contactMap = new Map(contacts.map((c: any) => [c.friend_id, c.display_name || c.zalo_name]));
+
+        const senderRows = await db('messages')
+          .where('account_id', accountId)
+          .whereIn('sender_id', uids)
+          .whereNotNull('sender_name')
+          .distinctOn('sender_id')
+          .select('sender_id', 'sender_name');
+        senderMap = new Map(senderRows.map((s: any) => [s.sender_id, s.sender_name]));
+
+        const accRow = await db('accounts').where('account_id', accountId).first();
+        if (accRow?.display_name) accountName = accRow.display_name;
+      }
+
+      const members = rawMembers.map((m) => {
+        let name = m.displayName;
+        if (!name || name === m.userId) name = contactMap.get(m.userId);
+        if (!name || name === m.userId) name = senderMap.get(m.userId);
+        if ((!name || name === m.userId) && m.userId === accountId) name = accountName;
+        if (!name) name = m.userId;
+
+        return {
+          userId: m.userId,
+          displayName: name,
+          avatar: m.avatar || '',
+          role: m.role || 'member',
+        };
+      });
+
+      res.json({
+        groupId: cleanGroupId,
+        conversationId: `group:${cleanGroupId}`,
+        groupName: groupRow.display_name,
+        memberCount: members.length,
+        members,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to get group members' });
     }
   });
 
