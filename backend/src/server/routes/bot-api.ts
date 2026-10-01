@@ -94,6 +94,73 @@ export function createBotApiRouter(
             responses: { '200': { description: 'Danh sách thành viên trong nhóm' } },
           },
         },
+        '/tags': {
+          get: {
+            summary: 'Lấy danh sách nhãn/tag phân loại',
+            operationId: 'listTags',
+            responses: { '200': { description: 'Danh sách nhãn/tag' } },
+          },
+        },
+        '/conversations/{conversationId}/tags': {
+          get: {
+            summary: 'Lấy danh sách nhãn của một hội thoại',
+            operationId: 'getConversationTags',
+            parameters: [
+              { name: 'conversationId', in: 'path', required: true, schema: { type: 'string' }, description: 'ID cuộc hội thoại (ví dụ direct:xxx hoặc group:xxx)' },
+            ],
+            responses: { '200': { description: 'Danh sách nhãn của hội thoại' } },
+          },
+        },
+        '/tags/assign': {
+          post: {
+            summary: 'Gán nhãn/tag cho cuộc hội thoại',
+            operationId: 'assignTag',
+            requestBody: {
+              required: true,
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    required: ['conversationId', 'tagId'],
+                    properties: {
+                      conversationId: { type: 'string', description: 'ID cuộc hội thoại' },
+                      tagId: { type: 'string', description: 'ID của nhãn cần gán' },
+                    },
+                  },
+                },
+              },
+            },
+            responses: {
+              '200': { description: 'Gán nhãn thành công' },
+              '400': { description: 'Thiếu tham số' },
+            },
+          },
+        },
+        '/tags/unassign': {
+          post: {
+            summary: 'Gỡ nhãn/tag khỏi cuộc hội thoại',
+            operationId: 'unassignTag',
+            requestBody: {
+              required: true,
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    required: ['conversationId', 'tagId'],
+                    properties: {
+                      conversationId: { type: 'string', description: 'ID cuộc hội thoại' },
+                      tagId: { type: 'string', description: 'ID của nhãn cần gỡ' },
+                    },
+                  },
+                },
+              },
+            },
+            responses: {
+              '200': { description: 'Gỡ nhãn thành công' },
+              '400': { description: 'Thiếu tham số' },
+            },
+          },
+        },
         '/conversations': {
           get: {
             summary: 'Lấy danh sách hội thoại',
@@ -375,6 +442,136 @@ export function createBotApiRouter(
       });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to get group members' });
+    }
+  });
+
+  // GET /api/bot/tags — list all available tags
+  router.get('/tags', async (req: Request, res: Response) => {
+    const bot = req.difyBot!;
+    const accountId = bot.account_id;
+
+    try {
+      const tags = await store.tagRepo.listTags(accountId);
+      res.json({ tags, count: tags.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to list tags' });
+    }
+  });
+
+  // GET /api/bot/conversations/:conversationId/tags — get tags of a conversation
+  router.get('/conversations/:conversationId/tags', async (req: Request, res: Response) => {
+    const conversationId = String(req.params.conversationId || '').trim();
+
+    if (!conversationId) {
+      res.status(400).json({ error: 'conversationId is required' });
+      return;
+    }
+
+    try {
+      const tags = await store.tagRepo.getConversationTags(conversationId);
+      res.json({ conversationId, tags, count: tags.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to get conversation tags' });
+    }
+  });
+
+  // POST /api/bot/tags/assign — assign tag to conversation
+  router.post('/tags/assign', async (req: Request, res: Response) => {
+    const bot = req.difyBot!;
+    const accountId = bot.account_id;
+    const { conversationId, tagId } = req.body || {};
+
+    if (!conversationId || !tagId) {
+      res.status(400).json({ error: 'conversationId and tagId are required' });
+      return;
+    }
+
+    try {
+      await store.tagRepo.assignTagToConversation(conversationId, tagId, 'bot');
+      const tags = await store.tagRepo.getConversationTags(conversationId);
+
+      // 2-way Push to Zalo if tag belongs to Zalo
+      setImmediate(async () => {
+        try {
+          const targetRuntime = accountManager.getRuntime(accountId);
+          if (targetRuntime && targetRuntime.isSessionActive()) {
+            const allTags = await store.tagRepo.listTags(accountId);
+            const targetTag = allTags.find((t) => t.id === tagId);
+            if (targetTag && targetTag.source === 'zalo' && targetTag.zaloLabelId) {
+              const api = (targetRuntime as any).state?.session?.api;
+              if (api && typeof api.getLabels === 'function' && typeof api.updateLabels === 'function') {
+                const currentLabelsRes = await api.getLabels();
+                const targetLabelData = currentLabelsRes.labelData.find((l: any) => l.id === targetTag.zaloLabelId);
+                if (targetLabelData) {
+                  const { threadId } = targetRuntime.resolveConversationTarget(conversationId);
+                  if (!targetLabelData.conversations.includes(threadId)) {
+                    targetLabelData.conversations.push(threadId);
+                    await api.updateLabels({
+                      labelData: currentLabelsRes.labelData,
+                      version: currentLabelsRes.version,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore push error
+        }
+      });
+
+      res.json({ ok: true, conversationId, tags, count: tags.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to assign tag' });
+    }
+  });
+
+  // POST /api/bot/tags/unassign — remove tag from conversation
+  router.post('/tags/unassign', async (req: Request, res: Response) => {
+    const bot = req.difyBot!;
+    const accountId = bot.account_id;
+    const { conversationId, tagId } = req.body || {};
+
+    if (!conversationId || !tagId) {
+      res.status(400).json({ error: 'conversationId and tagId are required' });
+      return;
+    }
+
+    try {
+      await store.tagRepo.removeTagFromConversation(conversationId, tagId);
+      const tags = await store.tagRepo.getConversationTags(conversationId);
+
+      // 2-way Remove from Zalo if tag belongs to Zalo
+      setImmediate(async () => {
+        try {
+          const targetRuntime = accountManager.getRuntime(accountId);
+          if (targetRuntime && targetRuntime.isSessionActive()) {
+            const allTags = await store.tagRepo.listTags(accountId);
+            const targetTag = allTags.find((t) => t.id === tagId);
+            if (targetTag && targetTag.zaloLabelId) {
+              const api = (targetRuntime as any).state?.session?.api;
+              if (api && typeof api.getLabels === 'function' && typeof api.updateLabels === 'function') {
+                const currentLabelsRes = await api.getLabels();
+                const targetLabelData = currentLabelsRes.labelData.find((l: any) => l.id === targetTag.zaloLabelId);
+                if (targetLabelData) {
+                  const { threadId } = targetRuntime.resolveConversationTarget(conversationId);
+                  targetLabelData.conversations = targetLabelData.conversations.filter((c: string) => c !== threadId);
+                  await api.updateLabels({
+                    labelData: currentLabelsRes.labelData,
+                    version: currentLabelsRes.version,
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore push error
+        }
+      });
+
+      res.json({ ok: true, conversationId, tags, count: tags.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to unassign tag' });
     }
   });
 
