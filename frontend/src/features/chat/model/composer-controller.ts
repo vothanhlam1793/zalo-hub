@@ -8,6 +8,7 @@ import { canReleasePreview } from './message-reconciliation';
 import { chatSession, parseConversationKey } from './chat-session';
 import { createLocalMediaPreview, revokeLocalMediaPreview } from './local-media-preview';
 import { batchActions, freezeBatch, unresolvedBatch, type Batch, type ComposerCapabilities, type DraftAttachment, type Stage } from './composer-types';
+import { sanitizeMentions } from './mention-utils';
 
 const controllers = new Set<AbortController>();
 const busy = new Set<string>();
@@ -209,7 +210,12 @@ export async function sendComposerBatch(key: string, retry = false, id?: string)
       // Do not freeze an earlier revision while the user is editing.
       if (draft(key)?.revision !== current.revision) throw new Error('Bản nháp đã thay đổi. Hãy gửi lại.');
       if (useChatStore.getState().byConversation[key]?.messages.some(m => !m.composerBatchId && ['queued', 'sending', 'unknown'].includes(m.delivery || ''))) throw new Error('Tin nhắn trước chưa hoàn tất.');
-      const payload = freezeBatch(current.attachments, current.text, current.mentions, current.replyingTo?.id);
+      const sanitizedMentions = sanitizeMentions(current.text, current.mentions);
+      if (sanitizedMentions?.length !== current.mentions?.length) {
+        update(key, { mentions: sanitizedMentions });
+        current = draft(key)!;
+      }
+      const payload = freezeBatch(current.attachments, current.text, sanitizedMentions, current.replyingTo?.id);
       if (payload.items.some(item => item.caption.length > 20000)) throw new Error('Chú thích tối đa 20.000 ký tự.');
       update(key, { batch: { payload } }); current = draft(key)!;
       newlyFrozen = payload.clientBatchId;

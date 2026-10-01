@@ -119,7 +119,10 @@ export const useComposerStore = create<ComposerState>((set, get) => ({
       if (!saved) {
         await clientDb.saveComposer(key, { ...record, attachments: record.attachments.map(({ file: _file, ...item }) => ({ ...item, upload: item.stage ? item.upload : 'missing' })) });
         if (get().drafts[key]?.revision !== draft.revision) return;
-        const storageWarning = 'Không lưu được tệp trên thiết bị. Giữ tab này mở; sau tải lại có thể cần chọn lại tệp.';
+        const hasUnstagedAttachments = draft.attachments.some(a => !a.stage && a.upload !== 'ready');
+        const storageWarning = hasUnstagedAttachments
+          ? 'Ảnh chưa thể lưu nháp trên trình duyệt. Bạn vẫn có thể gửi ngay, nhưng nếu tải lại trang hãy dán/chọn lại ảnh.'
+          : undefined;
         set(s => ({ drafts: { ...s.drafts, [key]: { ...draft, storageWarning } }, ...(s.activeKey === key ? { storageWarning } : {}) }));
       }
     });

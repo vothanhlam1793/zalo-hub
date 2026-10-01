@@ -1,4 +1,5 @@
 import type { Message, MessageMention, SendReceipt } from '../../../types';
+import { sanitizeMentions } from './mention-utils';
 
 export interface ComposerCapabilities {
   version: number; staging: boolean; batch: boolean; nativeAlbum: boolean;
@@ -37,7 +38,9 @@ export function unresolvedBatch(batch: StoredComposer['batch']) {
   return Boolean(batch && (!batch.result || batch.result.items.some(i => i.status === 'unknown' || i.status === 'sending' || i.status === 'queued')));
 }
 export function migrateComposer(value: Partial<StoredComposer> & { fileName?: string } | null): StoredComposer {
-  return { version: 2, text: value?.text || '', mentions: value?.mentions, replyingTo: value?.replyingTo, recoveredDrafts: value?.recoveredDrafts,
+  const text = value?.text || '';
+  const mentions = sanitizeMentions(text, value?.mentions);
+  return { version: 2, text, mentions, replyingTo: value?.replyingTo, recoveredDrafts: value?.recoveredDrafts,
     batch: value?.batch, outbox: value?.outbox || [], attachments: (value?.attachments || (value?.fileName ? [{
       id: crypto.randomUUID(), name: value.fileName, size: 0, type: '', lastModified: 0,
       caption: '', upload: 'missing' as const,
@@ -50,10 +53,17 @@ export function batchActions(batch?: Batch) {
 }
 export function freezeBatch(attachments: DraftAttachment[], text: string, mentions?: MessageMention[], quoteMessageId?: string): BatchPayload {
   if (!attachments.length || attachments.some(item => item.stage?.status !== 'ready')) throw new Error('Tệp chưa sẵn sàng.');
-  return { clientBatchId: crypto.randomUUID(), items: attachments.map((item, index) => ({
-    stagingId: item.stage!.id, clientRequestId: crypto.randomUUID(),
-    caption: [index === 0 ? text : '', item.caption].filter(Boolean).join('\n'),
-    ...(index === 0 && mentions?.length ? { mentions } : {}),
-    ...(index === 0 && quoteMessageId ? { quoteMessageId } : {}),
-  })) };
+  const firstCaption = [text, attachments[0].caption].filter(Boolean).join('\n');
+  const validFirstMentions = sanitizeMentions(firstCaption, mentions);
+
+  return { clientBatchId: crypto.randomUUID(), items: attachments.map((item, index) => {
+    const caption = [index === 0 ? text : '', item.caption].filter(Boolean).join('\n');
+    return {
+      stagingId: item.stage!.id,
+      clientRequestId: crypto.randomUUID(),
+      caption,
+      ...(index === 0 && validFirstMentions?.length ? { mentions: validFirstMentions } : {}),
+      ...(index === 0 && quoteMessageId ? { quoteMessageId } : {}),
+    };
+  }) };
 }

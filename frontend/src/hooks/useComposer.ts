@@ -5,6 +5,7 @@ import { submitMessage } from '../features/chat/model/send-controller';
 import { sendComposerBatch } from '../features/chat/model/composer-controller';
 import { conversationRecovery } from '../features/chat/model/conversation-recovery';
 import { ensureConversationRecovered } from '../stores/composer-store';
+import { sanitizeMentions } from '../features/chat/model/mention-utils';
 
 export function useComposer() {
   const isComposingRef = useRef(false);
@@ -35,15 +36,10 @@ export function useComposer() {
     } : undefined;
 
     const text = draft.text.trim();
-    // Sanitize mentions to make sure they strictly fit inside the current text
-    const validMentions = draft.mentions?.filter((m) => {
-      if (typeof m.pos !== 'number' || typeof m.len !== 'number' || m.pos < 0 || m.len <= 0) return false;
-      if (m.pos + m.len > draft.text.length) return false;
-      return draft.text.charAt(m.pos) === '@';
-    });
+    const validMentions = sanitizeMentions(draft.text, draft.mentions);
 
     submitMessage(key, text, draft.attachFile || undefined, {
-      mentions: validMentions?.length ? validMentions : undefined,
+      mentions: validMentions,
       quoteMessageId: draft.replyingTo?.id,
       quote,
     });

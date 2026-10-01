@@ -17,6 +17,7 @@ import type { DeliveryActions } from './messages/MessageDeliveryStatus';
 import { ComposerAttachments, useAttachmentInput } from './ComposerAttachments';
 import { ComposerLocalTools } from './ComposerLocalTools';
 import { ComposerExtendedTools } from './ComposerExtendedTools';
+import { reconcileMentions, sanitizeMentions } from '../model/mention-utils';
 import { ImagePlus, Paperclip, Send } from 'lucide-react';
 
 interface ChatPanelProps extends DeliveryActions {
@@ -184,14 +185,15 @@ export function ChatPanel({
     const after = text.slice(mentionPos + 1 + (mentionQuery?.length || 0));
     const newText = before + mentionTag + after;
 
-    const currentMentions = useComposerStore.getState().mentions || [];
+    const currentMentions = sanitizeMentions(text, useComposerStore.getState().mentions) || [];
     const newMention: import('@/types').MessageMention = {
       pos: mentionPos,
       len: mentionTag.length - 1,
       uid: c.uid,
       type: c.isAll ? 1 : 0,
     };
-    useComposerStore.getState().setMentions([...currentMentions, newMention]);
+    const combined = sanitizeMentions(newText, [...currentMentions, newMention]);
+    useComposerStore.getState().setMentions(combined || []);
     onTextChange(newText);
     setMentionQuery(null);
     setMentionIndex(0);
@@ -206,19 +208,11 @@ export function ChatPanel({
   }, [mentionPos, mentionQuery, text, onTextChange, textareaRef]);
 
   const handleComposerTextChange = (val: string) => {
-    onTextChange(val);
-    // Keep mentions clean and synchronized with text edits
+    // Keep mentions clean and synchronized with text edits by rebasing offsets
     const currentMentions = useComposerStore.getState().mentions;
-    if (currentMentions && currentMentions.length > 0) {
-      if (!val.trim()) {
-        useComposerStore.getState().setMentions([]);
-      } else {
-        const filtered = currentMentions.filter((m) => m.pos >= 0 && (m.pos + m.len) <= val.length && val.charAt(m.pos) === '@');
-        if (filtered.length !== currentMentions.length) {
-          useComposerStore.getState().setMentions(filtered);
-        }
-      }
-    }
+    const reconciled = reconcileMentions(text, val, currentMentions);
+    useComposerStore.getState().setMentions(reconciled || []);
+    onTextChange(val);
     const cursorPos = textareaRef?.current?.selectionStart ?? val.length;
     const textBeforeCursor = val.slice(0, cursorPos);
     const lastAtIdx = textBeforeCursor.lastIndexOf('@');
